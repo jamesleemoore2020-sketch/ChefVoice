@@ -1,0 +1,5 @@
+"use strict";
+const test=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const root=path.resolve(__dirname,'..');const read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const activity=read('app/src/main/java/com/chefvoice/app/MainActivity.kt');const app=read('app/src/main/java/com/chefvoice/app/ui/ChefVoiceApp.kt');const state=read('app/src/main/java/com/chefvoice/app/ui/ChefAppState.kt');const helper=read('app/src/main/java/com/chefvoice/app/notifications/NotificationHelper.kt');
+test('non-Live system notifications retain deterministic private event routing',()=>{assert.match(activity,/pendingNotificationEventId/);assert.match(activity,/EXTRA_EVENT_ID/);assert.match(app,/LaunchedEffect\(pendingNotificationEventId, appState\.notificationsReady/);assert.match(app,/appState\.openNotification\(notification\)/);assert.match(helper,/putExtra\(EXTRA_COMMENT_ID, commentId\)/);});
+test('reply event resolves through existing exact-comment route',()=>{assert.match(state,/"comment", "like", "reply"/);assert.match(state,/focusedCommentId = notification\.commentId/);});

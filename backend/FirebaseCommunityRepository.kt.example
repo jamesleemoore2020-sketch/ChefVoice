@@ -1,0 +1,20 @@
+// Integration sketch only. Rename to .kt after adding Firebase dependencies and google-services.json.
+package com.chefvoice.app.backend
+
+/*
+class FirebaseCommunityRepository(
+    private val firestore: FirebaseFirestore,
+    private val storage: FirebaseStorage,
+    private val auth: FirebaseAuth
+) {
+    fun observePublicRecipes(onChange: (List<Recipe>) -> Unit): ListenerRegistration {
+        return firestore.collection("recipes")
+            .whereEqualTo("isPublic", true)
+            .orderBy("updatedAt", Query.Direction.DESCENDING)
+            .addSnapshotListener { snapshot, _ ->
+                val recipes = snapshot?.documents.orEmpty().mapNotNull { it.toObject<Recipe>() }
+                onChange(recipes)
+            }
+    }
+}
+*/

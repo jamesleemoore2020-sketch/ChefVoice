@@ -1,0 +1,156 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+    function owner(uid) { return signedIn() && request.auth.uid == uid; }
+    function verifiedOwner(uid) {
+      return owner(uid) && request.auth.token.email_verified == true;
+    }
+    function safeRecipeId(recipeId) {
+      return recipeId.matches('^[A-Za-z0-9_-]{1,128}$');
+    }
+    function recipeIsPublic(recipeId) {
+      return safeRecipeId(recipeId)
+        && firestore.get(/databases/(default)/documents/recipes/$(recipeId)).data.isPublic == true;
+    }
+    function recipeOwnedBy(uid, recipeId) {
+      return verifiedOwner(uid)
+        && safeRecipeId(recipeId)
+        && firestore.get(/databases/(default)/documents/recipes/$(recipeId)).data.authorId == uid;
+    }
+    function socialUploadAllowed(uid) {
+      // Must match RESTRICTIONS_COLLECTION in notifications/functions/index.js
+      // and restrictionActive() in firestore.rules.
+      let path = /databases/(default)/documents/userRestrictions/$(uid);
+      return !firestore.exists(path)
+        || firestore.get(path).data.active != true
+        || (firestore.get(path).data.expiresAt is int
+          && firestore.get(path).data.expiresAt != 0
+          && firestore.get(path).data.expiresAt <= request.time.toMillis());
+    }
+    function validPublicMedia() {
+      return (request.resource.contentType.matches('image/.*') && request.resource.size <= 25 * 1024 * 1024)
+        || (request.resource.contentType.matches('video/.*') && request.resource.size <= 200 * 1024 * 1024);
+    }
+    function validPrivateAudio() {
+      return request.resource.size <= 120 * 1024 * 1024
+        && request.resource.contentType.matches('audio/.*');
+    }
+    function validProfileImage(maxBytes) {
+      return request.resource.size <= maxBytes
+        && request.resource.contentType.matches('image/.*');
+    }
+    function uploadPermit(uid, permitId, kind, recipeId, fileName) {
+      let permit = firestore.get(/databases/(default)/documents/users/$(uid)/storageUploadPermits/$(permitId)).data;
+      return owner(uid)
+        && permit.kind == kind
+        && permit.recipeId == recipeId
+        && permit.fileName == fileName
+        && permit.maxBytes is int
+        && permit.reservedBytes is int
+        && permit.reservedBytes > 0
+        && permit.reservedBytes <= permit.maxBytes
+        && request.resource.size <= permit.reservedBytes
+        && permit.expiresAt is int
+        && permit.expiresAt > request.time.toMillis()
+        && request.resource.contentType == permit.contentType
+        && request.resource.metadata.chefvoicePermitId == permitId
+        && request.resource.metadata.chefvoiceUploadToken == permit.token;
+    }
+    function validMediaSlot(fileName) {
+      // Exactly 24 replaceable objects per recipe. Re-uploading replaces a slot
+      // instead of creating unlimited billable objects under arbitrary filenames.
+      return fileName.matches('^slot-(0[0-9]|1[0-9]|2[0-3])$');
+    }
+    function validVoiceSlot(fileName) {
+      return fileName.matches('^clip-(0[0-9]|1[0-5])$');
+    }
+
+    // Profile images are fixed-name objects, preventing filename/object-count floods.
+    match /profiles/{uid}/avatar/{fileName} {
+      allow read: if true;
+      allow create: if owner(uid)
+        && socialUploadAllowed(uid)
+        && fileName == 'profile.jpg'
+        && validProfileImage(10 * 1024 * 1024)
+        && uploadPermit(uid, 'profile-avatar', 'profile_avatar', '', fileName);
+      allow update: if owner(uid)
+        && socialUploadAllowed(uid)
+        && fileName == 'profile.jpg'
+        && validProfileImage(10 * 1024 * 1024)
+        && uploadPermit(uid, 'profile-avatar', 'profile_avatar', '', fileName)
+        && resource.metadata.chefvoiceUploadToken != request.resource.metadata.chefvoiceUploadToken;
+      allow delete: if owner(uid) && fileName == 'profile.jpg';
+    }
+
+    match /profiles/{uid}/cover/{fileName} {
+      allow read: if true;
+      allow create: if owner(uid)
+        && socialUploadAllowed(uid)
+        && fileName == 'profile.jpg'
+        && validProfileImage(20 * 1024 * 1024)
+        && uploadPermit(uid, 'profile-cover', 'profile_cover', '', fileName);
+      allow update: if owner(uid)
+        && socialUploadAllowed(uid)
+        && fileName == 'profile.jpg'
+        && validProfileImage(20 * 1024 * 1024)
+        && uploadPermit(uid, 'profile-cover', 'profile_cover', '', fileName)
+        && resource.metadata.chefvoiceUploadToken != request.resource.metadata.chefvoiceUploadToken;
+      allow delete: if owner(uid) && fileName == 'profile.jpg';
+    }
+
+    // Current public recipe media. New writes use 24 deterministic slots.
+    match /recipes/{uid}/{recipeId}/publicMedia/{fileName} {
+      allow read: if recipeIsPublic(recipeId) || owner(uid);
+      allow create: if recipeOwnedBy(uid, recipeId)
+        && socialUploadAllowed(uid)
+        && validMediaSlot(fileName)
+        && validPublicMedia()
+        && uploadPermit(uid, 'public-' + recipeId + '-' + fileName, 'public_media', recipeId, fileName);
+      allow update: if recipeOwnedBy(uid, recipeId)
+        && socialUploadAllowed(uid)
+        && validMediaSlot(fileName)
+        && validPublicMedia()
+        && uploadPermit(uid, 'public-' + recipeId + '-' + fileName, 'public_media', recipeId, fileName)
+        && resource.metadata.chefvoiceUploadToken != request.resource.metadata.chefvoiceUploadToken;
+      allow delete: if recipeOwnedBy(uid, recipeId) && validMediaSlot(fileName);
+    }
+
+    // Legacy photo/video objects remain readable but new legacy-path writes are closed.
+    match /recipes/{uid}/{recipeId}/media/{fileName} {
+      allow read: if recipeIsPublic(recipeId) || owner(uid);
+      allow create, update: if false;
+      allow delete: if recipeOwnedBy(uid, recipeId);
+    }
+
+    // Optional non-session voice clips are capped to 16 deterministic private slots.
+    match /recipes/{uid}/{recipeId}/voice/{fileName} {
+      allow read: if owner(uid);
+      allow create: if recipeOwnedBy(uid, recipeId)
+        && validVoiceSlot(fileName)
+        && validPrivateAudio()
+        && uploadPermit(uid, 'voice-' + recipeId + '-' + fileName, 'voice_clip', recipeId, fileName);
+      allow update: if recipeOwnedBy(uid, recipeId)
+        && validVoiceSlot(fileName)
+        && validPrivateAudio()
+        && uploadPermit(uid, 'voice-' + recipeId + '-' + fileName, 'voice_clip', recipeId, fileName)
+        && resource.metadata.chefvoiceUploadToken != request.resource.metadata.chefvoiceUploadToken;
+      allow delete: if recipeOwnedBy(uid, recipeId) && validVoiceSlot(fileName);
+    }
+
+    // Raw cooking-session audio has exactly one replaceable object per recipe.
+    match /privateVoice/{uid}/{recipeId}/{fileName} {
+      allow read: if owner(uid);
+      allow create: if recipeOwnedBy(uid, recipeId)
+        && fileName == 'session'
+        && validPrivateAudio()
+        && uploadPermit(uid, 'session-' + recipeId, 'private_session', recipeId, fileName);
+      allow update: if recipeOwnedBy(uid, recipeId)
+        && fileName == 'session'
+        && validPrivateAudio()
+        && uploadPermit(uid, 'session-' + recipeId, 'private_session', recipeId, fileName)
+        && resource.metadata.chefvoiceUploadToken != request.resource.metadata.chefvoiceUploadToken;
+      allow delete: if recipeOwnedBy(uid, recipeId) && fileName == 'session';
+    }
+  }
+}

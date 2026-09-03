@@ -1,0 +1,28 @@
+ChefVoice PWA 0.7 Reliability + Trust
+Test date: 2026-08-12
+
+npm test: 24/24 PASS
+- 20 protected ingredient/parser regression tests
+- 3 ingredient provenance/review tests
+- 1 Live camera front -> back -> front switching test
+
+JavaScript syntax checks: PASS
+- app.js
+- cooking-session-parser.js
+- firebase-client.js
+- firebase-config.js
+- ingredient-parser.js
+- ingredient-provenance.js
+- live-webrtc.js
+- storage.js
+- voice-capture.js
+
+Local HTTP smoke check: PASS
+- index served with PWA 0.7 badge
+- app.js 0.7 served
+- live-webrtc.js 0.7 served
+
+Android source changed: NO
+Firestore rules changed: NO
+Storage rules changed: YES
+Voice ingredient parser changed: NO

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sampled from the ChefVoice brand artwork so the adaptive icon's background
+         layer matches the logo instead of the launcher's default white plate. -->
+    <color name="ic_launcher_background">#160E0B</color>
+</resources>

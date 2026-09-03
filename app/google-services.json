@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "569377936753",
+    "project_id": "chefvoice-d7fec",
+    "storage_bucket": "chefvoice-d7fec.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:569377936753:android:985a04701eedf16e5d92d0",
+        "android_client_info": {
+          "package_name": "com.chefvoice.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBzWn6x9xq7B214QQ0Q_lrFYTj58RwEB4g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,10 @@
+const test=require('node:test'); const assert=require('node:assert/strict'); const fs=require('fs');
+const repo=fs.readFileSync('app/src/main/java/com/chefvoice/app/cloud/FirebaseSocialRepository.kt','utf8');
+const state=fs.readFileSync('app/src/main/java/com/chefvoice/app/ui/ChefAppState.kt','utf8');
+const transport=fs.readFileSync('app/src/main/java/com/chefvoice/app/ui/WebRtcLiveTransport.kt','utf8');
+const rules=fs.readFileSync('storage.rules','utf8'); const fire=fs.readFileSync('firestore.rules','utf8');
+const fn=fs.readFileSync('notifications/functions/index.js','utf8');
+test('Android stages recipe before publicMedia and uses backend delete',()=>{assert.match(repo,/prepare recipe media upload/);assert.match(repo,/publicMedia/);assert.match(repo,/deleteChefVoiceRecipe/);assert.match(rules,/recipeOwnedBy/);assert.match(fire,/Permanent cloud deletion is backend-owned/);});
+test('Android Live readiness is media-gated',()=>{assert.match(repo,/status = "STARTING"/);assert.match(repo,/markLiveSessionReady/);assert.match(state,/markLiveReady/);assert.match(transport,/onReady/);});
+test('Android Community is pageable and chef search is bounded-paged',()=>{assert.match(repo,/communityPageSize = 60L/);assert.match(repo,/loadMorePublicRecipes/);assert.match(repo,/scanned >= 300/);assert.match(state,/loadMoreCommunity/);});
+test('shared notification backend pages fanout',()=>{assert.match(fn,/FANOUT_PAGE_SIZE = 200/);assert.match(fn,/FANOUT_CONCURRENCY = 40/);});

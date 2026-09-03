@@ -1,0 +1,53 @@
+# id\tcategory\tsegments ( || separated)\texpected ingredients (qty^unit^name ;; ...)\texpected step substrings (;; separated)
+measure-tablespoons	measurement	add two tablespoons olive oil	2^tbsp^Olive oil	-
+measure-half-cup	measurement	add half a cup sugar	1/2^cup^Sugar	-
+measure-quarter-cup	measurement	add quarter of a cup cream	1/4^cup^Cream	-
+measure-three-quarters	measurement	add three quarters cup milk	3/4^cup^Milk	-
+measure-mixed-fraction	measurement	add 2 and a half cups flour	2 1/2^cup^Flour	-
+measure-unicode-half	measurement	add ½ teaspoon salt	1/2^tsp^Salt	-
+asr-teaspoon-spelling	asr	add two tea spoons salt	2^tsp^Salt	-
+asr-number-homophone	asr	add to teaspoons salt	2^tsp^Salt	-
+split-segment	segmentation	add two teaspoons || of salt	2^tsp^Salt	-
+unmeasured-pair	unmeasured	add salt and pepper	^^Salt ;; ^^Pepper	-
+filter-time	filter	cook 20 minutes	-	cook 20 minutes
+filter-temperature	filter	heat oven to 350 degrees	-	heat oven to 350 degrees
+multi-count	multi	add two cloves garlic and one onion	2^clove^Garlic ;; 1^^Onion	-
+conversational	conversation	we're going to add two teaspoons of salt	2^tsp^Salt	-
+shared-measure	shared	add half a teaspoon each of salt and pepper	1/2^tsp^Salt ;; 1/2^tsp^Pepper	-
+shared-spices	shared	add half a teaspoon each of cumin and paprika	1/2^tsp^Cumin ;; 1/2^tsp^Paprika	-
+correction-cups	correction	add two cups flour actually make that three cups	3^cup^Flour	-
+correction-stock	correction	add two cups stock actually make that three cups	3^cup^Stock	-
+preparation-diced	prep	add one diced onion	1^^Diced onion	-
+three-ingredients	multi	add two cloves garlic, one diced onion, and a tablespoon olive oil	2^clove^Garlic ;; 1^^Diced onion ;; 1^tbsp^Olive oil	-
+method-separation	method	add two tablespoons olive oil then sauté the garlic	2^tbsp^Olive oil	sauté
+pinch	count	add a pinch of salt	1^pinch^Salt	-
+dash	count	add a dash hot sauce	1^dash^Hot sauce	-
+sprigs	count	add two sprigs rosemary	2^sprig^Rosemary	-
+can	count	add one can crushed tomatoes	1^can^Crushed tomatoes	-
+handful	count	add one handful parsley	1^handful^Parsley	-
+sticks	count	add two sticks butter	2^stick^Butter	-
+package	count	add one package cream cheese	1^package^Cream cheese	-
+simmer-step	method	simmer the sauce for 10 minutes	-	simmer the sauce for 10 minutes
+whisk-step	method	whisk the eggs until smooth	-	whisk the eggs until smooth
+mixed-method	method	add two tablespoons butter then melt it	2^tbsp^Butter	melt it
+onion-then-cook	method	add one onion then cook until soft	1^^Onion	cook until soft
+garlic-oil	multi	use three cloves garlic and two tablespoons olive oil	3^clove^Garlic ;; 2^tbsp^Olive oil	-
+explicit-ingredient	explicit	ingredient: two cups flour	2^cup^Flour	-
+explicit-step	explicit	step 1: whisk the eggs	-	whisk the eggs
+repeat-actions	segmentation	add salt add pepper	^^Salt ;; ^^Pepper	-
+real-iphone-second-pass-0114	real-device	All right, so you're going to add 1 cup of chicken broth. You're going to add 2 tbsp of salt and pepper. You're going to add 1 cupful of chicken stock.	1^cup^Chicken broth ;; 2^tbsp^Salt ;; 2^tbsp^Pepper ;; 1^cup^Chicken stock	-
+real-iphone-live-tail-0114	real-device	add 1 cup chicken broth gonna || add 2 tbsp of salt and pepper you gonna || add 1 cup full of chicken stock	1^cup^Chicken broth ;; 2^tbsp^Salt ;; 2^tbsp^Pepper ;; 1^cup^Chicken stock	-
+partial-action-is-not-ingredient-0114	real-device	Add	-	-
+real-iphone-method-tail-0115	real-device	add 1 cup chicken broth gonna || add 2 tbsp of salt and pepper you gonna || add 1 cup full of chicken stock	1^cup^Chicken broth ;; 2^tbsp^Salt ;; 2^tbsp^Pepper ;; 1^cup^Chicken stock	Add 1 cup chicken broth ;; Add 2 tbsp of salt and pepper ;; Add 1 cup of chicken stock
+real-android-boyardee-071	real-device	So today we going to make some Chef Boyardee. So what you need to do is take 2 tbsp of paprika, 3 tbsp of wood fired garlic, oh shit we did have garlic. Um, 2 tbsp of pepper and 1 tbsp spoon of salt. And then you need to mix this with 1 lb of ground beef. Mix it thoroughly, frying the ground beef out. And then you cook the ground beef as if it was a burger patty. You cook the ground beef for about 20 minutes making sure you flip it about 10 minutes in. After that you let it rest for about 5 minutes and it's ready to go.	2^tbsp^Paprika ;; 3^tbsp^Wood fired garlic ;; 2^tbsp^Pepper ;; 1^tbsp^Salt ;; 1^lb^Ground beef	Mix this with 1 lb of ground beef ;; Mix it thoroughly, frying the ground beef out ;; Cook the ground beef as if it was a burger patty ;; Cook the ground beef for about 20 minutes making sure you flip it about 10 minutes in ;; You let it rest for about 5 minutes and it's ready to go
+real-android-scratch-correction-072	real-device	Add Uh one chunk of chicken breast Actually Scratch that a half a chunk of chicken breast Two teaspoon of salt One teaspoon of pepper I could.	1/2^chunk^Chicken breast ;; 2^tsp^Salt ;; 1^tsp^Pepper	Add 1/2 chunk chicken breast, 2 tsp salt, and 1 tsp pepper
+real-android-wait-correction-073	real-device	1 tbsp of salt, then you're going to get 2 tbsp of pepper, and then you're going to put 2 tbsp of paprika, 1 lb of ground beef, wait, 2 lb of ground beef.	1^tbsp^Salt ;; 2^tbsp^Pepper ;; 2^tbsp^Paprika ;; 2^lb^Ground beef	-
+real-android-wait-filler-correction-074	real-device	We are going to do two tablespoons of salt. We're going to do one cup of water. We're going to do two cups of chicken stock. We're going to do two tablespoons of pepper. Oh wait, no. We're going to do one tablespoon of pepper.	2^tbsp^Salt ;; 1^cup^Water ;; 2^cup^Chicken stock ;; 1^tbsp^Pepper	-
+real-android-method-actually-correction-076	real-device	Add chicken to the pan and cook for 10 minutes. Actually, cook for 20 minutes and flip halfway.	^^Chicken	Add chicken to the pan ;; Cook for 10 minutes ;; Cook for 20 minutes and flip halfway
+real-android-burgers-temp-time-sequence-097	real-device	Okay, so today we're making hamburgers. We're going to take a pound of ground beef and you're going to make four different burger patties. Split them all evenly, shape them well, and pat them down. Then we're going to take 2 tsp of salt and we're going to take 1 tsp of pepper. Then take 1 tsp of garlic and 1 tsp of lemon pepper. And you're going to season your ground beef patties. After you season your ground beef patties on both sides, then you're going to throw them on the oven at 375°. You let it sit and cook for 20 minutes, flipping it in between. And when it's done, you let it sit and settle for 5 minutes and it's ready to eat.	1^lb^Ground beef ;; 2^tsp^Salt ;; 1^tsp^Pepper ;; 1^tsp^Garlic ;; 1^tsp^Lemon pepper	make four different burger patties ;; Split them all evenly ;; shape them well ;; pat them down ;; Season your ground beef patties ;; season your ground beef patties on both sides ;; throw them on the oven at 375° ;; cook for 20 minutes ;; flipping it in between ;; you let it sit and settle for 5 minutes
+real-android-burgers-timestamp-boundaries-098	real-device-boundary	Take one pound of ground beef || Make four burger patties || Split them evenly shape them || Pat them down || Season both sides || With two teaspoon of salt || One teaspoon of pepper || One teaspoon of garlic || And one teaspoon of lemon pepper || Cook them for 375 degrees for 20 minutes || Foot them in between || Let them rest with five we feel serving	1^lb^Ground beef ;; 2^tsp^Salt ;; 1^tsp^Pepper ;; 1^tsp^Garlic ;; 1^tsp^Lemon pepper	Make four burger patties ;; Split them evenly ;; Shape them ;; Pat them down ;; Season both sides ;; Cook them at 375 degrees for 20 minutes ;; Foot them in between ;; Let them rest with five we feel serving
+real-android-burgers-intra-segment-tail-099	real-device-intra-segment	Say one pound of ground beef and make four burger patties split them evenly shape them and pet them down see them both sides with two tablespoon of salt || One tablespoon of pepper || Two tablespoon of garlic I want a tablespoon of lemon pepper || Cook them at 375 degrees for 20 minutes || In between || Let them rest for five minutes before serving	1^lb^Ground beef ;; 2^tbsp^Salt ;; 1^tbsp^Pepper ;; 2^tbsp^Garlic ;; 1^tbsp^Lemon pepper	Make four burger patties ;; Split them evenly ;; Shape them ;; Pet them down ;; See them both sides with two tablespoon of salt ;; Cook them at 375 degrees for 20 minutes ;; In between ;; Let them rest for five minutes before serving
+real-android-bare-grab-artifact-0910	real-device-boundary	Take one grab	-	-
+real-android-burgers-duration-continuation-0910	real-device-boundary	It took and make four burger patties split them evenly shaped them || Impact them down season both sides with two teaspoon of salt || One teaspoon of pepper || One teaspoon of garlic || And one tablespoon of lemon pepper || Cook them for 350 cook them at 375 degrees || For 20 minutes || Flipped in between || Let them rest for five minutes before serving	2^tsp^Salt ;; 1^tsp^Pepper ;; 1^tsp^Garlic ;; 1^tbsp^Lemon pepper	Make four burger patties ;; Split them evenly ;; Shaped them ;; Impact them down ;; Season both sides with two teaspoon of salt ;; Cook them for 350 ;; Cook them at 375 degrees for 20 minutes ;; Flipped in between ;; Let them rest for five minutes before serving
+real-android-ground-beef-tail-0910	real-device-artifact-tail	Take one pound of ground beef it took || One pound of ground beef	1^lb^Ground beef	-
+real-android-mixed-clause-generic-filter-0911	real-device-mixed-clause	Take one pound of ground beef and make faux burger patties but then evenly shaped them || Impact and down she's in both sides with two teaspoon and stuff || One teaspoon || One tasteful || One teaspoon of lemon pepper cook them at 375 degrees || For 20 minutes || Good name in between || Let them rest before five minutes	1^lb^Ground beef ;; 1^tsp^Lemon pepper	Make faux burger patties ;; Evenly shaped them ;; Cook them at 375 degrees for 20 minutes ;; Good name in between ;; Let them rest before five minutes

@@ -1,0 +1,22 @@
+ChefVoice PWA 0.6.1 Two-Way Live Hotfix
+
+Issue fixed:
+The v0.6 app UI could be served together with a cached v0.5 firebase-client.js.
+That produced:
+  cloud.api.createLiveSession is not a function
+
+Fix:
+- All local JS modules are release-version pinned with ?v=0.6.1.
+- Firebase Hosting now tells browsers not to retain stale JS/HTML.
+- Service-worker cache bumped to chefvoice-pwa-v0.6.1.
+- Defensive Live module version check added.
+- No Cook & Capture ingredient-parser behavior changed.
+
+Deployment:
+  cd web
+  firebase deploy --only hosting --project chefvoice-d7fec
+
+After deployment:
+  Open https://chefvoice-d7fec.web.app/?v=061 in Safari once.
+  Confirm badge: PWA 0.6.1 · Two-Way Live Hotfix
+  Then reopen the Home Screen app and retry Go Live from iPhone.

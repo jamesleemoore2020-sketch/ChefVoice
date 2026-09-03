@@ -1,0 +1,658 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function moderator() {
+      return signedIn() && (request.auth.token.admin == true || request.auth.token.moderator == true);
+    }
+
+
+    function safeRecipeId(recipeId) {
+      return recipeId is string && recipeId.matches('^[A-Za-z0-9_-]{1,128}$');
+    }
+
+    function recentClientTime(value, pastMs, futureMs) {
+      return value is int
+        && value >= request.time.toMillis() - pastMs
+        && value <= request.time.toMillis() + futureMs;
+    }
+
+    function restrictionActive(uid) {
+      let path = /databases/$(database)/documents/moderation/userRestrictions/$(uid);
+      return exists(path)
+        && get(path).data.active == true
+        && (get(path).data.expiresAt == 0 || get(path).data.expiresAt > request.time.toMillis());
+    }
+
+    function socialWriteAllowed() {
+      return signedIn() && !restrictionActive(request.auth.uid);
+    }
+
+    function activeLiveSession(sessionId) {
+      let session = get(/databases/$(database)/documents/liveSessions/$(sessionId)).data;
+      return session.status == 'LIVE'
+        && session.heartbeatAt is int
+        && session.heartbeatAt >= request.time.toMillis() - 60000
+        && session.heartbeatAt <= request.time.toMillis() + 30000;
+    }
+
+    function validIceCandidate(candidateId, data) {
+      return candidateId.matches('^c0(0[0-9]|[1-5][0-9]|6[0-3])$')
+        && data.keys().hasOnly(['sdpMid', 'sdpMLineIndex', 'candidate', 'createdAt'])
+        && data.keys().hasAll(['sdpMid', 'sdpMLineIndex', 'candidate', 'createdAt'])
+        && data.sdpMid is string && data.sdpMid.size() <= 64
+        && data.sdpMLineIndex is int && data.sdpMLineIndex >= 0 && data.sdpMLineIndex <= 32
+        && data.candidate is string && data.candidate.size() > 0 && data.candidate.size() <= 4096
+        && recentClientTime(data.createdAt, 300000, 300000);
+    }
+
+    function blockedBetween(uidA, uidB) {
+      return exists(/databases/$(database)/documents/users/$(uidA)/blocks/$(uidB))
+        || exists(/databases/$(database)/documents/users/$(uidB)/blocks/$(uidA));
+    }
+
+    function profileNameMatches(uid, name) {
+      return exists(/databases/$(database)/documents/users/$(uid))
+        && name is string
+        && name == get(/databases/$(database)/documents/users/$(uid)).data.displayName;
+    }
+
+    function validUserProfile(data) {
+      return data.keys().hasOnly([
+          'displayName', 'bio', 'photoUrl', 'coverPhotoUrl', 'favoriteThings', 'createdAt', 'followerCount'
+        ])
+        && data.keys().hasAll(['displayName', 'bio', 'photoUrl', 'coverPhotoUrl', 'favoriteThings', 'createdAt'])
+        && data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 80
+        && data.bio is string && data.bio.size() <= 500
+        && data.photoUrl is string && data.photoUrl.size() <= 2000
+        && data.coverPhotoUrl is string && data.coverPhotoUrl.size() <= 2000
+        && data.favoriteThings is list && data.favoriteThings.size() <= 12
+        && recentClientTime(data.createdAt, 86400000, 300000)
+        && (!data.keys().hasAny(['followerCount']) || (data.followerCount is int && data.followerCount >= 0));
+    }
+
+    function liveHost(sessionId) {
+      return signedIn()
+        && get(/databases/$(database)/documents/liveSessions/$(sessionId)).data.hostId == request.auth.uid;
+    }
+
+    function livePeerViewer(sessionId, peerId) {
+      let session = get(/databases/$(database)/documents/liveSessions/$(sessionId)).data;
+      return signedIn()
+        && peerId == request.auth.uid
+        && get(/databases/$(database)/documents/liveSessions/$(sessionId)/peers/$(peerId)).data.viewerUid == request.auth.uid
+        && !blockedBetween(request.auth.uid, session.hostId);
+    }
+
+    function validLivePeerCreate(sessionId, peerId) {
+      let session = get(/databases/$(database)/documents/liveSessions/$(sessionId)).data;
+      return socialWriteAllowed()
+        && peerId == request.auth.uid
+        && activeLiveSession(sessionId)
+        && !blockedBetween(request.auth.uid, session.hostId)
+        && request.resource.data.keys().hasOnly(['viewerUid', 'state', 'joinedAt', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['viewerUid', 'state', 'joinedAt', 'updatedAt'])
+        && request.resource.data.viewerUid == request.auth.uid
+        && request.resource.data.state == 'JOINING'
+        && recentClientTime(request.resource.data.joinedAt, 300000, 300000)
+        && recentClientTime(request.resource.data.updatedAt, 300000, 300000);
+    }
+
+    function validLivePeerHostUpdate(sessionId, peerId) {
+      let session = get(/databases/$(database)/documents/liveSessions/$(sessionId)).data;
+      return liveHost(sessionId)
+        && activeLiveSession(sessionId)
+        && peerId == resource.data.viewerUid
+        && request.resource.data.keys().hasOnly(['viewerUid', 'hostUid', 'offerSdp', 'answerSdp', 'state', 'joinedAt', 'updatedAt'])
+        && request.resource.data.viewerUid == resource.data.viewerUid
+        && request.resource.data.joinedAt == resource.data.joinedAt
+        && request.resource.data.hostUid == session.hostId
+        && request.resource.data.offerSdp is string
+        && request.resource.data.offerSdp.size() > 0
+        && request.resource.data.offerSdp.size() <= 65536
+        && (!request.resource.data.keys().hasAny(['answerSdp']) || (request.resource.data.answerSdp is string && request.resource.data.answerSdp.size() <= 65536))
+        && request.resource.data.state == 'OFFERED'
+        && recentClientTime(request.resource.data.updatedAt, 300000, 300000)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hostUid', 'offerSdp', 'state', 'updatedAt']);
+    }
+
+    function validLivePeerViewerUpdate(sessionId, peerId) {
+      return livePeerViewer(sessionId, peerId)
+        && activeLiveSession(sessionId)
+        && resource.data.state == 'OFFERED'
+        && request.resource.data.keys().hasOnly(['viewerUid', 'hostUid', 'offerSdp', 'answerSdp', 'state', 'joinedAt', 'updatedAt'])
+        && request.resource.data.viewerUid == resource.data.viewerUid
+        && request.resource.data.hostUid == resource.data.hostUid
+        && request.resource.data.offerSdp == resource.data.offerSdp
+        && request.resource.data.joinedAt == resource.data.joinedAt
+        && request.resource.data.answerSdp is string
+        && request.resource.data.answerSdp.size() > 0
+        && request.resource.data.answerSdp.size() <= 65536
+        && request.resource.data.state == 'ANSWERED'
+        && recentClientTime(request.resource.data.updatedAt, 300000, 300000)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answerSdp', 'state', 'updatedAt']);
+    }
+
+    function conversationParticipant(conversationId) {
+      return signedIn()
+        && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid]);
+    }
+
+    function conversationIdForCurrentUser(conversationId) {
+      return signedIn() && (
+        conversationId.matches('^' + request.auth.uid + '--.*$') ||
+        conversationId.matches('^.*--' + request.auth.uid + '$')
+      );
+    }
+
+    function conversationIdMatchesParticipants(conversationId, participantIds) {
+      return participantIds is list
+        && participantIds.size() == 2
+        && (
+          conversationId == participantIds[0] + '--' + participantIds[1] ||
+          conversationId == participantIds[1] + '--' + participantIds[0]
+        );
+    }
+
+    function validParticipantNames(participantIds, participantNames) {
+      return participantIds is list
+        && participantIds.size() == 2
+        && participantNames is map
+        && participantNames.size() == 2
+        && profileNameMatches(participantIds[0], participantNames[participantIds[0]])
+        && profileNameMatches(participantIds[1], participantNames[participantIds[1]]);
+    }
+
+    function conversationBlocked(conversationId) {
+      let participantIds = get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds;
+      return participantIds is list
+        && participantIds.size() == 2
+        && blockedBetween(participantIds[0], participantIds[1]);
+    }
+
+    function ownsExistingRecipe() {
+      return signedIn() && resource.data.authorId == request.auth.uid;
+    }
+
+    function recipeReadable(recipeId) {
+      return get(/databases/$(database)/documents/recipes/$(recipeId)).data.isPublic == true
+        || (signedIn() && get(/databases/$(database)/documents/recipes/$(recipeId)).data.authorId == request.auth.uid);
+    }
+
+    function validRecipeData(recipeId, data) {
+      return safeRecipeId(recipeId)
+        && data.keys().hasOnly([
+          'id', 'title', 'description', 'servings', 'prepTimeMinutes', 'cookTimeMinutes',
+          'ingredients', 'steps', 'stepIds', 'media', 'voiceClips', 'isPublic',
+          'authorId', 'authorName', 'createdAt', 'updatedAt', 'likes', 'commentCount'
+        ])
+        && data.keys().hasAll([
+          'title', 'description', 'servings', 'ingredients', 'steps', 'isPublic',
+          'authorId', 'authorName', 'createdAt', 'updatedAt', 'likes', 'commentCount'
+        ])
+        && (!data.keys().hasAny(['id']) || (data.id is string && data.id == recipeId))
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 180
+        && data.description is string && data.description.size() <= 5000
+        && data.servings is int && data.servings >= 1 && data.servings <= 1000
+        && (!data.keys().hasAny(['prepTimeMinutes']) || (data.prepTimeMinutes is int && data.prepTimeMinutes >= 0 && data.prepTimeMinutes <= 100000))
+        && (!data.keys().hasAny(['cookTimeMinutes']) || (data.cookTimeMinutes is int && data.cookTimeMinutes >= 0 && data.cookTimeMinutes <= 100000))
+        && data.ingredients is list && data.ingredients.size() <= 300
+        && data.steps is list && data.steps.size() <= 300
+        && (!data.keys().hasAny(['stepIds']) || (data.stepIds is list && data.stepIds.size() <= 300))
+        && (!data.keys().hasAny(['media']) || (data.media is list && data.media.size() <= 100))
+        && (!data.keys().hasAny(['voiceClips']) || (data.voiceClips is list && data.voiceClips.size() <= 50))
+        && data.isPublic is bool
+        && data.authorId is string && data.authorId.size() > 0 && data.authorId.size() <= 160
+        && data.authorName is string && data.authorName.size() > 0 && data.authorName.size() <= 120
+        && data.createdAt is int && data.createdAt >= 0
+        && recentClientTime(data.updatedAt, 86400000, 300000)
+        && data.likes is int && data.likes >= 0
+        && data.commentCount is int && data.commentCount >= 0;
+    }
+
+    function validOwnerRecipeUpdate(recipeId) {
+      let unpublishOnly = resource.data.isPublic == true
+        && request.resource.data.isPublic == false
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isPublic', 'updatedAt']);
+      return ownsExistingRecipe()
+        && (socialWriteAllowed() || unpublishOnly)
+        && validRecipeData(recipeId, request.resource.data)
+        && (unpublishOnly || profileNameMatches(request.resource.data.authorId, request.resource.data.authorName))
+        && request.resource.data.authorId == resource.data.authorId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.likes == resource.data.likes
+        && request.resource.data.commentCount == resource.data.commentCount
+        && recentClientTime(request.resource.data.updatedAt, 86400000, 300000)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'description', 'servings', 'prepTimeMinutes', 'cookTimeMinutes',
+          'ingredients', 'steps', 'stepIds', 'media', 'voiceClips', 'isPublic',
+          'authorName', 'updatedAt'
+        ]);
+    }
+
+    function validRecipeCommentCreate(recipeId) {
+      let recipe = get(/databases/$(database)/documents/recipes/$(recipeId)).data;
+      let hasParent = request.resource.data.keys().hasAny(['parentCommentId'])
+        && request.resource.data.parentCommentId != '';
+      return socialWriteAllowed()
+        && recipeReadable(recipeId)
+        && !blockedBetween(request.auth.uid, recipe.authorId)
+        && request.resource.data.authorId == request.auth.uid
+        && profileNameMatches(request.auth.uid, request.resource.data.authorName)
+        && request.resource.data.keys().hasOnly([
+          'authorId', 'authorName', 'text', 'createdAt', 'parentCommentId', 'replyToUid', 'replyToName'
+        ])
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 800
+        && recentClientTime(request.resource.data.createdAt, 300000, 300000)
+        && (!request.resource.data.keys().hasAny(['parentCommentId']) || request.resource.data.parentCommentId is string)
+        && (!request.resource.data.keys().hasAny(['replyToUid']) || request.resource.data.replyToUid is string)
+        && (!request.resource.data.keys().hasAny(['replyToName']) || request.resource.data.replyToName is string)
+        && (!hasParent || (
+          exists(/databases/$(database)/documents/recipes/$(recipeId)/comments/$(request.resource.data.parentCommentId))
+          && get(/databases/$(database)/documents/recipes/$(recipeId)/comments/$(request.resource.data.parentCommentId)).data.authorId == request.resource.data.replyToUid
+          && !blockedBetween(request.auth.uid, request.resource.data.replyToUid)
+        ));
+    }
+
+    function validLiveReactionChange(sessionId) {
+      let heartDelta = request.resource.data.heartCount - resource.data.heartCount;
+      let fireDelta = request.resource.data.fireCount - resource.data.fireCount;
+      let clapDelta = request.resource.data.clapCount - resource.data.clapCount;
+      let reactionPath = /databases/$(database)/documents/liveSessions/$(sessionId)/reactionState/$(request.auth.uid);
+      let afterReaction = getAfter(reactionPath).data;
+      return socialWriteAllowed()
+        && activeLiveSession(sessionId)
+        && !blockedBetween(request.auth.uid, resource.data.hostId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['heartCount', 'fireCount', 'clapCount'])
+        && heartDelta >= 0 && heartDelta <= 1
+        && fireDelta >= 0 && fireDelta <= 1
+        && clapDelta >= 0 && clapDelta <= 1
+        && heartDelta + fireDelta + clapDelta == 1
+        && existsAfter(reactionPath)
+        && afterReaction.reaction in ['heart', 'fire', 'clap']
+        && recentClientTime(afterReaction.updatedAt, 300000, 300000)
+        && (!exists(reactionPath) || afterReaction.updatedAt > get(reactionPath).data.updatedAt)
+        && ((afterReaction.reaction == 'heart' && heartDelta == 1)
+          || (afterReaction.reaction == 'fire' && fireDelta == 1)
+          || (afterReaction.reaction == 'clap' && clapDelta == 1));
+    }
+
+    function validLiveReactionStateCreate(sessionId, uid) {
+      let livePath = /databases/$(database)/documents/liveSessions/$(sessionId);
+      let beforeLive = get(livePath).data;
+      let afterLive = getAfter(livePath).data;
+      return socialWriteAllowed()
+        && uid == request.auth.uid
+        && activeLiveSession(sessionId)
+        && !blockedBetween(uid, beforeLive.hostId)
+        && request.resource.data.keys().hasOnly(['reaction', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['reaction', 'updatedAt'])
+        && request.resource.data.reaction in ['heart', 'fire', 'clap']
+        && recentClientTime(request.resource.data.updatedAt, 300000, 300000)
+        && ((request.resource.data.reaction == 'heart' && afterLive.heartCount == beforeLive.heartCount + 1 && afterLive.fireCount == beforeLive.fireCount && afterLive.clapCount == beforeLive.clapCount)
+          || (request.resource.data.reaction == 'fire' && afterLive.fireCount == beforeLive.fireCount + 1 && afterLive.heartCount == beforeLive.heartCount && afterLive.clapCount == beforeLive.clapCount)
+          || (request.resource.data.reaction == 'clap' && afterLive.clapCount == beforeLive.clapCount + 1 && afterLive.heartCount == beforeLive.heartCount && afterLive.fireCount == beforeLive.fireCount));
+    }
+
+    function validLiveReactionStateUpdate(sessionId, uid) {
+      return validLiveReactionStateCreate(sessionId, uid)
+        && request.resource.data.updatedAt >= resource.data.updatedAt + 1500;
+    }
+
+    function validLiveCreate() {
+      return socialWriteAllowed()
+        && request.resource.data.keys().hasOnly([
+          'hostId', 'hostName', 'title', 'status', 'startedAt', 'heartbeatAt', 'endedAt',
+          'heartCount', 'fireCount', 'clapCount'
+        ])
+        && request.resource.data.keys().hasAll([
+          'hostId', 'hostName', 'title', 'status', 'startedAt', 'heartbeatAt', 'endedAt',
+          'heartCount', 'fireCount', 'clapCount'
+        ])
+        && request.resource.data.hostId == request.auth.uid
+        && profileNameMatches(request.auth.uid, request.resource.data.hostName)
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 120
+        && (request.resource.data.status == 'STARTING' || request.resource.data.status == 'LIVE')
+        && recentClientTime(request.resource.data.startedAt, 300000, 300000)
+        && recentClientTime(request.resource.data.heartbeatAt, 300000, 300000)
+        && request.resource.data.endedAt == 0
+        && request.resource.data.heartCount == 0
+        && request.resource.data.fireCount == 0
+        && request.resource.data.clapCount == 0;
+    }
+
+    function validLiveHostUpdate() {
+      let ending = request.resource.data.status == 'ENDED';
+      return signedIn()
+        && resource.data.hostId == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'hostId', 'hostName', 'title', 'status', 'startedAt', 'heartbeatAt', 'endedAt',
+          'heartCount', 'fireCount', 'clapCount'
+        ])
+        && request.resource.data.hostId == resource.data.hostId
+        && request.resource.data.hostName == resource.data.hostName
+        && request.resource.data.startedAt == resource.data.startedAt
+        && request.resource.data.heartCount == resource.data.heartCount
+        && request.resource.data.fireCount == resource.data.fireCount
+        && request.resource.data.clapCount == resource.data.clapCount
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 120
+        && (request.resource.data.status == 'STARTING' || request.resource.data.status == 'LIVE' || request.resource.data.status == 'ENDED')
+        && !(resource.data.status == 'LIVE' && request.resource.data.status == 'STARTING')
+        && !(resource.data.status == 'ENDED' && request.resource.data.status != 'ENDED')
+        && (ending
+          ? (request.resource.data.heartbeatAt == 0 && recentClientTime(request.resource.data.endedAt, 300000, 300000))
+          : (request.resource.data.endedAt == 0 && recentClientTime(request.resource.data.heartbeatAt, 300000, 300000)))
+        && (socialWriteAllowed() || ending)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'status', 'heartbeatAt', 'endedAt']);
+    }
+
+    match /users/{uid} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && validUserProfile(request.resource.data)
+        && (!request.resource.data.keys().hasAny(['followerCount']) || request.resource.data.followerCount == 0);
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && validUserProfile(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName', 'bio', 'photoUrl', 'coverPhotoUrl', 'favoriteThings'
+        ]);
+      // Full account deletion is backend-owned so Auth, Storage and private/social subcollections are cleaned together.
+      allow delete: if false;
+
+      match /likes/{recipeId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if socialWriteAllowed()
+          && request.auth.uid == uid
+          && safeRecipeId(recipeId)
+          && request.resource.data.keys().hasOnly(['createdAt'])
+          && recentClientTime(request.resource.data.createdAt, 300000, 300000)
+          && getAfter(/databases/$(database)/documents/recipes/$(recipeId)/likes/$(uid)).data.createdAt == request.resource.data.createdAt;
+        allow update: if false;
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+
+      match /bookmarks/{recipeId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['recipeId', 'createdAt'])
+          && request.resource.data.recipeId == recipeId
+          && recentClientTime(request.resource.data.createdAt, 300000, 300000);
+        allow update: if false;
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+
+      match /following/{targetUid} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if socialWriteAllowed()
+          && request.auth.uid == uid
+          && targetUid != uid
+          && exists(/databases/$(database)/documents/users/$(targetUid))
+          && !blockedBetween(uid, targetUid)
+          && request.resource.data.keys().hasOnly(['createdAt'])
+          && recentClientTime(request.resource.data.createdAt, 300000, 300000)
+          && getAfter(/databases/$(database)/documents/users/$(targetUid)/followers/$(uid)).data.createdAt == request.resource.data.createdAt;
+        allow update: if false;
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+
+      match /blocks/{blockedUid} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && blockedUid != uid
+          && request.resource.data.keys().hasOnly(['blockedUid', 'createdAt'])
+          && request.resource.data.blockedUid == blockedUid
+          && recentClientTime(request.resource.data.createdAt, 300000, 300000);
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+
+      match /messageReads/{conversationId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if signedIn()
+          && request.auth.uid == uid
+          && conversationParticipant(conversationId)
+          && request.resource.data.keys().hasOnly(['conversationId', 'lastReadAt'])
+          && request.resource.data.conversationId == conversationId
+          && request.resource.data.lastReadAt is int
+          && request.resource.data.lastReadAt >= 0;
+        allow update: if signedIn()
+          && request.auth.uid == uid
+          && conversationParticipant(conversationId)
+          && request.resource.data.keys().hasOnly(['conversationId', 'lastReadAt'])
+          && request.resource.data.conversationId == conversationId
+          && request.resource.data.lastReadAt is int
+          && request.resource.data.lastReadAt >= resource.data.lastReadAt;
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+
+      match /settings/{settingId} {
+        allow read: if signedIn() && request.auth.uid == uid && settingId == 'notifications';
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && settingId == 'notifications'
+          && request.resource.data.keys().hasOnly(['messages', 'comments', 'likes', 'live', 'followers', 'replies', 'updatedAt'])
+          && request.resource.data.messages is bool
+          && request.resource.data.comments is bool
+          && request.resource.data.likes is bool
+          && request.resource.data.live is bool
+          && (!request.resource.data.keys().hasAny(['followers']) || request.resource.data.followers is bool)
+          && (!request.resource.data.keys().hasAny(['replies']) || request.resource.data.replies is bool)
+          && recentClientTime(request.resource.data.updatedAt, 300000, 300000);
+        allow delete: if false;
+      }
+
+      match /notificationDevices/{installationId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['fid', 'platform', 'updatedAt'])
+          && request.resource.data.fid == installationId
+          && request.resource.data.fid is string
+          && request.resource.data.platform in ['android', 'web']
+          && recentClientTime(request.resource.data.updatedAt, 300000, 300000);
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if false;
+        allow delete: if signedIn() && request.auth.uid == uid;
+        allow update: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt'])
+          && request.resource.data.readAt is int
+          && request.resource.data.readAt >= resource.data.readAt;
+      }
+
+      // Follower identities are private. Public UI reads only the trusted followerCount on users/{uid}.
+      match /followers/{followerUid} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if socialWriteAllowed()
+          && request.auth.uid == followerUid
+          && followerUid != uid
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && !blockedBetween(followerUid, uid)
+          && request.resource.data.keys().hasOnly(['createdAt'])
+          && recentClientTime(request.resource.data.createdAt, 300000, 300000)
+          && getAfter(/databases/$(database)/documents/users/$(followerUid)/following/$(uid)).data.createdAt == request.resource.data.createdAt;
+        allow update: if false;
+        allow delete: if signedIn() && (request.auth.uid == followerUid || request.auth.uid == uid);
+      }
+    }
+
+    match /reports/{reportId} {
+      allow read: if signedIn() && (resource.data.reporterUid == request.auth.uid || moderator());
+      allow create: if signedIn()
+        && request.resource.data.reporterUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['reporterUid', 'targetType', 'targetId', 'targetUid', 'contextId', 'reason', 'createdAt', 'status'])
+        && request.resource.data.targetType in ['user', 'recipe', 'comment', 'reply', 'message']
+        && request.resource.data.targetId is string
+        && request.resource.data.targetUid is string
+        && request.resource.data.contextId is string
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() > 0
+        && request.resource.data.reason.size() <= 500
+        && recentClientTime(request.resource.data.createdAt, 300000, 300000)
+        && request.resource.data.status == 'open';
+      // Moderation state changes are performed through the moderator-only callable.
+      allow update, delete: if false;
+    }
+
+    match /recipes/{recipeId} {
+      allow get: if (signedIn() && !exists(/databases/$(database)/documents/recipes/$(recipeId)))
+        || resource.data.isPublic == true
+        || ownsExistingRecipe();
+      allow list: if resource.data.isPublic == true || ownsExistingRecipe();
+      allow create: if socialWriteAllowed()
+        && request.resource.data.authorId == request.auth.uid
+        && profileNameMatches(request.auth.uid, request.resource.data.authorName)
+        && validRecipeData(recipeId, request.resource.data)
+        && request.resource.data.likes == 0
+        && request.resource.data.commentCount == 0;
+      allow update: if validOwnerRecipeUpdate(recipeId);
+      // Permanent cloud deletion is backend-owned so Storage and child records are cleaned atomically/retry-safely.
+      allow delete: if false;
+
+      match /likes/{uid} {
+        allow read: if recipeReadable(recipeId);
+        allow create: if socialWriteAllowed()
+          && request.auth.uid == uid
+          && safeRecipeId(recipeId)
+          && recipeReadable(recipeId)
+          && !blockedBetween(uid, get(/databases/$(database)/documents/recipes/$(recipeId)).data.authorId)
+          && request.resource.data.keys().hasOnly(['createdAt'])
+          && recentClientTime(request.resource.data.createdAt, 300000, 300000)
+          && getAfter(/databases/$(database)/documents/users/$(uid)/likes/$(recipeId)).data.createdAt == request.resource.data.createdAt;
+        allow update: if false;
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+
+      match /comments/{commentId} {
+        allow read: if recipeReadable(recipeId);
+        allow create: if validRecipeCommentCreate(recipeId);
+        allow update: if socialWriteAllowed()
+          && resource.data.authorId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text'])
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 800;
+        allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+      }
+    }
+
+    match /conversations/{conversationId} {
+      allow get: if conversationIdForCurrentUser(conversationId);
+      allow list: if signedIn() && resource.data.participantIds.hasAny([request.auth.uid]);
+      allow create: if socialWriteAllowed()
+        && conversationIdMatchesParticipants(conversationId, request.resource.data.participantIds)
+        && !blockedBetween(request.resource.data.participantIds[0], request.resource.data.participantIds[1])
+        && request.resource.data.keys().hasOnly([
+          'participantIds', 'participantNames', 'lastMessage', 'lastSenderId', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.participantIds is list
+        && request.resource.data.participantIds.size() == 2
+        && request.resource.data.participantIds.hasAny([request.auth.uid])
+        && request.resource.data.participantIds[0] != request.resource.data.participantIds[1]
+        && validParticipantNames(request.resource.data.participantIds, request.resource.data.participantNames)
+        && request.resource.data.lastMessage == ''
+        && request.resource.data.lastSenderId == ''
+        && recentClientTime(request.resource.data.createdAt, 300000, 300000)
+        && recentClientTime(request.resource.data.updatedAt, 300000, 300000);
+      // Message preview metadata is maintained only by trusted backend triggers.
+      allow update, delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if conversationParticipant(conversationId);
+        allow create: if socialWriteAllowed()
+          && conversationParticipant(conversationId)
+          && !conversationBlocked(conversationId)
+          && request.resource.data.keys().hasOnly(['senderId', 'senderName', 'text', 'createdAt'])
+          && request.resource.data.senderId == request.auth.uid
+          && profileNameMatches(request.auth.uid, request.resource.data.senderName)
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 2000
+          && recentClientTime(request.resource.data.createdAt, 300000, 300000);
+        allow update, delete: if false;
+      }
+    }
+
+    match /liveSessions/{sessionId} {
+      allow read: if true;
+      allow create: if validLiveCreate();
+      allow update: if validLiveHostUpdate() || validLiveReactionChange(sessionId);
+      allow delete: if signedIn() && resource.data.hostId == request.auth.uid;
+
+      match /reactionState/{uid} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if validLiveReactionStateCreate(sessionId, uid);
+        allow update: if validLiveReactionStateUpdate(sessionId, uid);
+        allow delete: if signedIn() && (request.auth.uid == uid || liveHost(sessionId));
+      }
+
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if socialWriteAllowed()
+          && request.resource.data.authorId == request.auth.uid
+          && profileNameMatches(request.auth.uid, request.resource.data.authorName)
+          && !blockedBetween(request.auth.uid, get(/databases/$(database)/documents/liveSessions/$(sessionId)).data.hostId)
+          && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'text', 'createdAt'])
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 500
+          && recentClientTime(request.resource.data.createdAt, 300000, 300000);
+        allow update: if socialWriteAllowed()
+          && resource.data.authorId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text'])
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 500;
+        allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+      }
+
+      match /peers/{peerId} {
+        allow read: if liveHost(sessionId) || livePeerViewer(sessionId, peerId);
+        allow create: if validLivePeerCreate(sessionId, peerId);
+        allow update: if validLivePeerHostUpdate(sessionId, peerId) || validLivePeerViewerUpdate(sessionId, peerId);
+        allow delete: if liveHost(sessionId) || livePeerViewer(sessionId, peerId);
+
+        match /hostCandidates/{candidateId} {
+          allow read: if liveHost(sessionId) || livePeerViewer(sessionId, peerId);
+          allow create: if liveHost(sessionId)
+            && activeLiveSession(sessionId)
+            && validIceCandidate(candidateId, request.resource.data);
+          allow update: if false;
+          allow delete: if liveHost(sessionId) || livePeerViewer(sessionId, peerId);
+        }
+
+        match /viewerCandidates/{candidateId} {
+          allow read: if liveHost(sessionId) || livePeerViewer(sessionId, peerId);
+          allow create: if socialWriteAllowed()
+            && livePeerViewer(sessionId, peerId)
+            && activeLiveSession(sessionId)
+            && validIceCandidate(candidateId, request.resource.data);
+          allow update: if false;
+          allow delete: if liveHost(sessionId) || livePeerViewer(sessionId, peerId);
+        }
+      }
+    }
+
+
+    match /moderation/{document=**} {
+      // Restriction state and append-only moderator audit events are backend-owned.
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "functions": {
+    "source": "notifications/functions",
+    "codebase": "chefvoice-notifications",
+    "runtime": "nodejs22"
+  }
+}
