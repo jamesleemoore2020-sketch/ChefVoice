@@ -232,6 +232,19 @@ class FirebaseSocialRepository(private val context: Context) {
             .addOnFailureListener { callback(it.message ?: "Could not send verification email.") }
     }
 
+    /**
+     * FirebaseAuth's cached [currentUser] only picks up a server-side isEmailVerified
+     * flip via [android.gms.FirebaseUser.reload] -- the AuthStateListener does not fire
+     * just because verification status changed, so without this callers stay stuck
+     * showing "not verified" until the next sign-in.
+     */
+    fun refreshEmailVerification(callback: (Boolean) -> Unit) {
+        val user = currentUser ?: return callback(false)
+        user.reload()
+            .addOnSuccessListener { callback(user.isEmailVerified) }
+            .addOnFailureListener { callback(user.isEmailVerified) }
+    }
+
     fun checkModeratorAccess(callback: (Boolean, String?) -> Unit) {
         val user = currentUser ?: return callback(false, null)
         user.getIdToken(true)

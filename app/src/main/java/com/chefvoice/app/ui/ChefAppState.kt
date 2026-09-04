@@ -1247,7 +1247,14 @@ class ChefAppState(context: Context) {
         cloudMessage = "Sending verification email…"
         cloud.sendVerificationEmail { error ->
             accountBusy = false
-            cloudMessage = error ?: "Verification email sent. Open it, then sign in again to refresh verified status."
+            cloudMessage = error ?: "Verification email sent. Open it, then return to ChefVoice."
+        }
+    }
+
+    fun refreshEmailVerification() {
+        if (signedInUserId.isBlank() || signedInEmailVerified) return
+        cloud.refreshEmailVerification { verified ->
+            signedInEmailVerified = verified
         }
     }
 

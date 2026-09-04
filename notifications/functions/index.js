@@ -770,7 +770,10 @@ exports.authorizeChefVoiceStorageUpload = onCall(
     }
     if (input.recipeId) {
       const recipe = await db.doc(`recipes/${input.recipeId}`).get();
-      if (!recipe.exists || cleanText(recipe.data()?.authorId, 160) !== uid) throw new HttpsError("permission-denied", "This recipe is not owned by the signed-in ChefVoice account.");
+      // A recipe with no Firestore doc yet is a private, never-published Cook & Capture
+      // recipe -- its storage path is already scoped to this uid, so there is no other
+      // owner to conflict with. Only block when a doc exists and belongs to someone else.
+      if (recipe.exists && cleanText(recipe.data()?.authorId, 160) !== uid) throw new HttpsError("permission-denied", "This recipe is not owned by the signed-in ChefVoice account.");
     }
 
     const now = Date.now();

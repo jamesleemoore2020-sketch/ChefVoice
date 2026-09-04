@@ -59,6 +59,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -104,7 +105,9 @@ import com.chefvoice.app.voice.CookingSessionParser
 import com.chefvoice.app.voice.IngredientParser
 import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private enum class Tab(val label: String, val glyph: String) {
@@ -190,18 +193,46 @@ fun ChefVoiceApp(
             appState.selectedChefUid.isNotBlank() || appState.selectedLiveSession != null || tabHistory.isNotEmpty()
     ) { requestAppBack() }
 
+    val liveSafetyScope = rememberCoroutineScope()
     DisposableEffect(lifecycleOwner, hostingActiveLive, selectedLive?.id) {
+        // A brief ON_STOP/ON_START round trip also happens when Android shows the
+        // camera/mic runtime-permission prompt while already LIVE (it launches a
+        // separate system activity), so ending the live immediately on ON_STOP was
+        // killing every fresh broadcast the instant it started. Give it a short grace
+        // window and only actually end the live if the app is still stopped after it.
+        var pendingEndJob: Job? = null
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && hostingActiveLive) {
-                appState.endLiveForSafety("Live ended because ChefVoice left the foreground. Camera and microphone are off.")
+            when (event) {
+                Lifecycle.Event.ON_STOP -> if (hostingActiveLive) {
+                    pendingEndJob = liveSafetyScope.launch {
+                        delay(4000)
+                        appState.endLiveForSafety("Live ended because ChefVoice left the foreground. Camera and microphone are off.")
+                    }
+                }
+                Lifecycle.Event.ON_START -> {
+                    pendingEndJob?.cancel()
+                    pendingEndJob = null
+                }
+                else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            pendingEndJob?.cancel()
+        }
     }
 
     DisposableEffect(appState) {
         onDispose { appState.close() }
+    }
+
+    DisposableEffect(lifecycleOwner, appState) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) appState.refreshEmailVerification()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(Unit) {
