@@ -25,6 +25,13 @@ android {
         compose = true
     }
 
+    lint {
+        // False positive: releaseRuntimeClasspath resolves androidx.fragment to 1.5.4,
+        // well above the 1.3.0 this check demands. Verified via
+        // `gradlew :app:dependencies --configuration releaseRuntimeClasspath`.
+        disable += "InvalidFragmentVersionForActivityResult"
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
