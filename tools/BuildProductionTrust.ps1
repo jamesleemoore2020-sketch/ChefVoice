@@ -76,8 +76,14 @@ if (-not (Test-Path $AabInput)) { throw "Release build completed without an App 
 if (-not (Test-Path $ApkInput)) { throw "Release build completed without a signed APK: $ApkInput" }
 $apksigner = Find-LatestBuildTool $sdk 'apksigner.bat'
 if (-not $apksigner) { throw 'Android apksigner was not found under SDK build-tools.' }
+$priorErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 $verify = & $apksigner verify --verbose --print-certs $ApkInput 2>&1
-if ($LASTEXITCODE -ne 0) { throw "APK signature verification failed.`n$($verify -join [Environment]::NewLine)" }
+$apksignerExitCode = $LASTEXITCODE
+$ErrorActionPreference = $priorErrorActionPreference
+# apksigner prints harmless JDK "restricted method" warnings to stderr on newer JDKs;
+# 2>&1 merges those into $verify, so only the real exit code decides pass/fail.
+if ($apksignerExitCode -ne 0) { throw "APK signature verification failed.`n$($verify -join [Environment]::NewLine)" }
 $verifyText = $verify -join [Environment]::NewLine
 if ($verifyText -match 'Android Debug') { throw 'Release gate refused an APK signed with the Android Debug certificate.' }
 
