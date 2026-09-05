@@ -12,7 +12,8 @@ test('Gradle bootstrap is version-pinned and SHA-256 verified on Windows and Uni
 test('bookmark records include recipeId for lifecycle cleanup',()=>{assert.match(repo,/"recipeId" to recipeId, "createdAt"/);assert.match(rules,/match \/bookmarks\/\{recipeId\}[\s\S]*request\.resource\.data\.recipeId == recipeId/);});
 
 test('direct root-profile deletion is disabled so cloud account cleanup is authoritative',()=>{assert.match(rules,/match \/users\/\{uid\}[\s\S]*allow delete: if false;/);assert.match(functions,/deleteChefVoiceAccount/);});
-test('recipe media and private audio require an existing recipe owned by the signer',()=>{assert.match(storageRules,/function recipeOwnedBy\(uid, recipeId\)/);assert.match(storageRules,/match \/privateVoice\/\{uid\}\/\{recipeId\}\/\{fileName\}[\s\S]*recipeOwnedBy\(uid, recipeId\)/);assert.match(storageRules,/match \/recipes\/\{uid\}\/\{recipeId\}\/voice\/\{fileName\}[\s\S]*recipeOwnedBy\(uid, recipeId\)/);});
+test('public recipe media requires an existing recipe owned by the signer',()=>{assert.match(storageRules,/function recipeOwnedBy\(uid, recipeId\)/);assert.match(storageRules,/match \/recipes\/\{uid\}\/\{recipeId\}\/publicMedia\/\{fileName\}[\s\S]*recipeOwnedBy\(uid, recipeId\)/);});
+test('private Cook & Capture audio is owned-by-signer but does not require a published recipe doc',()=>{assert.match(storageRules,/function privateRecipeOwnedBy\(uid, recipeId\)/);assert.match(storageRules,/!firestore\.exists\(\/databases\/\(default\)\/documents\/recipes\/\$\(recipeId\)\)/);assert.match(storageRules,/match \/privateVoice\/\{uid\}\/\{recipeId\}\/\{fileName\}[\s\S]*privateRecipeOwnedBy\(uid, recipeId\)/);assert.match(storageRules,/match \/recipes\/\{uid\}\/\{recipeId\}\/voice\/\{fileName\}[\s\S]*privateRecipeOwnedBy\(uid, recipeId\)/);});
 
 test('signed release pipeline rejects debug certificates and has no source-controlled signing fallback',()=>{
   const prod=read('tools/BuildProductionTrust.ps1');

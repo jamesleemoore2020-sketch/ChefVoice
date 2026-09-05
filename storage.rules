@@ -18,6 +18,17 @@ service firebase.storage {
         && safeRecipeId(recipeId)
         && firestore.get(/databases/(default)/documents/recipes/$(recipeId)).data.authorId == uid;
     }
+    // Private Cook & Capture audio (raw session recording, optional voice clips) is
+    // scoped to this uid's own storage path and never published anywhere else, so an
+    // unpublished recipe that has no recipes/{id} Firestore doc yet has no other owner
+    // to conflict with. Only block when a doc exists and belongs to someone else -- this
+    // mirrors the ownership check already relaxed in authorizeChefVoiceStorageUpload.
+    function privateRecipeOwnedBy(uid, recipeId) {
+      return verifiedOwner(uid)
+        && safeRecipeId(recipeId)
+        && (!firestore.exists(/databases/(default)/documents/recipes/$(recipeId))
+          || firestore.get(/databases/(default)/documents/recipes/$(recipeId)).data.authorId == uid);
+    }
     function socialUploadAllowed(uid) {
       // Must match RESTRICTIONS_COLLECTION in notifications/functions/index.js
       // and restrictionActive() in firestore.rules.
@@ -126,31 +137,31 @@ service firebase.storage {
     // Optional non-session voice clips are capped to 16 deterministic private slots.
     match /recipes/{uid}/{recipeId}/voice/{fileName} {
       allow read: if owner(uid);
-      allow create: if recipeOwnedBy(uid, recipeId)
+      allow create: if privateRecipeOwnedBy(uid, recipeId)
         && validVoiceSlot(fileName)
         && validPrivateAudio()
         && uploadPermit(uid, 'voice-' + recipeId + '-' + fileName, 'voice_clip', recipeId, fileName);
-      allow update: if recipeOwnedBy(uid, recipeId)
+      allow update: if privateRecipeOwnedBy(uid, recipeId)
         && validVoiceSlot(fileName)
         && validPrivateAudio()
         && uploadPermit(uid, 'voice-' + recipeId + '-' + fileName, 'voice_clip', recipeId, fileName)
         && resource.metadata.chefvoiceUploadToken != request.resource.metadata.chefvoiceUploadToken;
-      allow delete: if recipeOwnedBy(uid, recipeId) && validVoiceSlot(fileName);
+      allow delete: if privateRecipeOwnedBy(uid, recipeId) && validVoiceSlot(fileName);
     }
 
     // Raw cooking-session audio has exactly one replaceable object per recipe.
     match /privateVoice/{uid}/{recipeId}/{fileName} {
       allow read: if owner(uid);
-      allow create: if recipeOwnedBy(uid, recipeId)
+      allow create: if privateRecipeOwnedBy(uid, recipeId)
         && fileName == 'session'
         && validPrivateAudio()
         && uploadPermit(uid, 'session-' + recipeId, 'private_session', recipeId, fileName);
-      allow update: if recipeOwnedBy(uid, recipeId)
+      allow update: if privateRecipeOwnedBy(uid, recipeId)
         && fileName == 'session'
         && validPrivateAudio()
         && uploadPermit(uid, 'session-' + recipeId, 'private_session', recipeId, fileName)
         && resource.metadata.chefvoiceUploadToken != request.resource.metadata.chefvoiceUploadToken;
-      allow delete: if recipeOwnedBy(uid, recipeId) && fileName == 'session';
+      allow delete: if privateRecipeOwnedBy(uid, recipeId) && fileName == 'session';
     }
   }
 }
