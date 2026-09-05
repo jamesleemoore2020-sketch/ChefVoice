@@ -129,6 +129,58 @@ class SecondPassReviewerTest {
     }
 
     @Test
+    fun exactDuplicateLiveArtifactBelowConfidenceGateIsStillOfferedForRemoval() {
+        // Real capture quirk: a filler "ingredient" is captured twice on the live pass (e.g.
+        // once per repeated utterance), and the classifier's greedy one-per-second-item
+        // matching only consumes one copy. The leftover exact duplicate scores near-zero on
+        // "does this read like a real name" confidence, but it is an obvious duplicate and
+        // must still be offered for removal rather than silently lingering unflagged.
+        val live = listOf(
+            Ingredient(quantity = "2", name = "So"),
+            Ingredient(quantity = "2", name = "So")
+        )
+        val second = listOf(Ingredient(quantity = "2", name = "So"))
+
+        val review = SecondPassReviewer.buildReview(live, second)
+
+        val artifact = review.issues.single()
+        assertEquals("remove-live-artifact", artifact.type)
+        assertEquals(1, artifact.liveIndex)
+        assertEquals(live.size - 1, SecondPassReviewer.applySuggestion(live, artifact).size)
+    }
+
+    @Test
+    fun acceptingPossibleMissedIngredientTwiceDoesNotDuplicate() {
+        val live = listOf(Ingredient(quantity = "1", unit = "cup", name = "Chicken broth"))
+        val second = listOf(
+            Ingredient(quantity = "1", unit = "cup", name = "Chicken broth"),
+            Ingredient(quantity = "1", unit = "tsp", name = "Cumin")
+        )
+        val issue = SecondPassReviewer.buildReview(live, second).issues.single { it.type == "possible-missed-ingredient" }
+
+        val onceAccepted = SecondPassReviewer.applySuggestion(live, issue)
+        assertEquals(2, onceAccepted.size)
+
+        // Simulate the same card being accepted again (e.g. offered again after a second
+        // ChefVoice Review run): must not add a second Cumin row.
+        val acceptedAgain = SecondPassReviewer.applySuggestion(onceAccepted, issue)
+        assertEquals(2, acceptedAgain.size)
+    }
+
+    @Test
+    fun acceptingPossibleMissedStepTwiceDoesNotDuplicate() {
+        val live = listOf("Brown the ground beef.")
+        val second = listOf("Brown the ground beef.", "Let it rest for 5 minutes.")
+        val issue = SecondPassReviewer.buildMethodReview(live, second).issues.single { it.type == "possible-missed-step" }
+
+        val onceAccepted = SecondPassReviewer.applyMethodSuggestion(live, issue)
+        assertEquals(2, onceAccepted.size)
+
+        val acceptedAgain = SecondPassReviewer.applyMethodSuggestion(onceAccepted, issue)
+        assertEquals(2, acceptedAgain.size)
+    }
+
+    @Test
     fun matchingMethodStepIsConfirmedWithoutRewrite() {
         val live = listOf("Mix the ground beef thoroughly.")
         val second = listOf("Mix ground beef thoroughly.")

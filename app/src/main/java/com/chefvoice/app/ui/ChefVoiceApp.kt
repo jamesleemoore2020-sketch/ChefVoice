@@ -318,6 +318,8 @@ fun ChefVoiceApp(
                         onDelete = { appState.deleteRecipe(recipe) },
                         onAddMedia = { attachment -> appState.addRecipeMedia(recipe.id, attachment) },
                         onRemoveMedia = { mediaId -> appState.removeRecipeMedia(recipe.id, mediaId) },
+                        onRemoveIngredient = { ingredientId -> appState.removeRecipeIngredient(recipe.id, ingredientId) },
+                        onRemoveStep = { stepId -> appState.removeRecipeStep(recipe.id, stepId) },
                         onUpdateTimes = { prep, cook -> appState.updateRecipeTimes(recipe.id, prep, cook) },
                         onCook = { appState.cookingRecipe = recipe },
                         onPlayVoice = appState::playVoice,
@@ -2017,6 +2019,8 @@ private fun RecipeDetailScreen(
     onDelete: () -> Unit,
     onAddMedia: (MediaAttachment) -> Unit,
     onRemoveMedia: (String) -> Unit,
+    onRemoveIngredient: (String) -> Unit,
+    onRemoveStep: (String) -> Unit,
     onUpdateTimes: (Int, Int) -> Unit,
     onCook: () -> Unit,
     onPlayVoice: (String) -> Unit,
@@ -2141,7 +2145,7 @@ private fun RecipeDetailScreen(
 
             item { Button(onClick = onCook, modifier = Modifier.fillMaxWidth()) { Text("🍳 Cook this recipe") } }
 
-            item { SectionTitle("Second-pass transcription") }
+            item { SectionTitle("ChefVoice Review") }
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2174,7 +2178,7 @@ private fun RecipeDetailScreen(
                                     Text(
                                         when {
                                             secondPassBusy -> "Transcribing original audio…"
-                                            recipe.secondPass != null -> "↻ Run second pass again"
+                                            recipe.secondPass != null -> "↻ Run ChefVoice Review again"
                                             else -> "✨ Check original audio"
                                         }
                                     )
@@ -2202,7 +2206,7 @@ private fun RecipeDetailScreen(
                     item {
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("Second-pass transcript", fontWeight = FontWeight.Bold)
+                                Text("ChefVoice Review transcript", fontWeight = FontWeight.Bold)
                                 Text(result.transcript)
                             }
                         }
@@ -2240,7 +2244,7 @@ private fun RecipeDetailScreen(
                                         ) {
                                             Text(
                                                 when {
-                                                    issue.type != "remove-live-artifact" -> "Use second pass"
+                                                    issue.type != "remove-live-artifact" -> "Use ChefVoice Review"
                                                     issue.title == "Superseded quantity" -> "Remove old quantity"
                                                     else -> "Remove artifact"
                                                 }
@@ -2285,7 +2289,7 @@ private fun RecipeDetailScreen(
                                         Button(
                                             onClick = { onAcceptSecondPassMethod(issue.id) },
                                             modifier = Modifier.weight(1f)
-                                        ) { Text("Use second pass") }
+                                        ) { Text("Use ChefVoice Review") }
                                     }
                                     OutlinedButton(
                                         onClick = { onKeepSecondPassMethod(issue.id) },
@@ -2299,7 +2303,16 @@ private fun RecipeDetailScreen(
             }
 
             item { SectionTitle("Ingredients") }
-            items(recipe.ingredients) { ingredient -> Text("• ${ingredient.displayText()}") }
+            items(recipe.ingredients, key = { "ingredient:${it.id}" }) { ingredient ->
+                if (isOwned && mediaEditMode) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("• ${ingredient.displayText()}", Modifier.weight(1f))
+                        TextButton(onClick = { onRemoveIngredient(ingredient.id) }) { Text("Remove") }
+                    }
+                } else {
+                    Text("• ${ingredient.displayText()}")
+                }
+            }
 
             item { SectionTitle("Method") }
             items(recipe.steps.withIndex().toList(), key = { "method:${recipe.stepIdAt(it.index)}" }) { indexed ->
@@ -2316,6 +2329,7 @@ private fun RecipeDetailScreen(
                             MediaPreview(attachment, onRemove = if (isOwned && mediaEditMode) {{ onRemoveMedia(attachment.id) }} else null)
                         }
                         if (isOwned && mediaEditMode) {
+                            TextButton(onClick = { onRemoveStep(stepId) }, modifier = Modifier.align(Alignment.End)) { Text("Remove step") }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(onClick = { pickPhoto(stepId) }, modifier = Modifier.weight(1f)) { Text("+ Photo") }
                                 OutlinedButton(onClick = { pickVideo(stepId) }, modifier = Modifier.weight(1f)) { Text("+ Video") }

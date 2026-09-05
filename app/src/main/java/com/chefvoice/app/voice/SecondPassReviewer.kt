@@ -199,7 +199,8 @@ object SecondPassReviewer {
 
         liveIngredients.forEachIndexed { liveIndex, live ->
             if (liveIndex in usedLive || isActionOnly(live)) return@forEachIndexed
-            if (ingredientReviewConfidence(live, secondIngredients) < 0.55) return@forEachIndexed
+            // Identity must be resolved before the confidence gate: a superseded/artifact
+            // duplicate should always surface for removal, even at low text confidence.
             val superseding = secondIngredients.firstOrNull { second ->
                 nameKey(live) == nameKey(second) && !sameMeasure(live, second)
             }
@@ -237,7 +238,14 @@ object SecondPassReviewer {
         when (issue.type) {
             "possible-missed-ingredient" -> {
                 issue.suggested?.let { suggested ->
-                    next += suggested.copy(id = suggested.id.ifBlank { java.util.UUID.randomUUID().toString() })
+                    // Guard against adding a duplicate: a second "possible missed" card can
+                    // describe the same real ingredient as one already accepted (e.g. from an
+                    // earlier accept, or a prior ChefVoice Review run), and accepting both must
+                    // not leave two rows for one ingredient.
+                    val alreadyPresent = next.any { jaccard(it, suggested) >= 0.66 }
+                    if (!alreadyPresent) {
+                        next += suggested.copy(id = suggested.id.ifBlank { java.util.UUID.randomUUID().toString() })
+                    }
                 }
             }
             // "measurement-disagreement" is the legacy name for "quantity-change".
@@ -347,10 +355,7 @@ object SecondPassReviewer {
             if (bestIndex >= 0 && bestScore >= 0.56) {
                 usedLive += bestIndex
                 val live = liveSteps[bestIndex].trim()
-                if (methodJaccard(live, second) >= 0.86 ||
-                    normalizeMethodStep(live) == normalizeMethodStep(second) ||
-                    methodMeaningIsContained(live, second)
-                ) {
+                if (isSameMethodStep(live, second)) {
                     // Second Pass often expands terse live notes into a chef-readable
                     // instruction. Extra detail is confirmation, not a disagreement.
                     confirmed++
@@ -438,8 +443,13 @@ object SecondPassReviewer {
         val next = steps.toMutableList()
         when (issue.type) {
             "possible-missed-step" -> issue.suggestedStep?.trim()?.takeIf { it.isNotBlank() }?.let { suggested ->
-                val insertAt = issue.secondIndex.coerceIn(0, next.size)
-                next.add(insertAt, suggested)
+                // Same duplicate guard as ingredients: don't insert a step that already reads
+                // as the same instruction as one already in the list.
+                val alreadyPresent = next.any { isSameMethodStep(it, suggested) }
+                if (!alreadyPresent) {
+                    val insertAt = issue.secondIndex.coerceIn(0, next.size)
+                    next.add(insertAt, suggested)
+                }
             }
             "method-wording-disagreement" -> {
                 if (issue.liveIndex in next.indices && !issue.suggestedStep.isNullOrBlank()) {
@@ -563,6 +573,13 @@ object SecondPassReviewer {
     }
 
     private fun normalizeMethodStep(value: String): String = methodWords(value).joinToString(" ")
+
+    // The bar for "this is the same instruction, not a disagreement" -- used both to confirm a
+    // matched pair without a review card, and to stop a duplicate step being inserted.
+    private fun isSameMethodStep(a: String, b: String): Boolean =
+        methodJaccard(a, b) >= 0.86 ||
+            normalizeMethodStep(a) == normalizeMethodStep(b) ||
+            methodMeaningIsContained(a, b)
 
     private fun methodWords(value: String): List<String> =
         value.lowercase()

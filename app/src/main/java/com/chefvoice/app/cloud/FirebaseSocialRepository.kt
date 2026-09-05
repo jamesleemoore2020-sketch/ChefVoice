@@ -349,7 +349,7 @@ class FirebaseSocialRepository(private val context: Context) {
         audioPath: String,
         callback: (CloudSecondPassResult?, String?) -> Unit
     ) {
-        val user = currentUser ?: return callback(null, "Sign in before running a second-pass transcription.")
+        val user = currentUser ?: return callback(null, "Sign in before running ChefVoice Review.")
         val storage = storageOrNull() ?: return callback(null, "Cloud Storage is not available.")
         val functions = functionsOrNull() ?: return callback(null, "Cloud Functions are not available.")
         val audioFile = File(audioPath)
@@ -368,7 +368,7 @@ class FirebaseSocialRepository(private val context: Context) {
             else -> "audio/mpeg"
         }
         if (!user.isEmailVerified) {
-            callback(null, "Verify your email before using Second Pass. Local Cook & Capture remains available.")
+            callback(null, "Verify your email before using ChefVoice Review. Local Cook & Capture remains available.")
             return
         }
         val durationMs = audioDurationMs(audioFile)
@@ -377,7 +377,7 @@ class FirebaseSocialRepository(private val context: Context) {
             return
         }
         if (durationMs > SECOND_PASS_MAX_DECLARED_DURATION_MS) {
-            callback(null, "Second Pass supports cooking recordings up to 90 minutes. The original local audio is unchanged.")
+            callback(null, "ChefVoice Review supports cooking recordings up to 90 minutes. The original local audio is unchanged.")
             return
         }
         val target = storage.reference.child(
@@ -398,7 +398,7 @@ class FirebaseSocialRepository(private val context: Context) {
                     .addOnSuccessListener { result ->
                         val data = result.data as? Map<*, *>
                         if (data == null) {
-                            callback(null, "Second-pass transcription returned an unreadable response.")
+                            callback(null, "ChefVoice Review returned an unreadable response.")
                             return@addOnSuccessListener
                         }
                         val rawSegments = data["segments"] as? List<*> ?: emptyList<Any?>()
@@ -425,9 +425,9 @@ class FirebaseSocialRepository(private val context: Context) {
                     }
                     .addOnFailureListener { error ->
                         val message = if (error is FirebaseFunctionsException) {
-                            error.message ?: "Second-pass transcription failed (${error.code})."
+                            error.message ?: "ChefVoice Review failed (${error.code})."
                         } else {
-                            error.message ?: "Second-pass transcription failed."
+                            error.message ?: "ChefVoice Review failed."
                         }
                         callback(null, message)
                     }

@@ -916,13 +916,68 @@ class ChefAppState(context: Context) {
         else "Media removed from this recipe."
     }
 
+    fun removeRecipeIngredient(recipeId: String, ingredientId: String) {
+        val current = recipes.firstOrNull { it.id == recipeId } ?: selectedRecipe?.takeIf { it.id == recipeId } ?: return
+        if (current.ingredients.none { it.id == ingredientId }) return
+        val nextIngredients = current.ingredients.filterNot { it.id == ingredientId }
+        // Removing an ingredient shifts list indices, and ChefVoice Review issues carry a
+        // liveIndex into that list — rebuild the review so it never points at the wrong item.
+        val nextSecondPass = current.secondPass?.let { result ->
+            val rebuilt = SecondPassReviewer.buildReview(nextIngredients, result.ingredients)
+            result.copy(issues = rebuilt.issues, confirmedCount = rebuilt.confirmedCount)
+        }
+        val updated = current.copy(
+            ingredients = nextIngredients,
+            secondPass = nextSecondPass,
+            communityUpdatePending = current.isPublic || current.communityUpdatePending,
+            updatedAt = System.currentTimeMillis()
+        )
+        saveRecipe(updated)
+        if (selectedRecipe?.id == recipeId) selectedRecipe = updated
+        cloudMessage = if (current.isPublic)
+            "Ingredient removed on this phone. Tap Update Community to apply the change publicly."
+        else "Ingredient removed from this recipe."
+    }
+
+    fun removeRecipeStep(recipeId: String, stepId: String) {
+        val current = recipes.firstOrNull { it.id == recipeId } ?: selectedRecipe?.takeIf { it.id == recipeId } ?: return
+        val currentStepIds = current.stableStepIds()
+        val index = currentStepIds.indexOf(stepId)
+        if (index < 0) return
+        val nextSteps = current.steps.toMutableList().apply { removeAt(index) }
+        val nextStepIds = currentStepIds.toMutableList().apply { removeAt(index) }
+        val orphanedMedia = current.media.filter { it.stepId == stepId }
+        orphanedMedia.forEach { attachment ->
+            if (attachment.path.isNotBlank()) runCatching { File(attachment.path).delete() }
+        }
+        // Removing a step shifts list indices, and ChefVoice Review method issues carry a
+        // liveIndex into that list — rebuild the review so it never points at the wrong step.
+        val nextSecondPass = current.secondPass?.let { result ->
+            val rebuilt = SecondPassReviewer.buildMethodReview(nextSteps, result.steps, result.transcript)
+            result.copy(methodIssues = rebuilt.issues, methodConfirmedCount = rebuilt.confirmedCount)
+        }
+        val updated = current.copy(
+            steps = nextSteps,
+            stepIds = nextStepIds,
+            media = current.media.filterNot { it.stepId == stepId },
+            secondPass = nextSecondPass,
+            communityUpdatePending = current.isPublic || current.communityUpdatePending,
+            updatedAt = System.currentTimeMillis()
+        )
+        saveRecipe(updated)
+        if (selectedRecipe?.id == recipeId) selectedRecipe = updated
+        cloudMessage = if (current.isPublic)
+            "Step removed on this phone. Tap Update Community to apply the change publicly."
+        else "Step removed from this recipe."
+    }
+
     fun hasSecondPassAudio(recipe: Recipe): Boolean =
         secondPassAudioPath(recipe) != null
 
     fun runSecondPass(recipe: Recipe) {
         if (secondPassBusyRecipeId.isNotBlank()) return
         if (!cloudConfigured) {
-            secondPassMessage = "Connect Firebase before running the second pass."
+            secondPassMessage = "Connect Firebase before running ChefVoice Review."
             return
         }
         if (!isSignedIn) {
@@ -944,7 +999,7 @@ class ChefAppState(context: Context) {
                 return@transcribePrivateChefVoice
             }
             if (cloudResult == null) {
-                secondPassMessage = "Second-pass transcription returned no result."
+                secondPassMessage = "ChefVoice Review returned no result."
                 return@transcribePrivateChefVoice
             }
 
@@ -1040,7 +1095,7 @@ class ChefAppState(context: Context) {
         val ingredientCount = result.issues.size
         val methodCount = result.methodIssues.size
         if (ingredientCount == 0 && methodCount == 0) {
-            return "Second-pass review complete. ${result.confirmedCount} ingredient${if (result.confirmedCount == 1) "" else "s"} and ${result.methodConfirmedCount} method step${if (result.methodConfirmedCount == 1) "" else "s"} confirmed."
+            return "ChefVoice Review complete. ${result.confirmedCount} ingredient${if (result.confirmedCount == 1) "" else "s"} and ${result.methodConfirmedCount} method step${if (result.methodConfirmedCount == 1) "" else "s"} confirmed."
         }
         val parts = buildList {
             if (ingredientCount > 0) add("$ingredientCount ingredient item${if (ingredientCount == 1) "" else "s"}")
