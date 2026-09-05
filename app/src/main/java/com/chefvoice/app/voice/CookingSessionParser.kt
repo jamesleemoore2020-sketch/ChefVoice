@@ -556,38 +556,6 @@ object CookingSessionParser {
             .replace(Regex("[^a-z0-9]+"), " ")
             .trim()
 
-    private fun applyCorrectionsToSteps(
-        fullTranscript: String,
-        steps: List<String>,
-        finalIngredients: List<Ingredient>
-    ): List<String> {
-        if (!Regex("(?i)\\b(?:actually\\s+)?scratch\\s+that\\b").containsMatchIn(fullTranscript)) {
-            return steps
-        }
-
-        // If the correction happened inside a narrated Add/Use clause, replace the
-        // raw correction-filled method with one deterministic structured step.
-        val correctedAction = buildStructuredIngredientActionStep(
-            fullTranscript,
-            finalIngredients
-        ) ?: return steps
-
-        val correctionNoise = Regex("(?i)\\b(?:actually\\s+)?scratch\\s+that\\b")
-        val filtered = steps.filterNot { correctionNoise.containsMatchIn(it) }
-            .filterNot { step ->
-                val lower = step.lowercase()
-                lower.startsWith("add ") && finalIngredients.any {
-                    val key = normalizedIngredientName(it.name)
-                    key.isNotBlank() && lower.contains(key)
-                }
-            }
-            .toMutableList()
-
-        filtered.add(0, sentenceCase(correctedAction))
-        return dedupeSteps(filtered)
-    }
-
-
     private fun applyNamedIngredientCorrection(
         corrected: MutableList<Ingredient>,
         quantity: String,
