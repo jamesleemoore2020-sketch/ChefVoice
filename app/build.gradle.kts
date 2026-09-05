@@ -17,8 +17,8 @@ android {
         applicationId = "com.chefvoice.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 54
-        versionName = "0.10.3"
+        versionCode = 55
+        versionName = "0.10.4"
     }
 
     buildFeatures {
@@ -125,7 +125,22 @@ dependencies {
     releaseImplementation("com.google.firebase:firebase-appcheck-playintegrity")
 
     // WebRTC media transport for real phone-to-phone live video/audio.
-    implementation("io.github.webrtc-sdk:android:144.7559.09")
+    // libjingle_peerconnection_so.so was crashing with SIGTRAP (TRAP_BRKPT) inside its
+    // own JNI_OnLoad on a real device (Samsung, arm64) every time a Live session was
+    // joined, right after the phone took an Android 16 preview OS update
+    // (pa3q:16/BP4A.251205.006) -- Live had worked on this same device before that
+    // update. Confirmed via tombstone on both 144.7559.09 and 144.7559.14 (different
+    // BuildIds, identical crash offset/signature), so a patch bump within the M144
+    // milestone did not help; also ruled out a hardened-allocator opt-out
+    // (android:allowNativeHeapPointerTagging="false"), the 16KB-page-size Developer
+    // Options toggle (device doesn't have one), and 16KB ELF alignment (the .so's LOAD
+    // segments were already 16KB-aligned). Moving past the whole M144 line to
+    // 150.7871.01 (a materially newer milestone/toolchain from
+    // https://github.com/webrtc-sdk/android/releases) fixed it: confirmed on-device via
+    // logcat that the library now loads cleanly and a Live session reaches LIVE/
+    // markLiveSessionReady with no crash. Root cause is presumed to be a bionic
+    // linker/toolchain mismatch between the M144 build's NDK and this OS version.
+    implementation("io.github.webrtc-sdk:android:150.7871.01")
 
     // Image loading. Replaces hand-rolled URL.openStream() + BitmapFactory decodes
     // that had no cache and no downsampling. coil-video renders local video frames.

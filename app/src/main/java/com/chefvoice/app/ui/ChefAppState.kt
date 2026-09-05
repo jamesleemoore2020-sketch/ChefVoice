@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -803,6 +804,7 @@ class ChefAppState(context: Context) {
         val session = selectedLiveSession ?: return
         if (session.id != sessionId || session.hostId != signedInUserId || session.status == "LIVE") return
         cloud.markLiveSessionReady(sessionId) { error ->
+            Log.d("ChefVoiceLive", "markLiveSessionReady callback: error=$error")
             if (error != null) {
                 cloudMessage = "Camera and microphone opened, but ChefVoice could not publish the Live room: $error"
                 endLiveForSafety("Live room closed because readiness could not be published.")
@@ -822,6 +824,7 @@ class ChefAppState(context: Context) {
 
     private fun endLiveInternal(closeAfter: Boolean, safetyMessage: String, allowWhileBusy: Boolean = false) {
         val session = selectedLiveSession ?: return
+        Log.d("ChefVoiceLive", "endLiveInternal called: closeAfter=$closeAfter safetyMessage=\"$safetyMessage\" allowWhileBusy=$allowWhileBusy sessionStatus=${session.status} liveBusy=$liveBusy hostId=${session.hostId} signedInUserId=$signedInUserId")
         if (session.hostId != signedInUserId || (session.status != "LIVE" && session.status != "STARTING")) return
         if (liveBusy && !allowWhileBusy) return
         stopLiveHeartbeat()

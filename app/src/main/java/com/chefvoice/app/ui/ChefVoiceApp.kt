@@ -2,6 +2,7 @@ package com.chefvoice.app.ui
 
 import android.Manifest
 import android.content.Intent
+import android.util.Log
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.speech.RecognizerIntent
@@ -202,14 +203,18 @@ fun ChefVoiceApp(
         // window and only actually end the live if the app is still stopped after it.
         var pendingEndJob: Job? = null
         val observer = LifecycleEventObserver { _, event ->
+            Log.d("ChefVoiceLive", "lifecycle event=$event hostingActiveLive=$hostingActiveLive selectedLiveId=${selectedLive?.id} status=${selectedLive?.status}")
             when (event) {
                 Lifecycle.Event.ON_STOP -> if (hostingActiveLive) {
+                    Log.d("ChefVoiceLive", "ON_STOP while hosting -- scheduling safety-end in 4s")
                     pendingEndJob = liveSafetyScope.launch {
                         delay(4000)
+                        Log.d("ChefVoiceLive", "grace window elapsed -- calling endLiveForSafety")
                         appState.endLiveForSafety("Live ended because ChefVoice left the foreground. Camera and microphone are off.")
                     }
                 }
                 Lifecycle.Event.ON_START -> {
+                    if (pendingEndJob != null) Log.d("ChefVoiceLive", "ON_START -- cancelling pending safety-end")
                     pendingEndJob?.cancel()
                     pendingEndJob = null
                 }
