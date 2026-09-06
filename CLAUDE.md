@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ChefVoice is an Android app (Kotlin/Compose) that lets a chef narrate a cooking session out loud; a deterministic (non-LLM) parser turns the raw speech transcript into structured ingredients and method steps. Around that core sits a Firebase-backed social/community layer (recipes, profiles, following, comments, likes, messaging, live video) and a notifications system, each isolated in their own deploy unit.
 
-There is no top-level package manager for the whole repo — this is a Gradle Android project (`app/`) plus several independent Node.js test/function projects (`notifications/functions/`, `rules-tests/`). Not a git repository at present.
+There is no top-level package manager for the whole repo — this is a Gradle Android project (`app/`) plus several independent Node.js test/function projects (`notifications/functions/`, `rules-tests/`). It is a git repository (`master` is the main branch).
 
 ## Commands
 

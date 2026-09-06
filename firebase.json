@@ -9,5 +9,9 @@
     "source": "notifications/functions",
     "codebase": "chefvoice-notifications",
     "runtime": "nodejs22"
+  },
+  "hosting": {
+    "public": "hosting",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
   }
 }

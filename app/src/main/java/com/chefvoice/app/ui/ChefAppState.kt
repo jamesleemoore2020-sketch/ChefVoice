@@ -95,6 +95,8 @@ class ChefAppState(context: Context) {
         private set
     var accountBusy by mutableStateOf(false)
         private set
+    var needsReauthForDelete by mutableStateOf(false)
+        private set
     var liveBusy by mutableStateOf(false)
     var recipeMutationBusyId by mutableStateOf("")
         private set
@@ -232,6 +234,7 @@ class ChefAppState(context: Context) {
                 signedInUserId = user?.uid.orEmpty()
                 signedInEmail = user?.email.orEmpty()
                 signedInEmailVerified = user?.isEmailVerified == true
+                needsReauthForDelete = false
                 moderatorAccess = false
                 moderationReports.clear()
                 moderationError = ""
@@ -1319,13 +1322,41 @@ class ChefAppState(context: Context) {
     fun deleteChefVoiceAccount() {
         if (accountBusy) return
         accountBusy = true
+        needsReauthForDelete = false
         cloudMessage = "Deleting ChefVoice cloud account and owned Community data…"
-        cloud.deleteChefVoiceAccount { error ->
+        cloud.deleteChefVoiceAccount { needsReauth, error ->
             accountBusy = false
-            if (error == null) {
-                cloudMessage = "ChefVoice cloud account deleted. Local cooking recipes remain on this phone."
-            } else cloudMessage = error
+            when {
+                needsReauth -> {
+                    needsReauthForDelete = true
+                    cloudMessage = "For security, enter your password to confirm this is you before we permanently delete your account."
+                }
+                error == null -> cloudMessage = "ChefVoice cloud account deleted. Local cooking recipes remain on this phone."
+                else -> cloudMessage = error
+            }
         }
+    }
+
+    fun confirmAccountDeletionWithPassword(password: String) {
+        if (accountBusy) return
+        accountBusy = true
+        cloudMessage = "Verifying it's you…"
+        cloud.reauthenticateAndDeleteChefVoiceAccount(password) { needsReauth, error ->
+            accountBusy = false
+            when {
+                needsReauth -> cloudMessage = "Re-authentication did not carry through. Sign out, sign back in, then try deleting again."
+                error == null -> {
+                    needsReauthForDelete = false
+                    cloudMessage = "ChefVoice cloud account deleted. Local cooking recipes remain on this phone."
+                }
+                else -> cloudMessage = error
+            }
+        }
+    }
+
+    fun cancelAccountDeletionReauth() {
+        needsReauthForDelete = false
+        cloudMessage = ""
     }
 
     fun moderateReport(reportId: String, status: String, note: String = "", action: String = "") {

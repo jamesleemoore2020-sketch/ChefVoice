@@ -504,6 +504,7 @@ fun ChefVoiceApp(
                                 bookmarks = appState.bookmarkedRecipes(),
                                 accountBusy = appState.accountBusy,
                                 cloudMessage = appState.cloudMessage,
+                                needsReauthForDelete = appState.needsReauthForDelete,
                                 unreadMessageCount = appState.unreadConversationCount,
                                 unreadNotificationCount = appState.unreadNotificationCount,
                                 blackoutMode = blackoutMode,
@@ -521,6 +522,8 @@ fun ChefVoiceApp(
                                 onResetPassword = appState::sendPasswordReset,
                                 onVerifyEmail = appState::sendVerificationEmail,
                                 onDeleteAccount = appState::deleteChefVoiceAccount,
+                                onConfirmDeletePassword = appState::confirmAccountDeletionWithPassword,
+                                onCancelDeleteReauth = appState::cancelAccountDeletionReauth,
                                 onModerateReport = appState::moderateReport,
                                 onSignOut = appState::signOut,
                                 onOpenRecipe = appState::openRecipe
@@ -2622,6 +2625,7 @@ private fun ProfileScreen(
     bookmarks: List<Recipe>,
     accountBusy: Boolean,
     cloudMessage: String,
+    needsReauthForDelete: Boolean,
     unreadMessageCount: Int,
     unreadNotificationCount: Int,
     blackoutMode: Boolean,
@@ -2636,6 +2640,8 @@ private fun ProfileScreen(
     onResetPassword: (String) -> Unit,
     onVerifyEmail: () -> Unit,
     onDeleteAccount: () -> Unit,
+    onConfirmDeletePassword: (String) -> Unit,
+    onCancelDeleteReauth: () -> Unit,
     onModerateReport: (String, String, String, String) -> Unit,
     onSignOut: () -> Unit,
     onOpenRecipe: (Recipe) -> Unit
@@ -2646,6 +2652,7 @@ private fun ProfileScreen(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var deleteArmed by remember { mutableStateOf(false) }
+    var deletePassword by remember { mutableStateOf("") }
     var moderationNote by remember { mutableStateOf("") }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) onUploadProfilePhoto("avatar", uri)
@@ -2760,7 +2767,28 @@ private fun ProfileScreen(
                             OutlinedButton(enabled = !accountBusy, onClick = { onResetPassword(signedInEmail) }, modifier = Modifier.weight(1f)) { Text("Reset password") }
                         }
                         Text("Deleting your cloud account removes owned Community data but intentionally keeps local Cook & Capture recipes on this phone.", style = MaterialTheme.typography.bodySmall)
-                        if (!deleteArmed) {
+                        if (needsReauthForDelete) {
+                            Text("For security, enter your password to confirm this is you before we permanently delete your account.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            OutlinedTextField(
+                                value = deletePassword,
+                                onValueChange = { deletePassword = it },
+                                label = { Text("Password") },
+                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    enabled = !accountBusy && deletePassword.isNotBlank(),
+                                    onClick = { onConfirmDeletePassword(deletePassword); deletePassword = "" },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("Confirm delete") }
+                                OutlinedButton(
+                                    enabled = !accountBusy,
+                                    onClick = { deletePassword = ""; deleteArmed = false; onCancelDeleteReauth() },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("Cancel") }
+                            }
+                        } else if (!deleteArmed) {
                             OutlinedButton(enabled = !accountBusy, onClick = { deleteArmed = true }, modifier = Modifier.fillMaxWidth()) { Text("Delete ChefVoice cloud account") }
                         } else {
                             Text("Confirm permanent cloud deletion. Recent sign-in is required.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)

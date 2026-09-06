@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Delete your ChefVoice account</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f3ee;
+    --card: #ffffff;
+    --text: #232019;
+    --muted: #6b6459;
+    --border: #e3ddd2;
+    --accent: #b5461f;
+    --accent-text: #ffffff;
+    --danger: #a3271b;
+    --danger-bg: #fbeae7;
+    --success-bg: #eaf3ea;
+    --success-text: #2c5a34;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 32px 16px 64px;
+  }
+  main {
+    width: 100%;
+    max-width: 480px;
+  }
+  h1 {
+    font-size: 1.5rem;
+    margin: 0 0 4px;
+  }
+  .subtitle {
+    color: var(--muted);
+    margin: 0 0 24px;
+    font-size: 0.95rem;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 1.05rem;
+    margin: 0 0 12px;
+  }
+  label {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin: 12px 0 4px;
+  }
+  input[type="email"], input[type="password"] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 1rem;
+    background: #fff;
+    color: var(--text);
+  }
+  button {
+    display: inline-block;
+    width: 100%;
+    margin-top: 16px;
+    padding: 11px 16px;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-text); }
+  button.danger { background: var(--danger); color: #fff; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+  button + button { margin-top: 10px; }
+  .row { display: flex; gap: 10px; }
+  .row button { margin-top: 10px; }
+  .msg {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+  }
+  .msg.error { background: var(--danger-bg); color: var(--danger); }
+  .msg.success { background: var(--success-bg); color: var(--success-text); }
+  .msg.info { background: #eef1f6; color: #38445c; }
+  .fine-print {
+    font-size: 0.8rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  ul.what-goes { font-size: 0.9rem; color: var(--text); padding-left: 20px; margin: 8px 0; }
+  ul.what-goes li { margin-bottom: 4px; }
+  [hidden] { display: none !important; }
+  .signed-in-as {
+    font-size: 0.9rem;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .confirm-phrase {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--danger-bg);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Delete your ChefVoice account</h1>
+  <p class="subtitle">Permanently remove your ChefVoice cloud account and Community data, even if you no longer have the app installed.</p>
+
+  <div class="card">
+    <h2>What this removes</h2>
+    <ul class="what-goes">
+      <li>Your ChefVoice profile, published recipes, photos and video</li>
+      <li>Likes, follows, bookmarks, comments and messages you sent</li>
+      <li>Any Live broadcasting history tied to your account</li>
+      <li>Your sign-in itself &mdash; you will be signed out everywhere</li>
+    </ul>
+    <p class="fine-print">This does not affect cooking recipes saved only on your phone &mdash; those live locally on-device and are unrelated to this cloud account.</p>
+  </div>
+
+  <div class="card" id="signInCard">
+    <h2>Step 1 &middot; Sign in</h2>
+    <p class="fine-print">Use the same email and password you use to sign in to ChefVoice on Android.</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" />
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" />
+    <button class="primary" id="signInBtn">Sign in</button>
+    <div class="msg" id="signInMsg" hidden></div>
+  </div>
+
+  <div class="card" id="deleteCard" hidden>
+    <h2>Step 2 &middot; Confirm deletion</h2>
+    <p class="signed-in-as" id="signedInAs"></p>
+    <p class="fine-print">This cannot be undone. Type <span class="confirm-phrase">DELETE</span> below to confirm.</p>
+    <label for="confirmText">Confirmation</label>
+    <input id="confirmText" type="text" autocomplete="off" placeholder="DELETE" />
+    <div class="row">
+      <button class="danger" id="deleteBtn" disabled>Permanently delete my account</button>
+    </div>
+    <button class="secondary" id="signOutBtn">Sign out instead</button>
+    <div class="msg" id="deleteMsg" hidden></div>
+  </div>
+
+  <div class="card" id="reauthCard" hidden>
+    <h2>Confirm it's you</h2>
+    <p class="fine-print">For security, re-enter your password to finish permanently deleting your account.</p>
+    <label for="reauthPassword">Password</label>
+    <input id="reauthPassword" type="password" autocomplete="current-password" />
+    <button class="danger" id="reauthDeleteBtn">Confirm delete</button>
+    <button class="secondary" id="reauthCancelBtn">Cancel</button>
+    <div class="msg" id="reauthMsg" hidden></div>
+  </div>
+
+  <div class="card" id="doneCard" hidden>
+    <h2>Account deleted</h2>
+    <div class="msg success" id="doneMsg">Your ChefVoice cloud account has been permanently deleted.</div>
+  </div>
+</main>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-functions-compat.js"></script>
+<script>
+  var firebaseConfig = {
+    apiKey: "AIzaSyDPjXKnbVOMyV4pyeNjhqqjEoH3ebXyBgw",
+    authDomain: "chefvoice-d7fec.firebaseapp.com",
+    projectId: "chefvoice-d7fec",
+    storageBucket: "chefvoice-d7fec.firebasestorage.app",
+    messagingSenderId: "569377936753",
+    appId: "1:569377936753:web:9b4a80907391f62b5d92d0"
+  };
+  firebase.initializeApp(firebaseConfig);
+  var auth = firebase.auth();
+  var functions = firebase.app().functions("us-central1");
+
+  var signInCard = document.getElementById("signInCard");
+  var deleteCard = document.getElementById("deleteCard");
+  var reauthCard = document.getElementById("reauthCard");
+  var doneCard = document.getElementById("doneCard");
+  var signInMsg = document.getElementById("signInMsg");
+  var deleteMsg = document.getElementById("deleteMsg");
+  var reauthMsg = document.getElementById("reauthMsg");
+  var signedInAs = document.getElementById("signedInAs");
+  var confirmText = document.getElementById("confirmText");
+  var deleteBtn = document.getElementById("deleteBtn");
+
+  function showMsg(el, text, kind) {
+    el.textContent = text;
+    el.className = "msg " + kind;
+    el.hidden = false;
+  }
+  function hideMsg(el) { el.hidden = true; }
+
+  function setBusy(button, busy, label) {
+    button.disabled = busy;
+    if (label) button.textContent = busy ? label : button.dataset.originalLabel || button.textContent;
+  }
+
+  confirmText.addEventListener("input", function () {
+    deleteBtn.disabled = confirmText.value.trim() !== "DELETE";
+  });
+
+  document.getElementById("signInBtn").addEventListener("click", function () {
+    var email = document.getElementById("email").value.trim();
+    var password = document.getElementById("password").value;
+    hideMsg(signInMsg);
+    if (!email || !password) {
+      showMsg(signInMsg, "Enter your email and password.", "error");
+      return;
+    }
+    var btn = document.getElementById("signInBtn");
+    setBusy(btn, true);
+    btn.textContent = "Signing in…";
+    auth.signInWithEmailAndPassword(email, password)
+      .then(function (cred) {
+        signedInAs.textContent = "Signed in as " + cred.user.email;
+        signInCard.hidden = true;
+        deleteCard.hidden = false;
+      })
+      .catch(function (error) {
+        showMsg(signInMsg, error.message || "Could not sign in.", "error");
+      })
+      .finally(function () {
+        setBusy(btn, false);
+        btn.textContent = "Sign in";
+      });
+  });
+
+  document.getElementById("signOutBtn").addEventListener("click", function () {
+    auth.signOut().then(function () {
+      deleteCard.hidden = true;
+      reauthCard.hidden = true;
+      signInCard.hidden = false;
+      confirmText.value = "";
+      deleteBtn.disabled = true;
+    });
+  });
+
+  function callDelete(onNeedsReauth, onDone, msgEl, btn) {
+    functions.httpsCallable("deleteChefVoiceAccount", { timeout: 540000 })()
+      .then(function () {
+        onDone();
+      })
+      .catch(function (error) {
+        if (error.code === "functions/failed-precondition") {
+          onNeedsReauth();
+        } else {
+          showMsg(msgEl, error.message || "Could not delete your ChefVoice account.", "error");
+          setBusy(btn, false);
+        }
+      });
+  }
+
+  document.getElementById("deleteBtn").addEventListener("click", function () {
+    hideMsg(deleteMsg);
+    var btn = deleteBtn;
+    setBusy(btn, true, "Deleting…");
+    showMsg(deleteMsg, "Deleting your ChefVoice cloud account and owned Community data…", "info");
+    callDelete(
+      function () {
+        deleteCard.hidden = true;
+        reauthCard.hidden = false;
+        hideMsg(deleteMsg);
+        setBusy(btn, false);
+        btn.textContent = "Permanently delete my account";
+      },
+      function () {
+        deleteCard.hidden = true;
+        doneCard.hidden = false;
+      },
+      deleteMsg,
+      btn
+    );
+  });
+
+  document.getElementById("reauthDeleteBtn").addEventListener("click", function () {
+    var password = document.getElementById("reauthPassword").value;
+    var user = auth.currentUser;
+    hideMsg(reauthMsg);
+    if (!password || !user || !user.email) {
+      showMsg(reauthMsg, "Enter your password to continue.", "error");
+      return;
+    }
+    var btn = document.getElementById("reauthDeleteBtn");
+    setBusy(btn, true, "Verifying…");
+    var credential = firebase.auth.EmailAuthProvider.credential(user.email, password);
+    user.reauthenticateWithCredential(credential)
+      .then(function () { return user.getIdToken(true); })
+      .then(function () {
+        showMsg(reauthMsg, "Deleting your ChefVoice cloud account and owned Community data…", "info");
+        callDelete(
+          function () {
+            showMsg(reauthMsg, "Re-authentication did not carry through. Sign out and try again.", "error");
+            setBusy(btn, false);
+            btn.textContent = "Confirm delete";
+          },
+          function () {
+            reauthCard.hidden = true;
+            doneCard.hidden = false;
+          },
+          reauthMsg,
+          btn
+        );
+      })
+      .catch(function (error) {
+        showMsg(reauthMsg, error.message || "Incorrect password.", "error");
+        setBusy(btn, false);
+        btn.textContent = "Confirm delete";
+      });
+  });
+
+  document.getElementById("reauthCancelBtn").addEventListener("click", function () {
+    reauthCard.hidden = true;
+    deleteCard.hidden = false;
+    hideMsg(deleteMsg);
+  });
+</script>
+</body>
+</html>

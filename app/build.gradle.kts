@@ -9,6 +9,19 @@ if (file("google-services.json").exists()) {
     apply(plugin = "com.google.gms.google-services")
 }
 
+// Release signing is driven entirely by these four environment variables. When any of
+// them is unset Gradle skips signing, still reports BUILD SUCCESSFUL, and leaves an
+// unsigned artifact that Play only rejects after upload. Readiness is computed once here
+// so the buildType wiring below and the doFirst guard at the bottom of this file can
+// never disagree.
+val releaseSigningEnvVars = listOf(
+    "CHEFVOICE_RELEASE_STORE_FILE",
+    "CHEFVOICE_RELEASE_STORE_PASSWORD",
+    "CHEFVOICE_RELEASE_KEY_ALIAS",
+    "CHEFVOICE_RELEASE_KEY_PASSWORD"
+)
+val releaseSigningReady = releaseSigningEnvVars.all { !System.getenv(it).isNullOrBlank() }
+
 android {
     namespace = "com.chefvoice.app"
     compileSdk = 36
@@ -17,8 +30,8 @@ android {
         applicationId = "com.chefvoice.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 56
-        versionName = "0.10.5"
+        versionCode = 58
+        versionName = "0.10.6"
     }
 
     buildFeatures {
@@ -67,13 +80,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            val signingReady = listOf(
-                "CHEFVOICE_RELEASE_STORE_FILE",
-                "CHEFVOICE_RELEASE_STORE_PASSWORD",
-                "CHEFVOICE_RELEASE_KEY_ALIAS",
-                "CHEFVOICE_RELEASE_KEY_PASSWORD"
-            ).all { !System.getenv(it).isNullOrBlank() }
-            if (signingReady) signingConfig = signingConfigs.getByName("release")
+            if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -152,4 +159,28 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+// Refuse to produce an unsigned release artifact. tools/BuildProductionTrust.ps1 already
+// checks these variables before it calls Gradle, but a release task invoked directly from
+// a shell that does not hold them would otherwise succeed silently and write an AAB/APK
+// that cannot be uploaded.
+val releaseArtifactTasks = setOf(
+    "assembleRelease",
+    "bundleRelease",
+    "packageRelease",
+    "packageReleaseBundle"
+)
+tasks.matching { it.name in releaseArtifactTasks }.configureEach {
+    doFirst {
+        if (!releaseSigningReady) {
+            val missing = releaseSigningEnvVars.filter { System.getenv(it).isNullOrBlank() }
+            throw GradleException(
+                "Release signing is not configured, so this build would emit an UNSIGNED " +
+                    "artifact. Unset or blank: " + missing.joinToString(", ") + ". Run the " +
+                    "release build from the PowerShell session that holds the " +
+                    "CHEFVOICE_RELEASE_* variables (see tools/BuildProductionTrust.ps1)."
+            )
+        }
+    }
 }

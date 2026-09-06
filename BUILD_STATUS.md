@@ -1,3 +1,31 @@
+# ChefVoice Android v0.10.6 — Account Deletion Re-auth + Web Deletion Resource
+
+- Policy fix only, shipped standalone (not bundled with feature work).
+- Fixes in-app account deletion: the backend's `auth_time` freshness gate was
+  already correct, but the client had no way to re-prove identity when it fired —
+  only a hint to fully sign out and back in. Now shows an inline password
+  re-authentication prompt that forces a fresh ID token and retries.
+- Adds the Play-required web account-deletion page (`hosting/delete-account/`),
+  calling the same `deleteChefVoiceAccount` callable Android uses — one deletion
+  implementation, two front doors. Deployed independently via
+  `DEPLOY_ACCOUNT_DELETION_PAGE.cmd`.
+- Adds a release-signing guard in `app/build.gradle.kts`: release packaging tasks now
+  throw when the `CHEFVOICE_RELEASE_*` environment variables are missing, instead of
+  silently producing an unsigned artifact.
+- Backend deletion sweep (recipes/media, social edges, Storage prefixes, Auth user)
+  was audited and found already complete; untouched.
+- Protected parser, Second Pass, Live/WebRTC, App Check, and all Firestore/Storage
+  rules are unchanged.
+- Version: 0.10.6 (`versionCode 58`).
+- Status: compiles, unit tests and golden cooking corpus pass, notification gates
+  pass. Real-device re-auth reproduction, Hosting deploy, and the Play Console Data
+  safety form update are still pending — see
+  `ACCOUNT_DELETION_REAUTH_AND_WEB_0.10.6.md`.
+
+See `ACCOUNT_DELETION_REAUTH_AND_WEB_0.10.6.md`.
+
+---
+
 # ChefVoice Android v0.8.6 — Food-First Community Profiles
 
 - Continues from v0.8.5 Followed Live Alerts.

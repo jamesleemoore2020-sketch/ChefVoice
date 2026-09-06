@@ -22,6 +22,7 @@ import com.chefvoice.app.model.stableStepIds
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.VoiceClip
 import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.DocumentSnapshot
@@ -291,23 +292,49 @@ class FirebaseSocialRepository(private val context: Context) {
             .addOnFailureListener { callback(it.message ?: "Could not update report.") }
     }
 
-    fun deleteChefVoiceAccount(callback: (String?) -> Unit = {}) {
-        val functions = functionsOrNull() ?: return callback("Firebase Functions are not available.")
-        if (currentUser == null) return callback("Sign in to delete your ChefVoice account.")
+    /**
+     * @param callback (needsReauth, error). needsReauth is true when the backend's auth_time
+     * freshness gate rejected the request; the ID token is valid but wasn't minted by a recent
+     * interactive sign-in. Call [reauthenticateAndDeleteChefVoiceAccount] rather than
+     * treating that case as a generic failure.
+     */
+    fun deleteChefVoiceAccount(callback: (needsReauth: Boolean, error: String?) -> Unit = { _, _ -> }) {
+        val functions = functionsOrNull() ?: return callback(false, "Firebase Functions are not available.")
+        if (currentUser == null) return callback(false, "Sign in to delete your ChefVoice account.")
         functions.getHttpsCallable("deleteChefVoiceAccount")
             .withTimeout(540, TimeUnit.SECONDS)
             .call()
             .addOnSuccessListener {
                 runCatching { authOrNull()?.signOut() }
-                callback(null)
+                callback(false, null)
             }
             .addOnFailureListener { error ->
                 val functionsError = error as? FirebaseFunctionsException
-                val message = if (functionsError?.code == FirebaseFunctionsException.Code.FAILED_PRECONDITION)
-                    "For security, sign out and sign back in before deleting your ChefVoice account."
-                else error.message ?: "Could not delete ChefVoice account."
-                callback(message)
+                if (functionsError?.code == FirebaseFunctionsException.Code.FAILED_PRECONDITION) {
+                    callback(true, null)
+                } else {
+                    callback(false, error.message ?: "Could not delete ChefVoice account.")
+                }
             }
+    }
+
+    /**
+     * Re-proves identity with the account's password and forces a fresh ID token so the backend
+     * sees a current `auth_time`, then retries deletion. `getIdToken(true)` is required: the
+     * reauthenticate() call alone does not refresh the cached token the Functions SDK sends.
+     */
+    fun reauthenticateAndDeleteChefVoiceAccount(password: String, callback: (needsReauth: Boolean, error: String?) -> Unit = { _, _ -> }) {
+        val user = currentUser ?: return callback(false, "Sign in to delete your ChefVoice account.")
+        val email = user.email
+        if (email.isNullOrBlank()) return callback(false, "This account has no email/password sign-in to verify against.")
+        if (password.isBlank()) return callback(false, "Enter your password to continue.")
+        user.reauthenticate(EmailAuthProvider.getCredential(email, password))
+            .addOnSuccessListener {
+                user.getIdToken(true)
+                    .addOnSuccessListener { deleteChefVoiceAccount(callback) }
+                    .addOnFailureListener { callback(false, it.message ?: "Could not refresh your sign-in. Try again.") }
+            }
+            .addOnFailureListener { callback(false, it.message ?: "Incorrect password.") }
     }
 
     fun syncNotificationDevice(callback: (String?) -> Unit = {}) {
