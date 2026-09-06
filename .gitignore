@@ -6,3 +6,4 @@ local.properties
 .DS_Store
 node_modules/
 *-debug.log
+.firebase/

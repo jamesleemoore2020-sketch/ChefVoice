@@ -5,10 +5,11 @@
   already correct, but the client had no way to re-prove identity when it fired —
   only a hint to fully sign out and back in. Now shows an inline password
   re-authentication prompt that forces a fresh ID token and retries.
-- Adds the Play-required web account-deletion page (`hosting/delete-account/`),
-  calling the same `deleteChefVoiceAccount` callable Android uses — one deletion
-  implementation, two front doors. Deployed independently via
-  `DEPLOY_ACCOUNT_DELETION_PAGE.cmd`.
+- Adds the Play-required web account-deletion page, live at
+  `https://chefvoice-delete-account.web.app/`, calling the same
+  `deleteChefVoiceAccount` callable Android uses — one deletion implementation, two
+  front doors. It deploys to a dedicated Hosting site pinned in `firebase.json`; the
+  default site still serves the PWA and must not be overwritten by a hosting deploy.
 - Adds a release-signing guard in `app/build.gradle.kts`: release packaging tasks now
   throw when the `CHEFVOICE_RELEASE_*` environment variables are missing, instead of
   silently producing an unsigned artifact.
@@ -18,9 +19,10 @@
   rules are unchanged.
 - Version: 0.10.6 (`versionCode 58`).
 - Status: compiles, unit tests and golden cooking corpus pass, notification gates
-  pass. Real-device re-auth reproduction, Hosting deploy, and the Play Console Data
-  safety form update are still pending — see
-  `ACCOUNT_DELETION_REAUTH_AND_WEB_0.10.6.md`.
+  pass. The deletion page is deployed and verified live, and
+  `deleteChefVoiceAccount` is confirmed deployed. Real-device re-auth reproduction,
+  one real end-to-end web deletion, and the Play Console Data safety form update are
+  still pending — see `ACCOUNT_DELETION_REAUTH_AND_WEB_0.10.6.md`.
 
 See `ACCOUNT_DELETION_REAUTH_AND_WEB_0.10.6.md`.
 

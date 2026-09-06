@@ -40,15 +40,20 @@ sessions, private subcollections, Storage prefixes `profiles/`, `privateVoice/`,
 - **`app/src/main/java/com/chefvoice/app/ui/ChefVoiceApp.kt`** Profile screen now
   shows an inline password field when re-authentication is required, instead of only
   a hint to sign out. No other screen changed.
-- **`hosting/delete-account/index.html`** (new) — the Play-required web deletion
-  resource. Static page, Firebase Auth (email/password) sign-in, then calls the
+- **`hosting/index.html`** (new) — the Play-required web deletion resource. Static page,
+  Firebase Auth (email/password) sign-in, a typed `DELETE` confirmation, then calls the
   *same* `deleteChefVoiceAccount` callable used by Android — one deletion
   implementation, two front doors. Handles the same `FAILED_PRECONDITION` re-auth
-  case inline. Deployed via the new `DEPLOY_ACCOUNT_DELETION_PAGE.cmd`
-  (`firebase deploy --only hosting --project chefvoice-d7fec`) — does not touch
+  case inline. Deployed via `DEPLOY_ACCOUNT_DELETION_PAGE.cmd` — does not touch
   Functions, Firestore/Storage rules, or App Check.
-- **`firebase.json`** Added a `hosting` block (`public: "hosting"`). No other section
-  changed.
+- **`firebase.json`** Added a `hosting` block pinned to a **dedicated Hosting site**,
+  `"site": "chefvoice-delete-account"`, with `public: "hosting"` and a catch-all rewrite
+  to `/index.html`. The site pin is load-bearing, not cosmetic: `hosting/` holds only the
+  deletion page, and the project's *default* site (`chefvoice-d7fec`) serves the live
+  ChefVoice PWA, whose source no longer exists in this checkout. An unpinned
+  `firebase deploy --only hosting` would have replaced that whole site with this one
+  page, unrecoverably. `DEPLOY_ACCOUNT_DELETION_PAGE.cmd` refuses to run if the pin
+  goes missing. No other section of `firebase.json` changed.
 - **`notifications/production-trust.test.js`** Version pin updated to
   `versionCode 58` / `0.10.6` (was stale at 55/0.10.4 against the shipped 0.10.5
   build — an existing gap, not introduced here); added a gate asserting the
@@ -84,34 +89,57 @@ profile deletion stays backend-owned via the Admin SDK.
   instead of the previous silent BUILD SUCCESSFUL with an unsigned AAB.
 - `gradlew.bat :app:bundleRelease --dry-run` — configuration resolves cleanly with the
   new top-level `releaseSigningReady` value.
+- `firebase functions:list --project chefvoice-d7fec` — **`deleteChefVoiceAccount` is
+  deployed** (v2 callable, us-central1, 1024 MiB), alongside the other 16 functions and
+  `transcribeChefVoice`. This closes the open question of whether the client was calling
+  a function that did not exist, and rules out that hypothesis for the original bug.
+- `firebase hosting:sites:create chefvoice-delete-account` then
+  `firebase deploy --only hosting --project chefvoice-d7fec` — deploy log shows
+  `hosting[chefvoice-delete-account]` only; 1 file uploaded.
+- **Live page verified end to end short of an actual deletion.**
+  `https://chefvoice-delete-account.web.app/` returns the deletion page; the catch-all
+  rewrite serves it for `/delete-account` too. In-browser: `firebase.apps.length === 1`
+  against project `chefvoice-d7fec`, Auth initialized, the confirm button starts
+  disabled until `DELETE` is typed, and the console is clean.
+- **Neither other Hosting site moved.** `https://chefvoice-d7fec.web.app/` still serves
+  the PWA and `https://chefvoice-d7fec-legal.web.app/privacy.html` still returns 200
+  after the deploy.
 
 ## Not verified — needs the user, on a real device / Play Console
 
 - On-device reproduction of the original bug and confirmation the re-auth prompt
   now completes a deletion for a session signed in >10 minutes ago.
+- A real end-to-end deletion through the web page. The page was loaded and inspected
+  but deliberately never signed in or used to delete an account.
 - Firebase Auth console shows the UID gone; `users/{uid}` gone; Storage prefixes
   empty, after a real deletion.
-- `firebase deploy --only hosting --project chefvoice-d7fec` (via
-  `DEPLOY_ACCOUNT_DELETION_PAGE.cmd`) run from a terminal with valid Firebase CLI
-  credentials — this session's Firebase CLI session could not be reauthenticated
-  (headless bridge, no browser) and could not perform any deploy.
 - Play Console Data safety form updated with the deletion URL
-  (`https://chefvoice-d7fec.web.app/delete-account/` once deployed).
-- Whether Cloud Storage/Hosting APIs need one-time enabling in the Firebase console
-  before the first Hosting deploy succeeds (Firestore/Storage were already enabled
-  per `WEB_FIREBASE_STATUS.md`; Hosting was not previously configured in this repo).
+  `https://chefvoice-delete-account.web.app/`.
 
 ## Gotchas hit this session
 
-- The Firebase CLI cannot be reauthenticated from this environment: `firebase login
-  --reauth` needs a real browser and this execution bridge is headless. The
-  device-code fallback (`firebase login --reauth` printing a URL, then
-  `firebase login <code>`) also cannot complete here because the two steps run as
-  separate one-shot processes and the PKCE verifier from the first process is gone
-  by the second. Any Firebase CLI action (deploy, `functions:list`, `apps:list`)
-  needs to be run by the user directly in their own terminal.
+- **The hosting deploy would have destroyed the live PWA.** `firebase.json` originally
+  carried a bare `"public": "hosting"` with no `site` key, on the assumption that
+  Hosting was unconfigured. That was true of the repo and false of the project: the
+  default `chefvoice-d7fec` site was serving a deployed ChefVoice PWA with an SPA
+  rewrite (which is why `/delete-account/` already returned HTTP 200 there — the PWA
+  fallback, not the new page). A Hosting deploy replaces the entire site's contents, and
+  `hosting/` holds one file, so the deploy would have wiped a site whose source was
+  deleted from this checkout long ago. Fixed by deploying to a dedicated
+  `chefvoice-delete-account` site and pinning it in `firebase.json`. Before any Hosting
+  deploy on this project, check `firebase hosting:sites:list` and what the target site
+  currently serves.
+- The project already has a third site, `chefvoice-d7fec-legal`, serving exactly one
+  file, `privacy.html` — the Play privacy-policy URL. Same hazard applies to it. Folding
+  the deletion page and the privacy policy onto one site would be reasonable
+  consolidation later, but it means committing `privacy.html` to this repo first.
+- The Firebase CLI's stored credentials expire and the refresh cannot be done from this
+  session: `firebase login --reauth` needs a TTY and a real browser. `firebase
+  login:list` still reports the account as logged in when the token is dead — only an
+  actual API call (`firebase projects:list`) reveals it. The user must run the reauth in
+  their own terminal; everything after that ran fine from here.
 - The web app's Firebase config (`apiKey`/`appId`/etc.) was not checked into the
   repo — it lived only in the now-deleted `web/` PWA directory. Pulled fresh from
-  Firebase Console this session and is now embedded in
-  `hosting/delete-account/index.html`. These values are public/non-secret by
-  design (enforced by Firestore/Storage rules + App Check, not by secrecy).
+  Firebase Console and is now embedded in `hosting/index.html`. These values are
+  public/non-secret by design (enforced by Firestore/Storage rules + App Check, not by
+  secrecy).
