@@ -513,6 +513,10 @@ fun ChefVoiceApp(
                                 proPreviewAvailable = appState.proPreviewAvailable,
                                 proPreviewOverride = appState.proPreviewOverride,
                                 onProPreviewChange = { appState.proPreviewOverride = it },
+                                onSeePro = { appState.showPaywall(PaywallTrigger.PROFILE) },
+                                secondPassUsed = appState.secondPassUsedThisMonth,
+                                secondPassLimit = appState.secondPassMonthlyLimit,
+                                cloudRecipeCount = appState.cloudRecipeCount,
                                 unreadMessageCount = appState.unreadConversationCount,
                                 unreadNotificationCount = appState.unreadNotificationCount,
                                 blackoutMode = blackoutMode,
@@ -540,6 +544,19 @@ fun ChefVoiceApp(
                     }
                 }
             } }
+        }
+        // One paywall for the whole app. Second Pass and the cloud-sync cap raise it
+        // from ChefAppState, so it appears wherever the chef happens to be.
+        if (appState.paywallTrigger.isNotBlank()) {
+            ProPaywallDialog(
+                trigger = appState.paywallTrigger,
+                onDismiss = { appState.dismissPaywall() },
+                onStartCheckout = {
+                    // Play Billing is not wired yet. Deliberately a no-op rather than a
+                    // faked purchase - entitlement only ever comes from the backend.
+                    appState.dismissPaywall()
+                }
+            )
         }
         if (showHostExitDialog) {
             AlertDialog(
@@ -2639,6 +2656,10 @@ private fun ProfileScreen(
     proPreviewAvailable: Boolean,
     proPreviewOverride: Boolean,
     onProPreviewChange: (Boolean) -> Unit,
+    onSeePro: () -> Unit,
+    secondPassUsed: Int,
+    secondPassLimit: Int,
+    cloudRecipeCount: Int,
     unreadMessageCount: Int,
     unreadNotificationCount: Int,
     blackoutMode: Boolean,
@@ -2665,7 +2686,6 @@ private fun ProfileScreen(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var creatingAccount by remember { mutableStateOf(false) }
-    var showPaywall by remember { mutableStateOf(false) }
     var newChefName by remember { mutableStateOf("") }
     var deleteArmed by remember { mutableStateOf(false) }
     var deletePassword by remember { mutableStateOf("") }
@@ -2675,19 +2695,6 @@ private fun ProfileScreen(
     }
     val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) onUploadProfilePhoto("cover", uri)
-    }
-
-    if (showPaywall) {
-        ProPaywallDialog(
-            trigger = PaywallTrigger.PROFILE,
-            onDismiss = { showPaywall = false },
-            onStartCheckout = {
-                // Play Billing is not wired yet. Until it is, this deliberately does
-                // nothing rather than faking a purchase - entitlement only ever comes
-                // from the backend. Use the debug Preview Pro switch to see Pro.
-                showPaywall = false
-            }
-        )
     }
 
     LazyColumn(
@@ -2807,7 +2814,10 @@ private fun ProfileScreen(
                 ProMembershipCard(
                     isPro = isPro,
                     entitlement = proEntitlement,
-                    onSeePro = { showPaywall = true }
+                    secondPassUsed = secondPassUsed,
+                    secondPassLimit = secondPassLimit,
+                    cloudRecipeCount = cloudRecipeCount,
+                    onSeePro = onSeePro
                 )
             }
             if (proPreviewAvailable) {
@@ -3092,6 +3102,9 @@ private object DemoPricing {
 private fun ProMembershipCard(
     isPro: Boolean,
     entitlement: ProEntitlement,
+    secondPassUsed: Int,
+    secondPassLimit: Int,
+    cloudRecipeCount: Int,
     onSeePro: () -> Unit
 ) {
     Card(Modifier.fillMaxWidth()) {
@@ -3134,6 +3147,21 @@ private fun ProMembershipCard(
                     style = MaterialTheme.typography.bodySmall
                 )
             }
+
+            HorizontalDivider()
+            Text(
+                "Second Pass this month: $secondPassUsed of $secondPassLimit",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                if (isPro) "Cloud-synced recipes: $cloudRecipeCount"
+                else "Cloud-synced recipes: $cloudRecipeCount of ${FreeTierLimits.CLOUD_RECIPES}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                if (isPro) "Video slots unlocked" else "Video slots need Pro · 1 photo per recipe on Free",
+                style = MaterialTheme.typography.bodySmall
+            )
 
             if (!isPro) {
                 Button(onClick = onSeePro, modifier = Modifier.fillMaxWidth()) { Text("See ChefVoice Pro") }

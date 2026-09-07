@@ -25,7 +25,9 @@ import com.chefvoice.app.model.LiveComment
 import com.chefvoice.app.model.LiveSession
 import com.chefvoice.app.model.MediaAttachment
 import com.chefvoice.app.model.NotificationPreferences
+import com.chefvoice.app.model.FreeTierLimits
 import com.chefvoice.app.model.ProEntitlement
+import com.chefvoice.app.model.ProTierLimits
 import com.chefvoice.app.model.Recipe
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.stableStepIds
@@ -40,6 +42,12 @@ class ChefAppState(context: Context) {
     // path that can grant entitlement locally - entitlement stays server-authoritative.
     private val isDebuggableBuild =
         (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+    // Month-keyed Second Pass usage. This is UX gating, not enforcement: it lives on
+    // the device and a determined user can reset it by clearing app data. Real
+    // enforcement has to be server-side, and cannot be finished until the Second Pass
+    // allowance is checked by the function that actually spends the Chirp 3 budget.
+    private val quotaPrefs = context.getSharedPreferences("chefvoice_quota", Context.MODE_PRIVATE)
 
     private val repository = RecipeRepository(context)
     private val audioPlayer = AudioPlayer()
@@ -114,6 +122,13 @@ class ChefAppState(context: Context) {
     var proPreviewOverride by mutableStateOf(false)
 
     val proPreviewAvailable: Boolean get() = isDebuggableBuild
+
+    /** Non-empty while a paywall should be shown; the value is the PaywallTrigger. */
+    var paywallTrigger by mutableStateOf("")
+
+    /** Second Pass reviews used in the current calendar month, on this device. */
+    var secondPassUsedThisMonth by mutableStateOf(0)
+        private set
 
     /** The single value the UI gates on. Fails closed to Free. */
     val isPro: Boolean
@@ -213,6 +228,7 @@ class ChefAppState(context: Context) {
     private var liveHeartbeatRunnable: Runnable? = null
 
     init {
+        loadSecondPassUsage()
         recipes.addAll(repository.loadRecipes())
         localLikedIds.addAll(repository.loadLikedIds())
         // Reclaim media and cooking audio from abandoned sessions and deleted
@@ -1007,6 +1023,42 @@ class ChefAppState(context: Context) {
     fun hasSecondPassAudio(recipe: Recipe): Boolean =
         secondPassAudioPath(recipe) != null
 
+    private fun quotaMonthKey(): String {
+        val now = java.util.Calendar.getInstance()
+        return "%04d-%02d".format(now.get(java.util.Calendar.YEAR), now.get(java.util.Calendar.MONTH) + 1)
+    }
+
+    private fun loadSecondPassUsage() {
+        secondPassUsedThisMonth = quotaPrefs.getInt("secondPass_" + quotaMonthKey(), 0)
+    }
+
+    private fun recordSecondPassUse() {
+        val key = "secondPass_" + quotaMonthKey()
+        val next = quotaPrefs.getInt(key, 0) + 1
+        quotaPrefs.edit().putInt(key, next).apply()
+        secondPassUsedThisMonth = next
+    }
+
+    /** Reviews allowed this month for the current tier. */
+    val secondPassMonthlyLimit: Int
+        get() = if (isPro) ProTierLimits.SECOND_PASS_PER_MONTH else FreeTierLimits.SECOND_PASS_PER_MONTH
+
+    val secondPassRemaining: Int
+        get() = (secondPassMonthlyLimit - secondPassUsedThisMonth).coerceAtLeast(0)
+
+    /** Cloud-synced recipes this account owns, against the Free cap. */
+    val cloudRecipeCount: Int get() = recipes.count { it.isPublic }
+
+    val cloudRecipesRemaining: Int
+        get() = if (isPro) Int.MAX_VALUE
+        else (FreeTierLimits.CLOUD_RECIPES - cloudRecipeCount).coerceAtLeast(0)
+
+    val videoAllowed: Boolean get() = isPro
+
+    fun showPaywall(trigger: String) { paywallTrigger = trigger }
+
+    fun dismissPaywall() { paywallTrigger = "" }
+
     fun runSecondPass(recipe: Recipe) {
         if (secondPassBusyRecipeId.isNotBlank()) return
         if (!cloudConfigured) {
@@ -1017,7 +1069,16 @@ class ChefAppState(context: Context) {
             secondPassMessage = "Sign in on Profile before checking the original audio."
             return
         }
-        val audioPath = secondPassAudioPath(recipe)
+        loadSecondPassUsage()
+        if (secondPassRemaining <= 0) {
+            // The paywall is raised here rather than an error message: this is the
+            // moment the chef already understands what Second Pass does for them.
+            secondPassMessage = "You have used all " + secondPassMonthlyLimit +
+                " Second Pass reviews this month."
+            paywallTrigger = "second_pass"
+            return
+        }
+                val audioPath = secondPassAudioPath(recipe)
         if (audioPath == null) {
             secondPassMessage = "No original full cooking-session audio is stored locally for this recipe."
             return
@@ -1052,7 +1113,8 @@ class ChefAppState(context: Context) {
             )
             saveRecipe(updated)
             if (selectedRecipe?.id == updated.id) selectedRecipe = updated
-            secondPassMessage = secondPassReviewMessage(secondPass)
+            recordSecondPassUse()
+                        secondPassMessage = secondPassReviewMessage(secondPass)
         }
     }
 
@@ -1204,6 +1266,15 @@ class ChefAppState(context: Context) {
     }
 
     fun publish(recipe: Recipe) {
+        // Gate cloud sync, not recipe count. Local recipes cost nothing and feed the
+        // sharing loop; cloud recipes cost storage. Only block a recipe that is not
+        // already public, so re-publishing an existing cloud recipe never trips the cap.
+        if (!recipe.isPublic && cloudRecipesRemaining <= 0) {
+            cloudMessage = "Free accounts sync " + FreeTierLimits.CLOUD_RECIPES +
+                " recipes to the cloud. This recipe stays saved on this phone."
+            paywallTrigger = "cloud_limit"
+            return
+        }
         val localPublished = recipe.copy(
             isPublic = true,
             authorName = displayName.ifBlank { "Chef" },
