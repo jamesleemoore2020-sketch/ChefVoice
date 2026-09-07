@@ -9,21 +9,50 @@ deletion path for users who no longer have the app installed. Both were gaps in 
 shipped 0.10.5 build. This release fixes only that; no monetization, entitlement, or
 paywall work is included.
 
-## Root cause
+## Root cause — three independent faults, all required
 
-`deleteChefVoiceAccount` (Cloud Function) has always correctly rejected deletion
-requests whose ID token's `auth_time` (last *interactive* sign-in) is older than 10
-minutes — the Firebase Android SDK refreshes ID tokens silently without ever renewing
-`auth_time`, so this correctly rejects nearly every real user, not just attackers. The
-gate is deliberate and unchanged.
+Account deletion was broken by three separate problems stacked on top of each
+other. Fixing any one alone would not have made deletion work, which is why
+earlier source-only analysis kept landing on an incomplete answer. All three were
+confirmed on a real device against the live project, not inferred from source.
 
-What was missing was the client half: on `FAILED_PRECONDITION`, the app showed a
-one-line hint asking the user to fully sign out and back in — no in-app way to just
-re-prove identity and continue. That is the defect this release fixes. The backend
-delete sweep itself (recipes/media, social edges, comments, conversations, Live
-sessions, private subcollections, Storage prefixes `profiles/`, `privateVoice/`,
-`recipes/`, Auth user) was verified complete and untouched.
+**1. The client had no re-authentication path.** `deleteChefVoiceAccount` rejects
+requests whose ID token's `auth_time` (last *interactive* sign-in) is older than
+10 minutes. The Firebase Android SDK refreshes ID tokens silently without ever
+renewing `auth_time`, so this correctly rejects nearly every real user. The gate
+is deliberate and unchanged; what was missing was the client half. The app showed
+a one-line hint to sign out and back in, with no in-app way to re-prove identity.
+This is the part 0.10.6 fixes in the app.
 
+**2. `firestore.indexes.json` had never been deployed.** The deletion sweep runs
+collection-group queries over `comments.authorId`, `comments.replyToUid`,
+`notifications.actorUid` and `bookmarks.recipeId`. Each needs a single-field
+`COLLECTION_GROUP` index override. The repo declared all four correctly — but
+`firebase.json` had no `"indexes"` key, and every deploy script is scoped to
+`firestore:rules`, so the CLI was never handed the file. Deployed state was one
+composite index and `"fieldOverrides": []`. The callable therefore threw
+`9 FAILED_PRECONDITION` mid-sweep and surfaced to the client as `INTERNAL`.
+Because those three queries run inside one `Promise.all`, the reported error
+alternated between `comments` and `notifications` across attempts, which made it
+look intermittent. It was not.
+
+**3. The functions runtime service account could not delete Auth users.** With
+the indexes fixed, the sweep ran to completion and failed on its final line,
+`getAuth().deleteUser(uid)`, with `FirebaseAuthError: ... insufficient
+permission`. `569377936753-compute@developer.gserviceaccount.com` held
+`datastore.user`, `firebasecloudmessaging.admin`, `speech.client` and the
+build/run roles, but no Firebase Auth role at all. `getAuth()` is used exactly
+once in the whole `chefvoice-notifications` codebase, so this had never worked.
+Fixed by granting `roles/firebaseauth.admin` to that service account.
+
+Note the failure ordering: because deletion is idempotent and phase-ordered, each
+fix moved the failure later in the sweep rather than resolving it. Fault 2 hid
+fault 3 completely.
+
+The backend delete sweep logic itself (recipes/media, social edges, comments,
+conversations, Live sessions, private subcollections, Storage prefixes
+`profiles/`, `privateVoice/`, `recipes/`, Auth user) was correct throughout and
+is unchanged.
 ## What changed
 
 - **`app/src/main/java/com/chefvoice/app/cloud/FirebaseSocialRepository.kt`**
@@ -79,67 +108,87 @@ profile deletion stays backend-owned via the Admin SDK.
 
 ## Verified this session
 
-- `gradlew.bat :app:compileDebugKotlin` — BUILD SUCCESSFUL.
-- `gradlew.bat :app:testDebugUnitTest` — BUILD SUCCESSFUL (golden cooking corpus
-  included, unaffected).
-- `node --test notifications/production-trust.test.js` — 14/14 passing.
-- `node --check notifications/functions/index.js` — syntax OK (file unmodified).
-- `gradlew.bat :app:packageReleaseBundle` from a shell with no `CHEFVOICE_RELEASE_*`
-  variables — FAILS at `:app:packageReleaseBundle` naming all four missing variables,
-  instead of the previous silent BUILD SUCCESSFUL with an unsigned AAB.
-- `gradlew.bat :app:bundleRelease --dry-run` — configuration resolves cleanly with the
-  new top-level `releaseSigningReady` value.
-- `firebase functions:list --project chefvoice-d7fec` — **`deleteChefVoiceAccount` is
-  deployed** (v2 callable, us-central1, 1024 MiB), alongside the other 16 functions and
-  `transcribeChefVoice`. This closes the open question of whether the client was calling
-  a function that did not exist, and rules out that hypothesis for the original bug.
-- `firebase hosting:sites:create chefvoice-delete-account` then
-  `firebase deploy --only hosting --project chefvoice-d7fec` — deploy log shows
-  `hosting[chefvoice-delete-account]` only; 1 file uploaded.
-- **Live page verified end to end short of an actual deletion.**
-  `https://chefvoice-delete-account.web.app/` returns the deletion page; the catch-all
-  rewrite serves it for `/delete-account` too. In-browser: `firebase.apps.length === 1`
-  against project `chefvoice-d7fec`, Auth initialized, the confirm button starts
-  disabled until `DELETE` is typed, and the console is clean.
-- **Neither other Hosting site moved.** `https://chefvoice-d7fec.web.app/` still serves
-  the PWA and `https://chefvoice-d7fec-legal.web.app/privacy.html` still returns 200
-  after the deploy.
+Build and gates:
+
+- `gradlew.bat :app:compileDebugKotlin` / `:app:testDebugUnitTest` — BUILD SUCCESSFUL
+  (golden cooking corpus included, unaffected).
+- `node --test` over `production-trust`, `chef-discovery-following-feed`,
+  `live-lease-safety`, `recipe-time-metadata` — 23/23 passing.
+- `gradlew.bat :app:packageReleaseBundle` with no `CHEFVOICE_RELEASE_*` set — FAILS
+  naming all four missing variables, instead of the previous silent BUILD SUCCESSFUL
+  with an unsigned AAB.
+
+Deployment:
+
+- `firebase functions:list` — `deleteChefVoiceAccount` is deployed (v2 callable,
+  us-central1, 1024 MiB).
+- `firebase deploy --only firestore:indexes` — `fieldOverrides` went from 0 to 4
+  (`comments.authorId`, `comments.replyToUid`, `notifications.actorUid`,
+  `bookmarks.recipeId`), plus the previously-missing `conversations` composite index.
+  That composite index also fixes a client-side Messages query that was failing with
+  "The query requires an index" in logcat.
+- `gcloud projects add-iam-policy-binding` — `roles/firebaseauth.admin` granted to
+  `569377936753-compute@developer.gserviceaccount.com`, verified present afterwards.
+- Web deletion page deployed to its own Hosting site and verified live; the PWA on the
+  default site and `chefvoice-d7fec-legal/privacy.html` are both untouched.
+
+**End-to-end account deletion, on a real Samsung S25 (SM-S938U, Android 16 / API 36),
+from a sign-in older than 10 minutes:**
+
+```
+confirmWithPassword entered accountBusy=false
+repo: reauth start
+repo: reauth OK, forcing token refresh
+repo: token refreshed, retrying delete
+repo: invoking callable
+repo: callable SUCCESS
+state: AUTH LISTENER fired uid=null
+```
+
+The password prompt appeared, re-authentication succeeded, the forced
+`getIdToken(true)` refresh carried through, the retry reached the callable, the
+callable returned success, and the client signed out — the Auth user was gone.
+This was captured with temporary `CVDelete` logging that has since been removed.
 
 ## Not verified — needs the user, on a real device / Play Console
 
-- On-device reproduction of the original bug and confirmation the re-auth prompt
-  now completes a deletion for a session signed in >10 minutes ago.
-- A real end-to-end deletion through the web page. The page was loaded and inspected
-  but deliberately never signed in or used to delete an account.
-- Firebase Auth console shows the UID gone; `users/{uid}` gone; Storage prefixes
-  empty, after a real deletion.
+- A real end-to-end deletion through the **web** page. The page was loaded and its
+  Firebase init inspected, but never used to delete an account. Note that the web
+  flow signs in immediately before deleting, so `auth_time` is always fresh there and
+  its re-auth branch is defensive rather than routine.
 - Play Console Data safety form updated with the deletion URL
   `https://chefvoice-delete-account.web.app/`.
 
 ## Gotchas hit this session
 
-- **The hosting deploy would have destroyed the live PWA.** `firebase.json` originally
-  carried a bare `"public": "hosting"` with no `site` key, on the assumption that
-  Hosting was unconfigured. That was true of the repo and false of the project: the
-  default `chefvoice-d7fec` site was serving a deployed ChefVoice PWA with an SPA
-  rewrite (which is why `/delete-account/` already returned HTTP 200 there — the PWA
-  fallback, not the new page). A Hosting deploy replaces the entire site's contents, and
-  `hosting/` holds one file, so the deploy would have wiped a site whose source was
-  deleted from this checkout long ago. Fixed by deploying to a dedicated
-  `chefvoice-delete-account` site and pinning it in `firebase.json`. Before any Hosting
-  deploy on this project, check `firebase hosting:sites:list` and what the target site
-  currently serves.
-- The project already has a third site, `chefvoice-d7fec-legal`, serving exactly one
-  file, `privacy.html` — the Play privacy-policy URL. Same hazard applies to it. Folding
-  the deletion page and the privacy policy onto one site would be reasonable
-  consolidation later, but it means committing `privacy.html` to this repo first.
-- The Firebase CLI's stored credentials expire and the refresh cannot be done from this
-  session: `firebase login --reauth` needs a TTY and a real browser. `firebase
-  login:list` still reports the account as logged in when the token is dead — only an
-  actual API call (`firebase projects:list`) reveals it. The user must run the reauth in
-  their own terminal; everything after that ran fine from here.
-- The web app's Firebase config (`apiKey`/`appId`/etc.) was not checked into the
-  repo — it lived only in the now-deleted `web/` PWA directory. Pulled fresh from
-  Firebase Console and is now embedded in `hosting/index.html`. These values are
-  public/non-secret by design (enforced by Firestore/Storage rules + App Check, not by
-  secrecy).
+- **Source-only analysis produced a confident and wrong root cause.** The prior
+  handoff ranked the `auth_time` gate as the most likely single cause. It was a real
+  defect, but on its own it explained nothing — the server logs showed `auth: VALID`
+  on every attempt. Faults 2 and 3 were invisible from the source tree and only
+  appeared in `firebase functions:log`. For a backend bug on this project, read the
+  function logs before ranking hypotheses.
+- **The hosting deploy would have destroyed the live PWA.** `firebase.json` carried a
+  bare `"public": "hosting"` with no `site` key, on the assumption that Hosting was
+  unconfigured. That was true of the repo and false of the project: the default
+  `chefvoice-d7fec` site serves a deployed PWA with an SPA rewrite, which is why
+  `/delete-account/` already returned HTTP 200 there. A Hosting deploy replaces the
+  entire site, and `hosting/` holds one file, so it would have wiped a site whose
+  source was removed with the `web/` directory. Fixed by deploying to a dedicated
+  `chefvoice-delete-account` site pinned in `firebase.json`, with a tripwire in the
+  deploy script. Before any Hosting deploy here, check `firebase hosting:sites:list`
+  and what the target site currently serves. The project also has a third site,
+  `chefvoice-d7fec-legal`, serving only `privacy.html`.
+- **Deploy-script scoping cuts both ways.** The narrow `DEPLOY_*` scripts are good
+  discipline, but nothing deployed `firestore.indexes.json`, so a correct index
+  config sat unshipped indefinitely. `DEPLOY_FIRESTORE_INDEXES.cmd` now covers it.
+- **The Firebase and gcloud CLIs both expire their stored credentials**, and
+  `firebase login:list` still reports the account as logged in when the token is
+  dead — only a real API call reveals it. `firebase login --reauth` needs the user's
+  own terminal; `gcloud auth login` was able to launch a browser from this session.
+- The device build was a **debug** build, so a signed release APK could not be
+  installed over it without an uninstall that would wipe local recipes. App data was
+  backed up via `run-as ... tar` before installing, and the debug upgrade preserved
+  it.
+- The web app's Firebase config was not checked into the repo — it lived only in the
+  now-deleted `web/` PWA directory. It is now embedded in `hosting/index.html`. Those
+  values are public/non-secret by design.

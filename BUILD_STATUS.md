@@ -18,11 +18,16 @@
 - Protected parser, Second Pass, Live/WebRTC, App Check, and all Firestore/Storage
   rules are unchanged.
 - Version: 0.10.6 (`versionCode 58`).
+- Account deletion required three independent fixes, not one: the client re-auth
+  path (app), deploying `firestore.indexes.json` for the sweep's collection-group
+  queries (it had never been deployed - `firebase.json` had no `indexes` key), and
+  granting `roles/firebaseauth.admin` to the Functions runtime service account so
+  `getAuth().deleteUser()` could succeed. Adds `DEPLOY_FIRESTORE_INDEXES.cmd`.
 - Status: compiles, unit tests and golden cooking corpus pass, notification gates
-  pass. The deletion page is deployed and verified live, and
-  `deleteChefVoiceAccount` is confirmed deployed. Real-device re-auth reproduction,
-  one real end-to-end web deletion, and the Play Console Data safety form update are
-  still pending — see `ACCOUNT_DELETION_REAUTH_AND_WEB_0.10.6.md`.
+  pass. **End-to-end account deletion verified on a real S25 from a >10-minute-old
+  sign-in: password prompt, re-auth, retry, callable success, Auth user gone.**
+  A real web-page deletion and the Play Console Data safety form update are the
+  only items still outstanding - see `ACCOUNT_DELETION_REAUTH_AND_WEB_0.10.6.md`.
 
 See `ACCOUNT_DELETION_REAUTH_AND_WEB_0.10.6.md`.
 
