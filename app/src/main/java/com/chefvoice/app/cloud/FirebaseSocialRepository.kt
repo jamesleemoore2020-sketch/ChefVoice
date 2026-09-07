@@ -19,6 +19,7 @@ import com.chefvoice.app.model.MediaType
 import com.chefvoice.app.model.NotificationPreferences
 import com.chefvoice.app.model.Recipe
 import com.chefvoice.app.model.stableStepIds
+import com.chefvoice.app.model.ProEntitlement
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.VoiceClip
 import com.google.firebase.FirebaseApp
@@ -528,6 +529,36 @@ class FirebaseSocialRepository(private val context: Context) {
             if (snapshot == null || !snapshot.exists()) onChanged(null)
             else onChanged(snapshot.toChefProfile())
         }
+    }
+
+    /**
+     * Mirrors the server-authoritative Pro entitlement. Read-only by rule; a write
+     * from here would be rejected by Firestore, which is the intended design.
+     *
+     * A missing document means Free, not an error: every account starts without an
+     * entitlement and most never get one.
+     */
+    fun listenProEntitlement(uid: String, onChanged: (ProEntitlement) -> Unit): ListenerRegistration? {
+        val db = dbOrNull() ?: return null
+        return db.collection("users").document(uid)
+            .collection("entitlements").document("pro")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    // Fail closed to Free. A read failure must never read as Pro.
+                    onChanged(ProEntitlement.FREE)
+                    return@addSnapshotListener
+                }
+                onChanged(
+                    ProEntitlement(
+                        status = snapshot.getString("status").orEmpty().ifBlank { ProEntitlement.STATUS_EXPIRED },
+                        productId = snapshot.getString("productId").orEmpty(),
+                        expiresAt = snapshot.getLong("expiresAt") ?: 0L,
+                        autoRenewing = snapshot.getBoolean("autoRenewing") ?: false,
+                        source = snapshot.getString("source").orEmpty().ifBlank { "play" },
+                        updatedAt = snapshot.getLong("updatedAt") ?: 0L
+                    )
+                )
+            }
     }
 
     fun getProfile(uid: String, callback: (ChefProfile?) -> Unit) {

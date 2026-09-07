@@ -25,6 +25,7 @@ import com.chefvoice.app.model.LiveComment
 import com.chefvoice.app.model.LiveSession
 import com.chefvoice.app.model.MediaAttachment
 import com.chefvoice.app.model.NotificationPreferences
+import com.chefvoice.app.model.ProEntitlement
 import com.chefvoice.app.model.Recipe
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.stableStepIds
@@ -35,6 +36,11 @@ import java.io.File
 import java.util.UUID
 
 class ChefAppState(context: Context) {
+    // Debug builds only. Gates the Pro preview switch so a release APK has no code
+    // path that can grant entitlement locally - entitlement stays server-authoritative.
+    private val isDebuggableBuild =
+        (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
     private val repository = RecipeRepository(context)
     private val audioPlayer = AudioPlayer()
     private val cloud = FirebaseSocialRepository(context)
@@ -95,6 +101,24 @@ class ChefAppState(context: Context) {
         private set
     var accountBusy by mutableStateOf(false)
         private set
+
+    /** Mirror of users/{uid}/entitlements/pro. Free until the backend says otherwise. */
+    var proEntitlement by mutableStateOf(ProEntitlement.FREE)
+        private set
+
+    /**
+     * Debug-only override so the paid experience can be demonstrated before Play
+     * Billing products exist. Never consulted in a release build, and never written
+     * to Firestore - it only changes what this device renders.
+     */
+    var proPreviewOverride by mutableStateOf(false)
+
+    val proPreviewAvailable: Boolean get() = isDebuggableBuild
+
+    /** The single value the UI gates on. Fails closed to Free. */
+    val isPro: Boolean
+        get() = proEntitlement.isActive || (isDebuggableBuild && proPreviewOverride)
+
     var needsReauthForDelete by mutableStateOf(false)
         private set
     var liveBusy by mutableStateOf(false)
@@ -169,6 +193,7 @@ class ChefAppState(context: Context) {
     private var feedListener: ListenerRegistration? = null
     private var liveFeedListener: ListenerRegistration? = null
     private var profileListener: ListenerRegistration? = null
+    private var entitlementListener: ListenerRegistration? = null
     private var recipeAuthorProfileListener: ListenerRegistration? = null
     private var selectedChefProfileListener: ListenerRegistration? = null
     private var liveHostProfileListener: ListenerRegistration? = null
@@ -275,7 +300,10 @@ class ChefAppState(context: Context) {
         messageReadError = ""
         notificationsError = ""
         blockStatusError = ""
-        profileListener = cloud.listenProfile(uid) { profile ->
+        entitlementListener = cloud.listenProEntitlement(uid) { entitlement ->
+            proEntitlement = entitlement
+        }
+                profileListener = cloud.listenProfile(uid) { profile ->
             if (profile == null) {
                 // No profile document exists for this account yet, so this is the one
                 // write that is allowed to set createdAt.
@@ -385,6 +413,8 @@ class ChefAppState(context: Context) {
 
     private fun clearUserListeners() {
         profileListener?.remove(); profileListener = null
+        entitlementListener?.remove(); entitlementListener = null
+        proEntitlement = ProEntitlement.FREE
         recipeAuthorProfileListener?.remove(); recipeAuthorProfileListener = null
         recipeAuthorProfile = null
         selectedChefProfileListener?.remove(); selectedChefProfileListener = null

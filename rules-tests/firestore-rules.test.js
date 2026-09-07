@@ -276,3 +276,79 @@ test("a chef cannot send a message into a conversation they are not part of", as
   const db = env.authenticatedContext(CAROL).firestore();
   await assertFails(setDoc(doc(db, "conversations", conversationId, "messages", "m1"), message));
 });
+
+// Pro entitlement is server-authoritative. These are the tests the monetization
+// design leans on: if a signed-in client can write its own entitlement document,
+// the paywall is decorative and a modified APK unlocks Pro for free.
+test("a signed-in chef can read their own Pro entitlement", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE, "entitlements", "pro"), {
+      status: "active",
+      productId: "chefvoice_pro_monthly",
+      expiresAt: now() + 30 * DAY_MS,
+      autoRenewing: true,
+      source: "play",
+      updatedAt: now(),
+    });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(getDoc(doc(db, "users", ALICE, "entitlements", "pro")));
+});
+
+test("a signed-in chef cannot grant themselves a Pro entitlement", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "users", ALICE, "entitlements", "pro"), {
+      status: "active",
+      productId: "chefvoice_pro_annual",
+      expiresAt: now() + 365 * DAY_MS,
+      autoRenewing: true,
+      source: "play",
+      updatedAt: now(),
+    })
+  );
+});
+
+test("a chef cannot extend or delete an entitlement written by the backend", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE, "entitlements", "pro"), {
+      status: "expired",
+      productId: "chefvoice_pro_monthly",
+      expiresAt: now() - DAY_MS,
+      autoRenewing: false,
+      source: "play",
+      updatedAt: now(),
+    });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    updateDoc(doc(db, "users", ALICE, "entitlements", "pro"), { status: "active" })
+  );
+  await assertFails(deleteDoc(doc(db, "users", ALICE, "entitlements", "pro")));
+});
+
+test("a chef cannot read another chef's entitlement", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", BOB, "entitlements", "pro"), {
+      status: "active",
+      productId: "chefvoice_pro_monthly",
+      expiresAt: now() + 30 * DAY_MS,
+      autoRenewing: true,
+      source: "play",
+      updatedAt: now(),
+    });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(getDoc(doc(db, "users", BOB, "entitlements", "pro")));
+});
+
+test("purchase records holding Play tokens are not client-writable", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "users", ALICE, "purchases", "token-abc"), {
+      purchaseToken: "forged",
+      productId: "chefvoice_pro_annual",
+      acknowledged: true,
+    })
+  );
+});

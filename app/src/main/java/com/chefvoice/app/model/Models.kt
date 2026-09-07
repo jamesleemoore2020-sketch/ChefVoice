@@ -235,3 +235,72 @@ data class LiveComment(
     val text: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
+
+/**
+ * Server-authoritative Pro entitlement, mirrored from
+ * `users/{uid}/entitlements/pro`. Written only by the Admin SDK after a purchase
+ * token is verified against the Play Developer API, or when a real-time developer
+ * notification reports a renewal, cancellation, refund, grace period or hold.
+ * Firestore rules deny all client writes to this document.
+ *
+ * The UI reads entitlement from here and never from the local Play Billing cache:
+ * local purchases are an input to verification, not a source of truth.
+ */
+data class ProEntitlement(
+    val status: String = STATUS_EXPIRED,
+    val productId: String = "",
+    val expiresAt: Long = 0L,
+    val autoRenewing: Boolean = false,
+    val source: String = "play",
+    val updatedAt: Long = 0L
+) {
+    /**
+     * Whether Pro features should be unlocked right now.
+     *
+     * Grace period keeps access while Play retries a failed payment, which is a
+     * large share of involuntary churn — pulling features immediately turns a
+     * recoverable card failure into a cancellation. Account hold does not: at that
+     * point Play has already suspended the subscription.
+     *
+     * Checks fail closed to Free. An unknown status is not Pro.
+     */
+    val isActive: Boolean
+        get() = when (status) {
+            STATUS_ACTIVE, STATUS_IN_GRACE -> expiresAt == 0L || expiresAt > System.currentTimeMillis()
+            else -> false
+        }
+
+    val isAnnual: Boolean get() = productId == PRODUCT_ANNUAL
+
+    companion object {
+        const val STATUS_ACTIVE = "active"
+        const val STATUS_IN_GRACE = "in_grace"
+        const val STATUS_ON_HOLD = "on_hold"
+        const val STATUS_PAUSED = "paused"
+        const val STATUS_EXPIRED = "expired"
+
+        const val PRODUCT_MONTHLY = "chefvoice_pro_monthly"
+        const val PRODUCT_ANNUAL = "chefvoice_pro_annual"
+
+        val FREE = ProEntitlement()
+    }
+}
+
+/**
+ * What the Free tier allows. Gating targets what costs money per unit - cloud
+ * storage and Second Pass transcription - and leaves local cooking free, because
+ * local recipes cost nothing and feed the sharing loop.
+ *
+ * Deliberately not "unlimited" anywhere with a per-unit cloud cost.
+ */
+object FreeTierLimits {
+    const val CLOUD_RECIPES = 10
+    const val SECOND_PASS_PER_MONTH = 2
+    const val PHOTOS_PER_RECIPE = 1
+    const val VIDEO_ALLOWED = false
+}
+
+object ProTierLimits {
+    const val SECOND_PASS_PER_MONTH = 30
+    const val VIDEO_ALLOWED = true
+}

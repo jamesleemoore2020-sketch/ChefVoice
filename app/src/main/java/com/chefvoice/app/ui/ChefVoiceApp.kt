@@ -94,6 +94,9 @@ import com.chefvoice.app.model.LiveSession
 import com.chefvoice.app.model.MediaAttachment
 import com.chefvoice.app.model.MediaType
 import com.chefvoice.app.model.NotificationPreferences
+import com.chefvoice.app.model.FreeTierLimits
+import com.chefvoice.app.model.ProEntitlement
+import com.chefvoice.app.model.ProTierLimits
 import com.chefvoice.app.model.Recipe
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.stepIdAt
@@ -505,6 +508,11 @@ fun ChefVoiceApp(
                                 accountBusy = appState.accountBusy,
                                 cloudMessage = appState.cloudMessage,
                                 needsReauthForDelete = appState.needsReauthForDelete,
+                                isPro = appState.isPro,
+                                proEntitlement = appState.proEntitlement,
+                                proPreviewAvailable = appState.proPreviewAvailable,
+                                proPreviewOverride = appState.proPreviewOverride,
+                                onProPreviewChange = { appState.proPreviewOverride = it },
                                 unreadMessageCount = appState.unreadConversationCount,
                                 unreadNotificationCount = appState.unreadNotificationCount,
                                 blackoutMode = blackoutMode,
@@ -2626,6 +2634,11 @@ private fun ProfileScreen(
     accountBusy: Boolean,
     cloudMessage: String,
     needsReauthForDelete: Boolean,
+    isPro: Boolean,
+    proEntitlement: ProEntitlement,
+    proPreviewAvailable: Boolean,
+    proPreviewOverride: Boolean,
+    onProPreviewChange: (Boolean) -> Unit,
     unreadMessageCount: Int,
     unreadNotificationCount: Int,
     blackoutMode: Boolean,
@@ -2652,6 +2665,7 @@ private fun ProfileScreen(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var creatingAccount by remember { mutableStateOf(false) }
+    var showPaywall by remember { mutableStateOf(false) }
     var newChefName by remember { mutableStateOf("") }
     var deleteArmed by remember { mutableStateOf(false) }
     var deletePassword by remember { mutableStateOf("") }
@@ -2661,6 +2675,19 @@ private fun ProfileScreen(
     }
     val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) onUploadProfilePhoto("cover", uri)
+    }
+
+    if (showPaywall) {
+        ProPaywallDialog(
+            trigger = PaywallTrigger.PROFILE,
+            onDismiss = { showPaywall = false },
+            onStartCheckout = {
+                // Play Billing is not wired yet. Until it is, this deliberately does
+                // nothing rather than faking a purchase - entitlement only ever comes
+                // from the backend. Use the debug Preview Pro switch to see Pro.
+                showPaywall = false
+            }
+        )
     }
 
     LazyColumn(
@@ -2772,6 +2799,33 @@ private fun ProfileScreen(
             }
             if (!creatingAccount) {
                 item { OutlinedButton(enabled = !accountBusy && email.isNotBlank(), onClick = { onResetPassword(email) }, modifier = Modifier.fillMaxWidth()) { Text("Forgot password?") } }
+            }
+        }
+
+        if (isSignedIn) {
+            item {
+                ProMembershipCard(
+                    isPro = isPro,
+                    entitlement = proEntitlement,
+                    onSeePro = { showPaywall = true }
+                )
+            }
+            if (proPreviewAvailable) {
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Preview ChefVoice Pro", fontWeight = FontWeight.Bold)
+                                Text(
+                                    "Debug builds only. Renders the Pro experience without a purchase. " +
+                                        "Nothing is written to your account and this switch does not exist in a release build.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            Switch(checked = proPreviewOverride, onCheckedChange = onProPreviewChange)
+                        }
+                    }
+                }
             }
         }
 
@@ -3018,4 +3072,140 @@ private fun EmptyState(title: String, body: String) {
             Text(body)
         }
     }
+}
+
+/**
+ * Placeholder pricing for the pre-billing demo only.
+ *
+ * Real prices must come from Play `ProductDetails.formattedPrice` once Billing is
+ * wired: Play localises price and currency per storefront, and a hard-coded string
+ * shows the wrong currency to most of the world. This object exists so there is
+ * exactly one place to delete when that lands.
+ */
+private object DemoPricing {
+    const val MONTHLY = "$6.99/month"
+    const val ANNUAL = "$39.99/year"
+    const val ANNUAL_NOTE = "Save about 52% versus monthly"
+}
+
+@Composable
+private fun ProMembershipCard(
+    isPro: Boolean,
+    entitlement: ProEntitlement,
+    onSeePro: () -> Unit
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (isPro) "ChefVoice Pro" else "ChefVoice Free",
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isPro) Text("✓ Active", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+            }
+
+            when {
+                // Grace period and account hold are the states worth surfacing plainly.
+                // A large share of subscription churn is a failed card, not a decision,
+                // and a chef who does not know their payment failed cannot fix it.
+                entitlement.status == ProEntitlement.STATUS_IN_GRACE -> Text(
+                    "Your last payment did not go through. Google Play is retrying — update your payment method to keep Pro.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                entitlement.status == ProEntitlement.STATUS_ON_HOLD -> Text(
+                    "Your subscription is on hold because payment failed. Pro features are paused until it is fixed in Google Play.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                entitlement.status == ProEntitlement.STATUS_PAUSED -> Text(
+                    "Your subscription is paused. Resume it in Google Play to get Pro back.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                isPro -> Text(
+                    "Unlimited cloud recipes, video, and ${ProTierLimits.SECOND_PASS_PER_MONTH} Second Pass reviews a month.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                else -> Text(
+                    "${FreeTierLimits.CLOUD_RECIPES} cloud recipes, 1 photo per recipe, and " +
+                        "${FreeTierLimits.SECOND_PASS_PER_MONTH} Second Pass reviews a month. " +
+                        "Cooking and local recipes are always free.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            if (!isPro) {
+                Button(onClick = onSeePro, modifier = Modifier.fillMaxWidth()) { Text("See ChefVoice Pro") }
+            }
+        }
+    }
+}
+
+/**
+ * The paywall. Worded as capability rather than restriction, and never shown before
+ * a chef has finished a recipe — the value has to land before the ask.
+ */
+@Composable
+private fun ProPaywallDialog(
+    trigger: String,
+    onDismiss: () -> Unit,
+    onStartCheckout: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("ChefVoice Pro") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    when (trigger) {
+                        PaywallTrigger.SECOND_PASS ->
+                            "Second Pass checks every recipe against your original audio and shows you what it caught. " +
+                                "Two free each month — ${ProTierLimits.SECOND_PASS_PER_MONTH} a month with ChefVoice Pro."
+                        PaywallTrigger.CLOUD_LIMIT ->
+                            "You've filled your ${FreeTierLimits.CLOUD_RECIPES} free cloud recipes. " +
+                                "ChefVoice Pro syncs your whole cookbook so it survives a lost phone."
+                        PaywallTrigger.VIDEO ->
+                            "Video slots let you show the technique, not just the result. ChefVoice Pro unlocks them."
+                        else ->
+                            "More room to cook, sync and review — without touching what's already free."
+                    }
+                )
+                Text("Pro includes", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "• Unlimited cloud-synced recipes\n" +
+                        "• Video slots on your recipes\n" +
+                        "• ${ProTierLimits.SECOND_PASS_PER_MONTH} Second Pass reviews a month\n" +
+                        "• Private recipes, collections, export and print",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "Cooking, the deterministic parser and every recipe saved on this phone stay free and keep working.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        },
+        confirmButton = {
+            Column {
+                Button(
+                    onClick = { onStartCheckout(ProEntitlement.PRODUCT_ANNUAL) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(DemoPricing.ANNUAL) }
+                Text(DemoPricing.ANNUAL_NOTE, style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(
+                    onClick = { onStartCheckout(ProEntitlement.PRODUCT_MONTHLY) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(DemoPricing.MONTHLY) }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } }
+    )
+}
+
+/** Where a paywall was raised from. Recorded with the `paywall_shown` analytics event. */
+object PaywallTrigger {
+    const val SECOND_PASS = "second_pass"
+    const val CLOUD_LIMIT = "cloud_limit"
+    const val VIDEO = "video"
+    const val PROFILE = "profile"
 }

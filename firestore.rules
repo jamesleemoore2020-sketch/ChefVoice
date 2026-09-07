@@ -460,6 +460,23 @@ service cloud.firestore {
         allow delete: if signedIn() && request.auth.uid == uid;
       }
 
+      // Pro entitlement is server-authoritative. Only the Admin SDK writes here,
+      // after verifying a purchase token against the Play Developer API or handling
+      // a real-time developer notification. A client-writable entitlement would be
+      // the one security-relevant value in the app the client controls, and it
+      // would be trivially patched in a modified APK.
+      match /entitlements/{entitlementId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
+      }
+
+      // Verified purchase records are likewise backend-owned. They hold Play
+      // purchase tokens, which are payment data.
+      match /purchases/{purchaseId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
+      }
+
       match /settings/{settingId} {
         allow read: if signedIn() && request.auth.uid == uid && settingId == 'notifications';
         allow create, update: if signedIn()
