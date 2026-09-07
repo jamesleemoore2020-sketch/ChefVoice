@@ -2651,6 +2651,8 @@ private fun ProfileScreen(
     var favoritesText by remember(favoriteThings) { mutableStateOf(favoriteThings.joinToString(", ")) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var creatingAccount by remember { mutableStateOf(false) }
+    var newChefName by remember { mutableStateOf("") }
     var deleteArmed by remember { mutableStateOf(false) }
     var deletePassword by remember { mutableStateOf("") }
     var moderationNote by remember { mutableStateOf("") }
@@ -2722,39 +2724,82 @@ private fun ProfileScreen(
                 }
             }
         } else if (!isSignedIn) {
+            // Signing in and creating an account are separate modes. They used to share
+            // one form, which showed returning users a "Chef name for new account" field
+            // bound to the same state as the profile editor below - so typing a name
+            // while signing in silently rewrote the saved display name.
+            item {
+                Text(
+                    if (creatingAccount) "Create your ChefVoice account" else "Sign in to ChefVoice",
+                    fontWeight = FontWeight.Bold
+                )
+            }
             item { OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
             item { OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text("Password") }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation()) }
-            item { OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Chef name for new account") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(enabled = !accountBusy && email.isNotBlank() && password.length >= 6, onClick = { onSignIn(email, password) }, modifier = Modifier.weight(1f)) { Text("Sign in") }
-                    OutlinedButton(enabled = !accountBusy && email.isNotBlank() && password.length >= 6, onClick = { onSignUp(email, password, name) }, modifier = Modifier.weight(1f)) { Text("Create account") }
+            if (creatingAccount) {
+                item {
+                    OutlinedTextField(
+                        value = newChefName,
+                        onValueChange = { newChefName = it.take(80) },
+                        label = { Text("Chef name") },
+                        supportingText = { Text("How other cooks will see you in Community. You can change it later.") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
                 }
             }
-            item { OutlinedButton(enabled = !accountBusy && email.isNotBlank(), onClick = { onResetPassword(email) }, modifier = Modifier.fillMaxWidth()) { Text("Forgot password?") } }
+            item {
+                if (creatingAccount) {
+                    Button(
+                        enabled = !accountBusy && email.isNotBlank() && password.length >= 6 && newChefName.isNotBlank(),
+                        onClick = { onSignUp(email, password, newChefName) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Create account") }
+                } else {
+                    Button(
+                        enabled = !accountBusy && email.isNotBlank() && password.length >= 6,
+                        onClick = { onSignIn(email, password) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Sign in") }
+                }
+            }
+            item {
+                OutlinedButton(
+                    enabled = !accountBusy,
+                    onClick = { creatingAccount = !creatingAccount },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (creatingAccount) "Already have an account? Sign in" else "New to ChefVoice? Create an account") }
+            }
+            if (!creatingAccount) {
+                item { OutlinedButton(enabled = !accountBusy && email.isNotBlank(), onClick = { onResetPassword(email) }, modifier = Modifier.fillMaxWidth()) { Text("Forgot password?") } }
+            }
         }
 
-        item { OutlinedTextField(value = name, onValueChange = { name = it.take(80) }, label = { Text("Chef / display name") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
-        item { OutlinedTextField(value = bioText, onValueChange = { bioText = it.take(500) }, label = { Text("Chef bio") }, supportingText = { Text("Tell people what you love about cooking.") }, modifier = Modifier.fillMaxWidth(), minLines = 3) }
-        item {
-            OutlinedTextField(
-                value = favoritesText,
-                onValueChange = { favoritesText = it.take(240) },
-                label = { Text("Favorite things to cook") },
-                supportingText = { Text("Comma separated · e.g. BBQ, pasta, seafood, baking") },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 2
-            )
-        }
-        item {
-            Button(
-                enabled = !accountBusy,
-                onClick = { onSaveProfile(name, bioText, favoritesText.split(',').map { it.trim() }.filter { it.isNotBlank() }) },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Save Chef Profile") }
-        }
+        // Profile editing needs an account to save to. These fields used to render
+        // while signed out, above a Save button that could not do anything.
+        if (isSignedIn) {
+            item { OutlinedTextField(value = name, onValueChange = { name = it.take(80) }, label = { Text("Chef / display name") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
+            item { OutlinedTextField(value = bioText, onValueChange = { bioText = it.take(500) }, label = { Text("Chef bio") }, supportingText = { Text("Tell people what you love about cooking.") }, modifier = Modifier.fillMaxWidth(), minLines = 3) }
+            item {
+                OutlinedTextField(
+                    value = favoritesText,
+                    onValueChange = { favoritesText = it.take(240) },
+                    label = { Text("Favorite things to cook") },
+                    supportingText = { Text("Comma separated · e.g. BBQ, pasta, seafood, baking") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+            }
+            item {
+                Button(
+                    enabled = !accountBusy,
+                    onClick = { onSaveProfile(name, bioText, favoritesText.split(',').map { it.trim() }.filter { it.isNotBlank() }) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Save Chef Profile") }
+            }
 
-        if (favoriteThings.isNotEmpty()) item { FavoriteThingsCard(favoriteThings) }
+            if (favoriteThings.isNotEmpty()) item { FavoriteThingsCard(favoriteThings) }
+        }
 
         if (isSignedIn) {
             item {
