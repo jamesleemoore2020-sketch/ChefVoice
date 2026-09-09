@@ -18,20 +18,21 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem Tripwire. firebase.json's public dir holds only the deletion page, so a hosting
-rem deploy that is not pinned to the dedicated site would replace the whole default
-rem site - which serves the PWA - with this single page. Refuse rather than publish.
-findstr /c:"chefvoice-delete-account" firebase.json >nul
+rem Tripwire. Hosting is a multi-site config: without a target the CLI deploys
+rem every site at once. This deploy must stay pinned to the delete-account target
+rem so the single deletion page can never replace the default site, which serves
+rem the PWA. Refuse rather than publish.
+findstr /c:"\"target\": \"delete-account\"" firebase.json >nul
 if errorlevel 1 (
   echo REFUSING TO DEPLOY
-  echo firebase.json is not pinned to the chefvoice-delete-account Hosting site.
-  echo Deploying it as-is would wipe the default site. Restore the "site" key first.
+  echo firebase.json no longer declares the "delete-account" Hosting target.
+  echo Deploying it as-is could wipe the default site. Restore the targets first.
   echo.
   pause
   exit /b 1
 )
 
-firebase deploy --only hosting --project chefvoice-d7fec
+firebase deploy --only hosting:delete-account --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo HOSTING DEPLOY FAILED

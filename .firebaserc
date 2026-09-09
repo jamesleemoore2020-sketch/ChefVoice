@@ -1,0 +1,17 @@
+{
+  "projects": {
+    "default": "chefvoice-d7fec"
+  },
+  "targets": {
+    "chefvoice-d7fec": {
+      "hosting": {
+        "pwa": [
+          "chefvoice-d7fec"
+        ],
+        "delete-account": [
+          "chefvoice-delete-account"
+        ]
+      }
+    }
+  }
+}
