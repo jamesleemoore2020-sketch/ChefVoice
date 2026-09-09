@@ -9,3 +9,15 @@ export const firebaseConfig = Object.freeze({
   appId: "1:569377936753:web:9b4a80907391f62b5d92d0",
   measurementId: "G-B2QPSF99GE"
 });
+
+/**
+ * Web Push certificate (VAPID public key) from
+ * Firebase Console → Project settings → Cloud Messaging → Web configuration.
+ *
+ * Unlike the config above this is not generated with the web app registration --
+ * it has to be created once, by hand, and pasted here. Until it is, push
+ * registration stays disabled and ChefVoice falls back to the in-app Activity
+ * feed, which needs no key and already works. Nothing else in the app depends on
+ * it, so an empty value is a supported state rather than a broken one.
+ */
+export const messagingVapidKey = "";

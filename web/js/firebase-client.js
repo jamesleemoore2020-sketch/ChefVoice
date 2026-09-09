@@ -1,4 +1,4 @@
-import { firebaseConfig } from './firebase-config.js';
+import { firebaseConfig, messagingVapidKey } from './firebase-config.js';
 import { normalizeEntitlement, FREE_ENTITLEMENT } from './entitlement.js';
 import * as ChefAnalytics from './chef-analytics.js';
 
@@ -457,6 +457,76 @@ export async function markConversationRead(conversationId,lastReadAt){
   const belongsToUser=conversationId.startsWith(user.uid+'--')||conversationId.endsWith('--'+user.uid);
   if(!belongsToUser)throw new Error('This conversation is not available to this account.');
   await setDoc(doc(db,'users',user.uid,'messageReads',conversationId),{conversationId,lastReadAt:Math.floor(lastReadAt)});
+}
+
+// ---- Web push ---------------------------------------------------------------
+// The backend fans out to Firebase Installation IDs (the current Admin SDK
+// multicast API; registration tokens are deprecated), and firestore.rules already
+// accepts platform 'web' on a device record. What web push additionally needs is
+// a push subscription, which only exists once getToken() has run against a VAPID
+// key -- so registration is gated on that key being configured.
+
+export function pushSupported(){
+  return typeof Notification!=='undefined'&&'serviceWorker' in navigator&&Boolean(messagingVapidKey);
+}
+
+export function pushPermission(){
+  if(typeof Notification==='undefined')return 'unsupported';
+  return Notification.permission;
+}
+
+/**
+ * Subscribes this browser to ChefVoice push and records the device so the
+ * backend can reach it. Safe to call repeatedly: the device doc is keyed by
+ * installation id, so re-registering just refreshes updatedAt.
+ */
+export async function registerPushDevice(){
+  assertWrites();
+  const user=requireUser('Sign in to turn on ChefVoice notifications.');
+  if(!messagingVapidKey)throw new Error('Push is not configured for this ChefVoice deployment yet. The in-app Activity feed still works.');
+  if(typeof Notification==='undefined'||!('serviceWorker' in navigator))throw new Error('This browser cannot receive ChefVoice push notifications.');
+
+  const permission=await Notification.requestPermission();
+  if(permission!=='granted')throw new Error('Notifications are blocked for this site. You can turn them on in your browser settings.');
+
+  const [messagingSdk,installationsSdk]=await Promise.all([
+    import(`https://www.gstatic.com/firebasejs/${SDK}/firebase-messaging.js`),
+    import(`https://www.gstatic.com/firebasejs/${SDK}/firebase-installations.js`)
+  ]);
+  if(typeof messagingSdk.isSupported==='function'&&!(await messagingSdk.isSupported())){
+    throw new Error('This browser cannot receive ChefVoice push notifications.');
+  }
+
+  const registration=await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+  const messaging=messagingSdk.getMessaging(app);
+  // getToken is what actually creates the push subscription. Its return value is
+  // not stored -- the backend targets the installation id.
+  await messagingSdk.getToken(messaging,{vapidKey:messagingVapidKey,serviceWorkerRegistration:registration});
+
+  const fid=await installationsSdk.getId(installationsSdk.getInstallations(app));
+  if(!fid)throw new Error('ChefVoice could not identify this browser for notifications.');
+
+  await setDoc(doc(db,'users',user.uid,'notificationDevices',fid),{fid,platform:'web',updatedAt:Date.now()});
+  return fid;
+}
+
+/** Stops push to this browser. The in-app Activity feed is unaffected. */
+export async function unregisterPushDevice(){
+  assertWrites();
+  const user=requireUser('Sign in to update ChefVoice notifications.');
+  try{
+    const installationsSdk=await import(`https://www.gstatic.com/firebasejs/${SDK}/firebase-installations.js`);
+    const fid=await installationsSdk.getId(installationsSdk.getInstallations(app));
+    if(fid)await deleteDoc(doc(db,'users',user.uid,'notificationDevices',fid));
+  }catch{
+    throw new Error('ChefVoice could not turn off notifications for this browser.');
+  }
+}
+
+export function observePushDevices(uid,onChange,onError=()=>{}){
+  return onSnapshot(collection(db,'users',uid,'notificationDevices'),
+    snap=>onChange(snap.docs.map(d=>({id:d.id,platform:String(d.data().platform||''),updatedAt:Number(d.data().updatedAt||0)}))),
+    onError);
 }
 
 // ---- In-app activity notifications -----------------------------------------

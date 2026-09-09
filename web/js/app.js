@@ -39,6 +39,7 @@ const cloud={
 let openConversation=null;
 let threadMessages=[];
 let inboxSection='messages';
+let pushMessage='';
 
 // The single value the UI gates on. Fails closed to Free: signed out, offline, or a
 // failed entitlement read all read as Free rather than accidentally unlocking Pro.
@@ -651,16 +652,40 @@ function profileTemplate(){
   const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
   const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
   const firebaseCard=cloud.user?`<section class="card"><div class="quality">Connected to ChefVoice Firebase</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2><div class="field"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><div id="cloudAuthStatus" class="hint">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint"></div></div></section>`;
+  const pushCard=cloud.user
+    ?`<section class="card"><h2>Notifications</h2><p class="status">The Activity tab in your Inbox always works. Push also alerts you when ChefVoice is closed.</p><div id="pushStatus" class="hint">${escapeHtml(pushMessage||'')}</div><div class="row wrap" style="margin-top:8px"><button class="secondary" id="enablePush">Turn on push</button><button class="ghost" id="disablePush">Turn off on this device</button></div></section>`
+    :'';
   const blockedCard=cloud.user
     ?`<section class="card"><h2>Blocked chefs</h2>${cloud.blocked.size
         ?`<p class="hint">Their recipes and comments are hidden from you, and neither of you can interact with the other.</p>${[...cloud.blocked].map(uid=>`<div class="row between" style="margin-top:8px"><code>${escapeHtml(uid.slice(0,12))}…</code><button class="secondary" data-unblock="${escapeHtml(uid)}">Unblock</button></div>`).join('')}`
         :'<p class="status">You have not blocked anyone. You can block a chef from any recipe in Community.</p>'}</section>`
     :'';
-  return `<div id="paywall"></div>${membershipTemplate()}${firebaseCard}${blockedCard}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Voice → ingredient parsing remains local and protected from Firebase changes.</div></section><section class="card"><h2>Protected voice behavior</h2><p class="status">Measurement-preserving recognition, spoken fractions, ASR homophone repair, cross-segment ingredient recovery, shared measurements, and spoken corrections remain unchanged by the Community integration.</p></section>`;
+  return `<div id="paywall"></div>${membershipTemplate()}${firebaseCard}${pushCard}${blockedCard}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Voice → ingredient parsing remains local and protected from Firebase changes.</div></section><section class="card"><h2>Protected voice behavior</h2><p class="status">Measurement-preserving recognition, spoken fractions, ASR homophone repair, cross-segment ingredient recovery, shared measurements, and spoken corrections remain unchanged by the Community integration.</p></section>`;
 }
 function bindProfile(){
   document.querySelector('#showPaywall')?.addEventListener('click',()=>showPaywall(PaywallTrigger.PROFILE));
   main.querySelectorAll('[data-unblock]').forEach(b=>b.onclick=()=>unblockChef(b.dataset.unblock));
+
+  const setPushMessage=text=>{pushMessage=text;const el=document.querySelector('#pushStatus');if(el)el.textContent=text;};
+  const enable=document.querySelector('#enablePush');
+  if(enable)enable.onclick=async()=>{
+    enable.disabled=true;
+    setPushMessage('Asking your browser for permission…');
+    try{
+      await cloud.api.registerPushDevice();
+      setPushMessage('Push is on for this browser.');
+    }catch(e){setPushMessage(e?.message||'Push could not be turned on.');}
+    finally{enable.disabled=false;}
+  };
+  const disable=document.querySelector('#disablePush');
+  if(disable)disable.onclick=async()=>{
+    disable.disabled=true;
+    try{
+      await cloud.api.unregisterPushDevice();
+      setPushMessage('Push is off for this browser. The Activity tab still works.');
+    }catch(e){setPushMessage(e?.message||'Push could not be turned off.');}
+    finally{disable.disabled=false;}
+  };
   const signIn=document.querySelector('#cloudSignIn');if(signIn)signIn.onclick=async()=>{const status=document.querySelector('#cloudAuthStatus');if(!cloud.api){status.textContent='Firebase has not finished loading.';return;}const email=document.querySelector('#cloudEmail').value.trim();const password=document.querySelector('#cloudPassword').value;if(!email||!password){status.textContent='Enter your email and password.';return;}signIn.disabled=true;status.textContent='Signing in…';try{await cloud.api.signIn(email,password);status.textContent='Signed in.';}catch(e){status.textContent=e?.message||'Could not sign in.';signIn.disabled=false;}};
   const signUp=document.querySelector('#cloudSignUp');if(signUp)signUp.onclick=async()=>{const status=document.querySelector('#cloudSignUpStatus');const name=document.querySelector('#newChefName').value.trim();const email=document.querySelector('#newEmail').value.trim();const password=document.querySelector('#newPassword').value;if(!email||password.length<6){status.textContent='Enter an email and a password of at least 6 characters.';return;}signUp.disabled=true;status.textContent='Creating account…';try{await cloud.api.signUp(email,password,name);status.textContent='Account created.';}catch(e){status.textContent=e?.message||'Could not create account.';signUp.disabled=false;}};
   const save=document.querySelector('#saveProfile');if(save)save.onclick=async()=>{const status=document.querySelector('#profileStatus');save.disabled=true;status.textContent='Saving…';try{await cloud.api.saveUserProfile(cloud.user.uid,{displayName:document.querySelector('#profileName').value,bio:document.querySelector('#profileBio').value,photoUrl:cloud.profile?.photoUrl||'',createdAt:cloud.profile?.createdAt||Date.now()});status.textContent='Profile saved.';}catch(e){status.textContent=e?.message||'Could not save profile.';}finally{save.disabled=false;}};
