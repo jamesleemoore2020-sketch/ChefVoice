@@ -1,3 +1,42 @@
+# ChefVoice Android 0.11.0 work — Parser: Ingredient Declarations, Yield Sentences, Back-references
+
+- Deterministic parser fix driven by a real Android nachos capture (0909). Corpus-first
+  per `shared/README.md`: three rows added and confirmed failing before any fix.
+- **Second Pass was not the defect.** It ran end to end, got a clean Chirp 3 transcript,
+  and flagged 6 ingredient + 3 method issues correctly. Re-parsing the *clean* transcript
+  still produced garbage - both passes share the parser, so a systematic parser defect
+  appears in both and is marked "confirmed" instead of flagged. `SecondPassReviewer.kt`
+  is untouched.
+- Fix 1: "you're going to need some X" is now an ingredient declaration. `need` had been
+  deliberately excluded to protect narration like "what you need to do"; it is now
+  admitted only when a determiner follows (`need some|a|an`), so that narration still
+  fails. Recovered sour cream, hot sauce and jalapenos, all previously lost.
+- Fix 2: yield sentences ("one pack should feed at least two people, maybe three") no
+  longer yield ingredients. Bare "serve" deliberately excluded - it is a method verb.
+- Fix 3: unmeasured names opening with a back-reference (it/them/this/that/these/those)
+  are rejected. Killed the ingredient "It on top of your nachos".
+- Regression found and fixed in the same change: making "need some X" yield ingredients
+  caused `collectSegmentAwareSteps` to swallow those declarations into the preceding
+  method step (the ingredient-continuation branch armed by "sprinkle"). A declaration is
+  not a continuation; the branch now skips them. Caught by diffing the full transcript
+  against the pre-change parser, not by the corpus - the corpus asserts required step
+  substrings and cannot express "this step must NOT contain X", so the guard is a
+  dedicated fixture test.
+- Real transcript: 8 ingredients / 2 correct -> 6 ingredients / 6 correct, with method
+  steps byte-identical to before.
+- No existing corpus row weakened or edited; additions only. Corpus guard 52 -> 55.
+- Rules, Live/WebRTC, App Check (still OFF), both Functions codebases and
+  `transcribeChefVoice` untouched. Nothing deployed.
+- Version unchanged: 0.10.6 / `versionCode 58`.
+- Status: `:app:testDebugUnitTest` BUILD SUCCESSFUL 31/31 with all 55 corpus rows; 91/91
+  node gates. Installed to SM-S938U (debug). Still open: "need your favorite Dorito
+  chips, one bag" is a different parse shape and remains lost; PWA half of the corpus
+  contract cannot run (no `web/` in this checkout).
+
+See `PARSER_INGREDIENT_DECLARATIONS_0.11.0.md`.
+
+---
+
 # ChefVoice Android 0.11.0 work — Launch Access: 10 Founding Seats (2 Years) + 90 Free Days
 
 - Grants Pro without Play Billing existing. First 10 signups get Pro free for 2 years
