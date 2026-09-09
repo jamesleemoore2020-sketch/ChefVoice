@@ -1,4 +1,6 @@
 import { firebaseConfig } from './firebase-config.js';
+import { normalizeEntitlement, FREE_ENTITLEMENT } from './entitlement.js';
+import * as ChefAnalytics from './chef-analytics.js';
 
 // Firebase is loaded as browser modules so a CDN/Firebase outage cannot prevent
 // local ChefVoice cooking capture from starting.
@@ -27,6 +29,10 @@ const storage=getStorage(app);
 // on 2026-08-12. Live/WebRTC remains a separate device-test gate.
 export const CLOUD_WRITES_ENABLED=true;
 
+// Analytics is best-effort and initialized alongside the app, never awaited by
+// anything on the cooking path.
+ChefAnalytics.initialize(app,SDK);
+
 export function observeAuth(onChange){return onAuthStateChanged(auth,user=>onChange(user||null));}
 export async function signIn(email,password){return (await signInWithEmailAndPassword(auth,email.trim(),password)).user;}
 export async function signUp(email,password,displayName){
@@ -51,6 +57,21 @@ export async function saveUserProfile(uid,profile){
     photoUrl:String(profile.photoUrl||''),
     createdAt:Number(profile.createdAt||Date.now())
   },{merge:true});
+}
+
+/**
+ * Mirrors the server-authoritative Pro entitlement. Read-only by rule; a write from
+ * here would be rejected by Firestore, which is the intended design.
+ *
+ * A missing document means Free, not an error: every account starts without an
+ * entitlement and most never get one. Read failures also fail closed to Free -- a
+ * failed read must never read as Pro.
+ */
+export function observeProEntitlement(uid,onChange){
+  return onSnapshot(doc(db,'users',uid,'entitlements','pro'),
+    snap=>onChange(snap.exists()?normalizeEntitlement(snap.data()):{...FREE_ENTITLEMENT}),
+    ()=>onChange({...FREE_ENTITLEMENT})
+  );
 }
 
 export function observePublicRecipes(onChange,onError=()=>{}){

@@ -5,6 +5,11 @@ import {
   deleteAudioBlob, deleteRecipeMedia, loadAudioBlob, loadMediaBlob, loadRecipes,
   saveAudioBlob, saveMediaBlob, saveRecipes
 } from './storage.js';
+import {
+  cloudRecipesRemaining, daysRemaining, FoundingAccess, FreeTierLimits, FREE_ENTITLEMENT,
+  isEntitlementActive, isFounding, isPromo, PaywallTrigger, remainingLabel
+} from './entitlement.js';
+import * as ChefAnalytics from './chef-analytics.js';
 
 const main=document.querySelector('#main');
 const tabs=[...document.querySelectorAll('[data-tab]')];
@@ -16,18 +21,26 @@ let audioBlob=null;let audioUrl='';let capturing=false;let media=[];
 const form={title:'',description:'',servings:'2'};
 const cloud={
   state:'connecting',message:'Connecting to ChefVoice Community…',api:null,user:null,profile:null,recipes:[],feedError:'',
-  liked:new Set(),bookmarks:new Set(),following:new Set(),
-  unsubAuth:null,unsubFeed:null,unsubProfile:null,unsubLiked:null,unsubBookmarks:null,unsubFollowing:null,unsubComments:null
+  liked:new Set(),bookmarks:new Set(),following:new Set(),entitlement:{...FREE_ENTITLEMENT},
+  unsubAuth:null,unsubFeed:null,unsubProfile:null,unsubLiked:null,unsubBookmarks:null,unsubFollowing:null,unsubComments:null,unsubEntitlement:null
 };
 
+// The single value the UI gates on. Fails closed to Free: signed out, offline, or a
+// failed entitlement read all read as Free rather than accidentally unlocking Pro.
+const isPro=()=>isEntitlementActive(cloud.entitlement);
+const cloudRecipeCount=()=>recipes.filter(r=>r.isPublic).length;
+let paywallTrigger='';
+
 function clearUserObservers(){
-  for(const key of ['unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing']){try{cloud[key]?.();}catch{} cloud[key]=null;}
+  for(const key of ['unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubEntitlement']){try{cloud[key]?.();}catch{} cloud[key]=null;}
   cloud.profile=null;cloud.liked=new Set();cloud.bookmarks=new Set();cloud.following=new Set();
+  cloud.entitlement={...FREE_ENTITLEMENT};
 }
 function startUserObservers(user){
   clearUserObservers();
   if(!user||!cloud.api)return;
   cloud.unsubProfile=cloud.api.observeProfile(user.uid,p=>{cloud.profile=p;if(currentTab==='profile'||currentTab==='community'||currentTab==='recipes')render();});
+  cloud.unsubEntitlement=cloud.api.observeProEntitlement(user.uid,e=>{cloud.entitlement=e;if(currentTab==='profile'||currentTab==='recipes')render();});
   cloud.unsubLiked=cloud.api.observeUserRecipeIds(user.uid,'likes',s=>{cloud.liked=s;if(currentTab==='community')render();});
   cloud.unsubBookmarks=cloud.api.observeUserRecipeIds(user.uid,'bookmarks',s=>{cloud.bookmarks=s;if(currentTab==='community')render();});
   cloud.unsubFollowing=cloud.api.observeUserRecipeIds(user.uid,'following',s=>{cloud.following=s;if(currentTab==='community')render();});
@@ -51,6 +64,38 @@ try{const recovery=JSON.parse(sessionStorage.getItem('chefvoice.capture.recovery
 document.addEventListener('play',()=>{if(isIOS&&voiceEngineUsed)speechNeedsReset=true;},true);
 
 const escapeHtml=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
+
+/**
+ * The single way a paywall is raised. Every caller goes through here so that
+ * `paywall_shown` cannot be missed by a surface that sets the trigger directly, and
+ * so the trigger recorded in analytics is always the one the chef actually saw.
+ */
+function showPaywall(trigger){
+  if(paywallTrigger===trigger)return;
+  paywallTrigger=trigger;
+  ChefAnalytics.paywallShown(trigger);
+  renderPaywall();
+}
+function dismissPaywall(){
+  const trigger=paywallTrigger;
+  if(!trigger)return;
+  paywallTrigger='';
+  ChefAnalytics.paywallDismissed(trigger);
+  renderPaywall();
+}
+const PAYWALL_COPY={
+  [PaywallTrigger.CLOUD_LIMIT]:`Free accounts sync ${FreeTierLimits.CLOUD_RECIPES} recipes to the Community. This recipe stays saved in this browser.`,
+  [PaywallTrigger.VIDEO]:'Video is a Pro feature. Photos and your full cooking audio are always included on Free.',
+  [PaywallTrigger.SECOND_PASS]:'Second Pass re-transcription is a Pro feature.',
+  [PaywallTrigger.PROFILE]:'ChefVoice Pro removes the Free limits on Community syncing and video.'
+};
+function renderPaywall(){
+  const host=document.querySelector('#paywall');
+  if(!host)return;
+  if(!paywallTrigger){host.innerHTML='';return;}
+  host.innerHTML=`<div class="notice paywall"><strong>ChefVoice Pro</strong><p class="status">${escapeHtml(PAYWALL_COPY[paywallTrigger]||PAYWALL_COPY[PaywallTrigger.PROFILE])}</p><p class="hint">Purchasing is not available in the web app yet — Pro is granted through your ChefVoice account. Everything you have already cooked stays yours either way.</p><button id="dismissPaywall" class="secondary wide">Got it</button></div>`;
+  document.querySelector('#dismissPaywall')?.addEventListener('click',dismissPaywall);
+}
 const fmt=ms=>`${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
 const chefName=()=>cloud.profile?.displayName||cloud.user?.email?.split('@')[0]||'Chef';
 const cloudReady=()=>cloud.state==='ready'&&cloud.api;
@@ -72,6 +117,7 @@ tabs.forEach(b=>b.addEventListener('click',()=>nav(b.dataset.tab)));
 function cookTemplate(){
   return `
   <section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Voice-first recipe capture</div><h1>Cook naturally.<br>ChefVoice listens.</h1><p>Your original chef voice is recorded while the transcript is structured into editable ingredients and method steps.</p></section>
+  <div id="paywall"></div>
   <section id="captureCard"></section>
   <section class="card stack">
     <div class="field"><label for="title">Recipe name</label><input id="title" value="${escapeHtml(form.title)}" placeholder="Sunday tomato pasta"></div>
@@ -121,7 +167,15 @@ async function toggleCapture(){
     renderCookDynamic();
   }else{
     if(isIOS&&speechNeedsReset){captureForm();sessionStorage.setItem('chefvoice.capture.recovery',JSON.stringify({form,ingredients,steps,transcript}));location.reload();return;}
-    try{transcript=[];livePartial='';audioBlob=null;if(audioUrl)URL.revokeObjectURL(audioUrl);audioUrl='';voiceEngineUsed=true;await capture.start();capturing=true;renderCookDynamic();}
+    try{
+      transcript=[];livePartial='';audioBlob=null;if(audioUrl)URL.revokeObjectURL(audioUrl);audioUrl='';voiceEngineUsed=true;
+      await capture.start();
+      capturing=true;
+      // Only once capture is actually running: a denied microphone permission or a
+      // failed start is not a chef who began narrating.
+      ChefAnalytics.recipeCaptureStarted();
+      renderCookDynamic();
+    }
     catch(e){captureStatus=`Microphone could not start: ${e.message}`;renderCapture();}
   }
 }
@@ -131,6 +185,13 @@ function bindCook(){
   document.querySelector('#addIngredient').addEventListener('click',()=>{const x=document.querySelector('#manualIngredient');if(x.value.trim()){ingredients.push({...parseIngredient(x.value),confidence:'manual'});x.value='';renderIngredients();}});
   document.querySelector('#addStep').addEventListener('click',()=>{const x=document.querySelector('#manualStep');if(x.value.trim()){steps.push(x.value.trim());x.value='';renderSteps();}});
   document.querySelector('#reanalyze').addEventListener('click',()=>{const text=document.querySelector('#transcriptEditor').value.trim();if(!text)return;transcript=[{id:crypto.randomUUID(),elapsedMs:0,text}];const d=parseCookingSession(transcript);ingredients=d.ingredients;steps=d.steps;captureStatus=`Transcript rebuilt: ${ingredients.length} ingredients and ${steps.length} steps.`;renderCookDynamic();});
+  // Video and per-recipe photo caps are deliberately NOT enforced here. Both limits
+  // exist in the tier model on both platforms, but Android raises a paywall only for
+  // the Second Pass quota, the cloud-recipe cap and the profile "See Pro" button --
+  // `videoAllowed` and `PHOTOS_PER_RECIPE` have no call site there. Enforcing them
+  // on the web alone would give a Free chef a worse deal in Safari than on their
+  // phone for the same account. If these should bite, they need to land on both
+  // platforms in the same change.
   document.querySelector('#mediaInput').addEventListener('change',e=>{
     for(const f of e.target.files){
       const max=f.type.startsWith('video/')?200*1024*1024:25*1024*1024;
@@ -145,17 +206,28 @@ function bindCook(){
     if(audioBlob?.size){try{recipe.sessionAudio=await saveAudioBlob(recipe.id,audioBlob);}catch(e){recipe.audioWarning=e.message;}}
     for(const item of media){try{await saveMediaBlob(recipe.id,item.id,item.file);recipe.media.push({id:item.id,name:item.name,type:item.type,size:item.file.size,stored:true});}catch(e){recipe.mediaWarning=e.message;}}
     for(const item of media)try{URL.revokeObjectURL(item.url)}catch{}
-    recipes.unshift(recipe);saveRecipes(recipes);captureStatus='Recipe saved on this device.';form.title='';form.description='';form.servings='2';ingredients=[];steps=[];transcript=[];audioBlob=null;audioUrl='';media=[];nav('recipes');
+    recipes.unshift(recipe);saveRecipes(recipes);
+    // Only a brand-new recipe is a completion. Edits and publishes are not.
+    ChefAnalytics.recipeCompleted();
+    captureStatus='Recipe saved on this device.';form.title='';form.description='';form.servings='2';ingredients=[];steps=[];transcript=[];audioBlob=null;audioUrl='';media=[];nav('recipes');
   });
 }
 
 function recipesTemplate(){
   const cloudNote=cloud.user?`<div class="quality">Signed in as ${escapeHtml(cloud.user.email||'ChefVoice member')}. Publishing now uses the verified ChefVoice Firebase project.</div>`:`<div class="notice">Local recipes stay private on this device. Sign in from Profile to publish to Community.</div>`;
-  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section>${cloudNote}${recipes.length?recipes.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps · serves ${r.servings||2}</p><div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">Delete local</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>'}`;
+  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${recipes.length?recipes.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps · serves ${r.servings||2}</p><div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">Delete local</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>'}`;
 }
 async function publishLocalRecipe(id,button){
   const r=recipes.find(x=>x.id===id);if(!r||!cloud.api||!cloud.user)return;
-  const status=document.querySelector(`[data-recipe-status="${id}"]`);button.disabled=true;if(status)status.textContent='Uploading recipe media and chef voice…';
+  const status=document.querySelector(`[data-recipe-status="${id}"]`);
+  // Free accounts sync a limited number of recipes. The recipe is never lost --
+  // it stays saved in this browser, which is what the copy has to say.
+  if(!r.isPublic&&cloudRecipesRemaining(isPro(),cloudRecipeCount())<=0){
+    if(status)status.textContent=`Free accounts sync ${FreeTierLimits.CLOUD_RECIPES} recipes to the Community. This recipe stays saved in this browser.`;
+    showPaywall(PaywallTrigger.CLOUD_LIMIT);
+    return;
+  }
+  button.disabled=true;if(status)status.textContent='Uploading recipe media and chef voice…';
   try{
     const assets=[];
     for(const item of r.media||[]){const remote=(r.remoteMedia||[]).find(x=>x.id===item.id);assets.push({...item,blob:await loadMediaBlob(r.id,item.id),remoteUrl:remote?.url||'',cloudType:item.type?.startsWith('video/')?'VIDEO':'IMAGE'});}
@@ -210,13 +282,47 @@ function openCommunityRecipe(id){
   const post=document.querySelector('#postComment');if(post)post.onclick=async()=>{const text=document.querySelector('#commentText').value;const status=document.querySelector('#commentStatus');post.disabled=true;status.textContent='Posting…';try{await cloud.api.addComment(r.id,text,chefName());document.querySelector('#commentText').value='';status.textContent='Posted.';}catch(e){status.textContent=e?.message||'Could not post comment.';}finally{post.disabled=false;}};
 }
 
+/**
+ * Mirrors ProMembershipCard on Android. Complimentary access is stated plainly:
+ * these chefs never entered a payment method, so warning them about one, or
+ * offering to manage a subscription they do not have, would be nonsense.
+ */
+function membershipTemplate(){
+  if(!cloud.user)return '';
+  const e=cloud.entitlement;
+  const pro=isPro();
+  const days=daysRemaining(e);
+  let title='ChefVoice Free';
+  if(pro&&isFounding(e))title='ChefVoice Pro · Founding member';
+  else if(pro&&isPromo(e))title='ChefVoice Pro · Free launch access';
+  else if(pro)title='ChefVoice Pro';
+
+  let body;
+  if(pro&&isFounding(e)){
+    if(days<=0)body='Your founding Pro access has ended. Everything you cooked stays yours.';
+    else if(days===Number.POSITIVE_INFINITY)body=`You were one of the first ${FoundingAccess.SEATS} chefs on ChefVoice. Pro is yours — no card, no renewal, nothing to cancel.`;
+    else body=`You were one of the first ${FoundingAccess.SEATS} chefs on ChefVoice. Pro is free for ${FoundingAccess.FOUNDING_YEARS} years — ${remainingLabel(days)} left. No card, no renewal, nothing to cancel.`;
+  }else if(pro&&isPromo(e)){
+    body=days>0
+      ? `The first ${FoundingAccess.PROMO_DAYS} days of Pro are free — ${days} ${days===1?'day':'days'} left. No card, and nothing happens automatically when it ends.`
+      : 'Your free Pro access has ended. Everything you cooked stays yours.';
+  }else if(pro){
+    body='Pro is active on this account.';
+  }else{
+    const remaining=cloudRecipesRemaining(false,cloudRecipeCount());
+    body=`Free syncs ${FreeTierLimits.CLOUD_RECIPES} recipes to the Community (${remaining} left) and ${FreeTierLimits.PHOTOS_PER_RECIPE} photo per recipe. Cooking capture, the parser and your original audio are never limited.`;
+  }
+  return `<section class="card"><div class="row between"><strong>${escapeHtml(title)}</strong>${pro?'<span class="pill">Pro</span>':'<span class="pill">Free</span>'}</div><p class="status">${escapeHtml(body)}</p>${pro?'':'<button id="showPaywall" class="secondary wide">What is Pro?</button>'}</section>`;
+}
+
 function profileTemplate(){
   const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
   const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
   const firebaseCard=cloud.user?`<section class="card"><div class="quality">Connected to ChefVoice Firebase</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2><div class="field"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><div id="cloudAuthStatus" class="hint">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint"></div></div></section>`;
-  return `${firebaseCard}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Voice → ingredient parsing remains local and protected from Firebase changes.</div></section><section class="card"><h2>Protected voice behavior</h2><p class="status">Measurement-preserving recognition, spoken fractions, ASR homophone repair, cross-segment ingredient recovery, shared measurements, and spoken corrections remain unchanged by the Community integration.</p></section>`;
+  return `<div id="paywall"></div>${membershipTemplate()}${firebaseCard}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Voice → ingredient parsing remains local and protected from Firebase changes.</div></section><section class="card"><h2>Protected voice behavior</h2><p class="status">Measurement-preserving recognition, spoken fractions, ASR homophone repair, cross-segment ingredient recovery, shared measurements, and spoken corrections remain unchanged by the Community integration.</p></section>`;
 }
 function bindProfile(){
+  document.querySelector('#showPaywall')?.addEventListener('click',()=>showPaywall(PaywallTrigger.PROFILE));
   const signIn=document.querySelector('#cloudSignIn');if(signIn)signIn.onclick=async()=>{const status=document.querySelector('#cloudAuthStatus');if(!cloud.api){status.textContent='Firebase has not finished loading.';return;}const email=document.querySelector('#cloudEmail').value.trim();const password=document.querySelector('#cloudPassword').value;if(!email||!password){status.textContent='Enter your email and password.';return;}signIn.disabled=true;status.textContent='Signing in…';try{await cloud.api.signIn(email,password);status.textContent='Signed in.';}catch(e){status.textContent=e?.message||'Could not sign in.';signIn.disabled=false;}};
   const signUp=document.querySelector('#cloudSignUp');if(signUp)signUp.onclick=async()=>{const status=document.querySelector('#cloudSignUpStatus');const name=document.querySelector('#newChefName').value.trim();const email=document.querySelector('#newEmail').value.trim();const password=document.querySelector('#newPassword').value;if(!email||password.length<6){status.textContent='Enter an email and a password of at least 6 characters.';return;}signUp.disabled=true;status.textContent='Creating account…';try{await cloud.api.signUp(email,password,name);status.textContent='Account created.';}catch(e){status.textContent=e?.message||'Could not create account.';signUp.disabled=false;}};
   const save=document.querySelector('#saveProfile');if(save)save.onclick=async()=>{const status=document.querySelector('#profileStatus');save.disabled=true;status.textContent='Saving…';try{await cloud.api.saveUserProfile(cloud.user.uid,{displayName:document.querySelector('#profileName').value,bio:document.querySelector('#profileBio').value,photoUrl:cloud.profile?.photoUrl||'',createdAt:cloud.profile?.createdAt||Date.now()});status.textContent='Profile saved.';}catch(e){status.textContent=e?.message||'Could not save profile.';}finally{save.disabled=false;}};
@@ -231,6 +337,7 @@ function render(){
   if(currentTab==='community'){main.innerHTML=communityTemplate();bindCommunity();}
   if(currentTab==='live')main.innerHTML=liveTemplate();
   if(currentTab==='profile'){main.innerHTML=profileTemplate();bindProfile();}
+  renderPaywall();
 }
 
 if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
