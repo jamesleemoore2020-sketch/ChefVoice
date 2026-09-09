@@ -1,3 +1,37 @@
+# ChefVoice PWA — Feature Parity with Android (0.11.0)
+
+- Completes the PWA catch-up: direct messages, in-app activity notifications,
+  threaded comment replies, chef search and public chef profiles, Second Pass
+  (ChefVoice Review) and web push registration. `npm test` 69/69, up from 26.
+- Second Pass ports `SecondPassReviewer.kt` + `IngredientReviewClassifier.kt`, with
+  **all 19 tests from `SecondPassReviewerTest.kt` ported verbatim and passing** —
+  the cross-platform contract for Second Pass, the same role the golden corpus plays
+  for the parser. The private upload is permit-gated exactly as on Android.
+- Messaging follows the rules exactly: sorted `uid--uid` ids, live profile names,
+  empty preview metadata on create, monotonic read markers marked against the newest
+  message actually seen.
+- Web push needed no backend change — the backend already targets Firebase
+  Installation IDs (current Admin SDK API; `tokens` is deprecated) and the rules
+  already accepted `platform: 'web'`. The VAPID key is the one piece of config that
+  must be created by hand in the Firebase Console; until it is, push stays disabled
+  and the in-app Activity feed covers it.
+- **Two pre-existing bugs fixed:** `toggleLike` and `addComment` were writing the
+  backend-maintained `likes`/`commentCount` counters, which `validOwnerRecipeUpdate`
+  rejects — liking and commenting were broken outright against the deployed rules.
+  And rule-bound writes were sending `chefName()`'s email-prefix fallback, which
+  `profileNameMatches` rejects.
+- Deliberately not done: the video/photo caps (no Android call site — enforcing on
+  web alone would give Free chefs a worse deal in Safari), and Live/WebRTC (still
+  gated on both platforms pending real-device testing).
+- Not verified end to end: signed-in message/block/report round trips, the Second
+  Pass cloud call (needs a verified-email account), and push delivery (needs the
+  VAPID key). Rule-shape source gates stand in for the write paths.
+- Android untouched and still passing. Nothing deployed. Version 0.10.6 / code 58.
+
+See `PWA_FEATURE_PARITY_0.11.0.md`.
+
+---
+
 # ChefVoice PWA — Entitlements, Analytics, Blocking & Moderation (0.11.0)
 
 - Brings the Android feature work that sits *around* the parser across to `web/`,
