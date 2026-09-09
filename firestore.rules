@@ -705,5 +705,13 @@ service cloud.firestore {
     match /moderation/{document=**} {
       allow read, write: if false;
     }
+
+    // Launch-access configuration: the founding-seat counter and the promo kill
+    // switch. Written only by the chefvoice-billing Admin SDK. Closed to clients in
+    // both directions -- a readable seat counter would leak how many accounts exist,
+    // and a writable one would let a modified APK mint itself a founding seat.
+    match /config/{configId} {
+      allow read, write: if false;
+    }
   }
 }

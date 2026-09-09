@@ -28,10 +28,13 @@ Tests live under `app/src/test/java/com/chefvoice/app/...`. The most important o
 
 **Notification gates** (`RUN_NOTIFICATION_GATES.cmd`): runs `node --test` over the JS test files in `notifications/` and `notifications/functions/`, plus `node --check notifications/functions/index.js` as a syntax gate. Requires Node on PATH. This only checks source text / path shapes — it cannot evaluate a Firestore security rule.
 
+**Billing gates** (`RUN_BILLING_GATES.cmd`): runs `node --test billing/launch-access.test.js` plus `node --check billing/functions/index.js`. Same limitation as the notification gates — source text and deploy scoping only, no rule evaluation.
+
 **Firestore rules gates** (`RUN_RULES_GATES.cmd`): from `rules-tests/`, runs `npm install` (first run) then `npm test`, which is `firebase emulators:exec --only firestore --project chefvoice-rules-test "node --test firestore-rules.test.js"` — requires the Firebase CLI and emulator.
 
 **Deploying backend pieces** (each is deliberately scoped/isolated — do not broaden them without being asked):
 - `DEPLOY_NOTIFICATIONS.cmd` — deploys only the `chefvoice-notifications` Cloud Functions codebase (`firebase deploy --only functions:chefvoice-notifications`). Does not touch `transcribeChefVoice`, Hosting, Storage, or App Check.
+- `DEPLOY_BILLING.cmd` — deploys only the `chefvoice-billing` Cloud Functions codebase (`firebase deploy --only functions:chefvoice-billing`). Entitlement grants live here, deliberately apart from `chefvoice-notifications`.
 - `DEPLOY_COMMUNITY_RULES.cmd` / `DEPLOY_COMMUNITY_PROFILE_RULES.cmd` — deploys only `firestore:rules`. Does not touch Functions, Hosting, Speech, or App Check.
 
 Single-test invocation examples:
@@ -65,11 +68,12 @@ Single Gradle module `app/`, flat package `com.chefvoice.app`, no multi-module s
 - `notifications/` — FCM messaging service, foreground service, and local `NotificationHelper`.
 - `ui/` — Compose screens and app-level state; `ChefVoiceApp.kt` is the large top-level composable/nav host, `ChefAppState.kt` holds cross-screen state, `WebRtcLiveTransport.kt`/`LiveCameraPreview.kt`/`CameraCaptureScreen.kt` handle the Live video path.
 
-### Firebase backend (three independently-deployed pieces)
+### Firebase backend (four independently-deployed pieces)
 
 1. **`notifications/functions/index.js`** — the isolated `chefvoice-notifications` Cloud Functions codebase (Firestore triggers + a few `onCall`s: message/comment/reply/like/follower/live notifications, push delivery, account/recipe deletion, report moderation, Storage upload permits). Deployed on its own via `DEPLOY_NOTIFICATIONS.cmd` so it never risks the separate `transcribeChefVoice` speech function. Tests for it live both in `notifications/*.test.js` (behavior/path-shape gates run against source, not the emulator) and `notifications/functions/*.test.js`.
-2. **`firestore.rules`** / **`firestore.indexes.json`** — security rules covering the data model documented in `FIREBASE_SETUP.md` (`users/{uid}`, `recipes/{recipeId}` and subcollections, `liveSessions/{sessionId}`, plus notification/report/block collections added in later versions). Rules are validated against the Firestore emulator by `rules-tests/firestore-rules.test.js`. Deployed independently via the `DEPLOY_COMMUNITY*` scripts.
-3. **`storage.rules`** — Cloud Storage rules for recipe media/voice (`recipes/{uid}/{recipeId}/media|voice/*`, plus a private `privateVoice/{uid}/{recipeId}/...` path used for Second Pass re-transcription uploads).
+2. **`billing/functions/index.js`** — the isolated `chefvoice-billing` Cloud Functions codebase, deployed via `DEPLOY_BILLING.cmd`. Owns Pro entitlement writes at `users/{uid}/entitlements/pro`, which are Admin-SDK-only (`allow write: if false` for clients). Today it grants launch access — 2 free years to the first 10 signups, 90 free days to everyone after, with an admin-callable kill switch and backfill; the founding-seat counter and promo flag live in `config/monetization`, closed to clients both ways. Play Billing verification and real-time developer notification handling belong here when they land, not in `chefvoice-notifications`. Tests are source-text gates in `billing/launch-access.test.js`; the rules it depends on are covered by `rules-tests/`. See `LAUNCH_ACCESS_FOUNDING_AND_PROMO_0.11.0.md`.
+3. **`firestore.rules`** / **`firestore.indexes.json`** — security rules covering the data model documented in `FIREBASE_SETUP.md` (`users/{uid}`, `recipes/{recipeId}` and subcollections, `liveSessions/{sessionId}`, plus notification/report/block collections added in later versions). Rules are validated against the Firestore emulator by `rules-tests/firestore-rules.test.js`. Deployed independently via the `DEPLOY_COMMUNITY*` scripts.
+4. **`storage.rules`** — Cloud Storage rules for recipe media/voice (`recipes/{uid}/{recipeId}/media|voice/*`, plus a private `privateVoice/{uid}/{recipeId}/...` path used for Second Pass re-transcription uploads).
 
 App Check is integrated (debug provider in debug builds, Play Integrity in release) but currently runs in **monitoring-only mode — enforcement is intentionally OFF** until metrics justify turning it on; don't flip that on as a side effect of unrelated work.
 

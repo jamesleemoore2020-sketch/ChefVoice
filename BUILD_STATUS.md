@@ -1,3 +1,43 @@
+# ChefVoice Android 0.11.0 work — Launch Access: 10 Founding Seats (2 Years) + 90 Free Days
+
+- Grants Pro without Play Billing existing. First 10 signups get Pro free for 2 years
+  (`source: "founding"`, dated from the grant); everyone after gets Pro free for 90 days from
+  signup (`source: "promo"`); both stop at the kill switch.
+- Rationale: with no billing integration a paywall can only take features away, and at
+  fewer than five users the Free limits would ration the app's own demo to exactly the
+  people whose enthusiasm it needs. No gate was disabled or loosened - people are
+  simply entitled, through the real entitlement path.
+- Adds `chefvoice-billing`, a fourth independently-deployed unit (`billing/functions/`,
+  `DEPLOY_BILLING.cmd`, scoped to `--only functions:chefvoice-billing`). `firebase.json`
+  `functions` is now an array of two codebases; `DEPLOY_NOTIFICATIONS.cmd` is unchanged.
+- Three functions: `grantChefVoiceLaunchAccess` (onDocumentCreated `users/{uid}`),
+  `backfillChefVoiceLaunchAccess` (admin onCall, for accounts predating the deploy),
+  `endChefVoiceLaunchPromo` (admin onCall, the kill switch).
+- Kill switch has two levels: soft (default) stops new grants and lets live 90-day
+  promos run out; hard (`revokeActive: true`) also expires them. Founding seats and any
+  `source: "play"` entitlement survive both - the revoke filter is an allowlist.
+- Entitlement stays server-authoritative and Admin-SDK-written. Nothing fakes a
+  purchase; the client still grants itself nothing.
+- `firestore.rules` gains one block: `config/{configId}` closed to clients both ways.
+  Nothing existing was modified.
+- Client: `ProEntitlement` gains source constants, `isFounding`/`isPromo`/
+  `isComplimentary`/`daysRemaining()`; `FoundingAccess` mirrors the two numbers for
+  copy only. `ProMembershipCard` no longer describes a complimentary chef as a
+  subscriber or warns them about a payment method they never entered.
+- Protected parser and golden cooking corpus, Second Pass semantics, gating model,
+  `chefvoice-notifications`, `transcribeChefVoice`, Hosting, Storage rules,
+  Live/WebRTC and App Check state (still OFF) are all unchanged.
+- Version intentionally NOT bumped: stays 0.10.6 / `versionCode 58`.
+- Status: `:app:testDebugUnitTest` BUILD SUCCESSFUL 31/31 with the golden corpus
+  unaffected; 89/89 node gates (74 notification + 15 new billing); 25/25 emulator rules
+  tests (21 existing + 4 new). **Nothing is deployed and the trigger has never fired** -
+  `DEPLOY_BILLING.cmd` is unrun, the `config` rules block is undeployed, and no admin
+  custom claim has been verified.
+
+See `LAUNCH_ACCESS_FOUNDING_AND_PROMO_0.11.0.md`.
+
+---
+
 # ChefVoice Android v0.10.6 — Account Deletion Re-auth + Web Deletion Resource
 
 - Policy fix only, shipped standalone (not bundled with feature work).

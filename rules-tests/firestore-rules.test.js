@@ -352,3 +352,67 @@ test("purchase records holding Play tokens are not client-writable", async () =>
     })
   );
 });
+
+// Launch access: the first 10 signups get Pro for life and everyone after gets 90
+// free days, both written by the chefvoice-billing Admin SDK. The founding seat
+// counter and the promo kill switch live in config/monetization, which the client
+// must not be able to read or write -- a writable counter mints founding seats, and
+// a readable one leaks how many accounts exist.
+test("a signed-in chef cannot write the launch access config", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "config", "monetization"), {
+      promoEnabled: true,
+      foundingSeats: 10000,
+      foundingSeatsClaimed: 0,
+    })
+  );
+});
+
+test("a signed-in chef cannot read the launch access config", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "config", "monetization"), {
+      promoEnabled: true,
+      foundingSeats: 10,
+      foundingSeatsClaimed: 3,
+      updatedAt: now(),
+    });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(getDoc(doc(db, "config", "monetization")));
+});
+
+test("a chef cannot forge a founding entitlement for themselves", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "users", ALICE, "entitlements", "pro"), {
+      status: "active",
+      productId: "",
+      expiresAt: 0,
+      autoRenewing: false,
+      source: "founding",
+      grantedAt: now(),
+      updatedAt: now(),
+    })
+  );
+});
+
+test("a chef on a 90-day promo cannot extend their own expiry", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE, "entitlements", "pro"), {
+      status: "active",
+      productId: "",
+      expiresAt: now() + 90 * DAY_MS,
+      autoRenewing: false,
+      source: "promo",
+      grantedAt: now(),
+      updatedAt: now(),
+    });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    updateDoc(doc(db, "users", ALICE, "entitlements", "pro"), {
+      expiresAt: now() + 3650 * DAY_MS,
+    })
+  );
+});

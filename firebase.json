@@ -6,11 +6,18 @@
   "storage": {
     "rules": "storage.rules"
   },
-  "functions": {
-    "source": "notifications/functions",
-    "codebase": "chefvoice-notifications",
-    "runtime": "nodejs22"
-  },
+  "functions": [
+    {
+      "source": "notifications/functions",
+      "codebase": "chefvoice-notifications",
+      "runtime": "nodejs22"
+    },
+    {
+      "source": "billing/functions",
+      "codebase": "chefvoice-billing",
+      "runtime": "nodejs22"
+    }
+  ],
   "hosting": {
     "site": "chefvoice-delete-account",
     "public": "hosting",
