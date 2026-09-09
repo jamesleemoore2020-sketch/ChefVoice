@@ -53,6 +53,68 @@ test('the block payload carries exactly the two keys the rule allows', () => {
     'the block write shape no longer matches the rule');
 });
 
+test('conversation and message payloads match their rules', () => {
+  const conversationRule = ruleBlock('match /conversations/{conversationId}');
+  for (const key of ['participantIds', 'participantNames', 'lastMessage', 'lastSenderId', 'createdAt', 'updatedAt']) {
+    assert.ok(conversationRule.includes(`'${key}'`), `the conversations rule no longer lists ${key}`);
+  }
+  // lastMessage/lastSenderId must be empty on create; backend triggers fill them.
+  assert.ok(conversationRule.includes("lastMessage == ''"));
+  assert.ok(conversationRule.includes("lastSenderId == ''"));
+  assert.ok(/lastMessage:\s*''/.test(clientSource) && /lastSenderId:\s*''/.test(clientSource),
+    'startConversation must create with empty preview metadata');
+
+  const messageRule = ruleBlock('match /messages/{messageId}');
+  assert.ok(messageRule.includes("hasOnly(['senderId', 'senderName', 'text', 'createdAt'])"),
+    'the messages rule key set changed');
+  assert.ok(messageRule.includes('text.size() <= 2000'));
+  assert.ok(/slice\(0,\s*2000\)/.test(clientSource), 'message text must be capped at the 2000 chars the rule allows');
+});
+
+test('the conversation id is the two uids sorted and joined, as the rule expects', () => {
+  // conversationIdMatchesParticipants accepts either order, but sorting keeps one
+  // canonical id so both chefs land in the same document.
+  assert.ok(/\[uidA,uidB\]\.sort\(\)\.join\('--'\)/.test(clientSource.replace(/\s+/g, '')),
+    'conversationIdFor must sort both uids');
+  assert.ok(/\[user\.uid,targetUid\]\.sort\(\)/.test(clientSource.replace(/\s+/g, '')),
+    'startConversation must sort participant ids');
+});
+
+test('threaded replies carry only the three extra keys the comment rule allows', () => {
+  const rule = ruleBlock('function validRecipeCommentCreate');
+  for (const key of ['parentCommentId', 'replyToUid', 'replyToName']) {
+    assert.ok(rule.includes(`'${key}'`), `the comment rule no longer lists ${key}`);
+    assert.ok(clientSource.includes(`payload.${key}`), `addComment no longer sets ${key} on a reply`);
+  }
+  assert.ok(rule.includes('text.size() <= 800'));
+  assert.ok(/slice\(0,\s*800\)/.test(clientSource), 'comment text must be capped at 800 chars');
+});
+
+test('read markers and notification updates only ever move forward', () => {
+  const readsRule = ruleBlock('match /messageReads/{conversationId}');
+  assert.ok(readsRule.includes('lastReadAt >= resource.data.lastReadAt'),
+    'the messageReads rule no longer enforces monotonic read markers');
+  assert.ok(readsRule.includes("hasOnly(['conversationId', 'lastReadAt'])"));
+
+  const notificationsRule = ruleBlock('match /notifications/{notificationId}');
+  // Records are backend-created; the client may only advance readAt.
+  assert.ok(notificationsRule.includes('allow create: if false'));
+  assert.ok(notificationsRule.includes("hasOnly(['readAt'])"));
+  assert.ok(/updateDoc\(doc\(db,'users',user\.uid,'notifications',notificationId\),\{readAt:/.test(clientSource.replace(/\s+/g, '')),
+    'markNotificationRead must touch only readAt');
+});
+
+test('client writes never touch the backend-maintained recipe counters', () => {
+  // validOwnerRecipeUpdate requires likes and commentCount to be unchanged, and
+  // only lets the author update the recipe at all. Writing either from the client
+  // failed the whole batch and broke liking and commenting outright.
+  const compact = clientSource.replace(/\s+/g, '');
+  assert.ok(!compact.includes('likes:increment') && !compact.includes('commentCount:increment'),
+    'the client must not increment recipe counters');
+  assert.ok(!/tx\.update\(recipeRef/.test(compact), 'toggleLike must not update the recipe document');
+  assert.ok(!/batch\.update\(recipeRef/.test(compact), 'addComment must not update the recipe document');
+});
+
 test('a chef cannot block themselves, matching the rule', () => {
   assert.ok(ruleBlock('match /blocks/{blockedUid}').includes('blockedUid != uid'));
   assert.ok(/blockedUid===user\.uid|blockedUid === user\.uid/.test(clientSource),

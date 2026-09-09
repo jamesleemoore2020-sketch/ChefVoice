@@ -3,3 +3,14 @@
 @media(max-width:430px){.main{padding-left:12px;padding-right:12px}.hero{padding:20px}.hero h1{font-size:1.65rem}.ingredient{grid-template-columns:60px 70px 1fr 36px}.row.wrap{flex-wrap:wrap}.row.wrap>*{flex:1 1 45%}}
 .between{justify-content:space-between}.community-card h3{margin:0 0 4px}.community-card p{line-height:1.45}.community-card .status{font-size:.82rem}
 .detail-media-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.detail-media{width:100%;max-height:360px;object-fit:cover;border-radius:15px;border:1px solid var(--line);background:#f6eee9}.community-thumb{width:100%;height:180px;object-fit:cover;border-radius:16px;margin-bottom:12px;border:1px solid var(--line)}
+
+/* Inbox: the nav gained a sixth tab, so the grid has to grow with it. */
+.bottom-nav{grid-template-columns:repeat(6,1fr)}
+.bottom-nav button{position:relative}
+.nav-badge{position:absolute;top:2px;right:calc(50% - 20px);min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:var(--red);color:#fff;font-size:.62rem;font-weight:800;display:grid;place-items:center;font-size:.62rem}
+.bottom-nav button span.nav-badge{display:grid;margin-bottom:0;font-size:.62rem}
+.card.unread{border-color:#ffd2bd;background:#fff8f4}
+.card.mine{background:#fff6f1;border-color:#ffd8c7}
+.card.reply{border-left:3px solid var(--peach)}
+.paywall strong{display:block;margin-bottom:4px}
+@media(max-width:430px){.bottom-nav button{font-size:.62rem}}

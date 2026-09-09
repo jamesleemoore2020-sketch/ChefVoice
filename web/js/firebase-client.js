@@ -16,7 +16,7 @@ const {initializeApp}=appSdk;
 const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut}=authSdk;
 const {
   getFirestore,collection,doc,limit,onSnapshot,query,setDoc,where,orderBy,
-  getDoc,deleteDoc,updateDoc,runTransaction,writeBatch,increment
+  getDoc,deleteDoc,updateDoc,runTransaction,writeBatch
 }=firestoreSdk;
 const {getStorage,ref:storageRef,uploadBytes,getDownloadURL}=storageSdk;
 
@@ -151,14 +151,18 @@ export async function toggleLike(recipeId){
   const likeRef=doc(db,'recipes',recipeId,'likes',user.uid);
   const userLikeRef=doc(db,'users',user.uid,'likes',recipeId);
   let likedAfter=false;
+  // The `likes` counter on the recipe is backend-maintained. A client write to it
+  // is rejected outright: validOwnerRecipeUpdate requires likes to be unchanged and
+  // only lets the author update the recipe at all, so touching the counter here
+  // failed the whole transaction and broke liking. Write only the two like
+  // documents, in one transaction and with the same createdAt -- the rule pins them
+  // together through getAfter().
   await runTransaction(db,async tx=>{
-    const [recipeSnap,likeSnap]=await Promise.all([tx.get(recipeRef),tx.get(likeRef)]);
-    if(!recipeSnap.exists())throw new Error('Recipe no longer exists.');
-    const count=Math.max(0,Number(recipeSnap.data().likes||0));
+    const likeSnap=await tx.get(likeRef);
     if(likeSnap.exists()){
-      likedAfter=false;tx.delete(likeRef);tx.delete(userLikeRef);tx.update(recipeRef,{likes:Math.max(0,count-1)});
+      likedAfter=false;tx.delete(likeRef);tx.delete(userLikeRef);
     }else{
-      likedAfter=true;const data={createdAt:Date.now()};tx.set(likeRef,data);tx.set(userLikeRef,data);tx.update(recipeRef,{likes:count+1});
+      likedAfter=true;const data={createdAt:Date.now()};tx.set(likeRef,data);tx.set(userLikeRef,data);
     }
   });
   return likedAfter;
@@ -189,16 +193,165 @@ export function observeComments(recipeId,onChange,onError=()=>{}){
   const q=query(collection(db,'recipes',recipeId,'comments'),orderBy('createdAt'),limit(100));
   return onSnapshot(q,snap=>onChange(snap.docs.map(d=>({id:d.id,...normalizeComment(d.data())}))),onError);
 }
-export async function addComment(recipeId,text,authorName){
+/**
+ * `commentCount` on the recipe is backend-maintained, exactly like `likes`. The
+ * previous batch here also incremented it, which validOwnerRecipeUpdate rejects
+ * (the count must be unchanged, and only the author may update the recipe at all),
+ * so commenting failed for everyone. Write only the comment document.
+ *
+ * `authorName` must equal the author's current profile displayName -- the rule
+ * checks it with profileNameMatches -- so callers pass the profile name, never a
+ * fallback like an email prefix.
+ */
+export async function addComment(recipeId,text,authorName,parent=null){
   assertWrites();
   const user=requireUser('Sign in to comment.');
   const clean=String(text||'').trim().slice(0,800);if(!clean)throw new Error('Write a comment first.');
-  const recipeRef=doc(db,'recipes',recipeId);
-  const commentRef=doc(collection(db,'recipes',recipeId,'comments'));
-  const batch=writeBatch(db);
-  batch.set(commentRef,{authorId:user.uid,authorName:String(authorName||'Chef').trim()||'Chef',text:clean,createdAt:Date.now()});
-  batch.update(recipeRef,{commentCount:increment(1)});
-  await batch.commit();
+  const name=String(authorName||'').trim();
+  if(!name)throw new Error('Your chef profile is still loading. Try again in a moment.');
+  const payload={authorId:user.uid,authorName:name,text:clean,createdAt:Date.now()};
+  if(parent?.id){
+    // Threaded reply. The rule allows exactly these three extra keys.
+    payload.parentCommentId=String(parent.id);
+    payload.replyToUid=String(parent.authorId||'');
+    payload.replyToName=String(parent.authorName||'Chef');
+  }
+  await setDoc(doc(collection(db,'recipes',recipeId,'comments')),payload);
+}
+
+// ---- Direct messages --------------------------------------------------------
+// The conversation id is the two uids sorted and joined with '--'; firestore.rules
+// checks that shape both ways round, and derives participation from it. Preview
+// metadata (lastMessage/lastSenderId) is maintained by backend triggers -- the
+// rule forbids client updates to a conversation entirely.
+
+export function conversationIdFor(uidA,uidB){return [uidA,uidB].sort().join('--');}
+
+/** One-shot profile read. Used where a rule compares against the live displayName. */
+export async function getProfile(uid){
+  if(!uid)return null;
+  const snap=await getDoc(doc(db,'users',uid));
+  return snap.exists()?normalizeProfile(uid,snap.data()):null;
+}
+
+export function observeConversations(uid,onChange,onError=()=>{}){
+  const q=query(collection(db,'conversations'),where('participantIds','array-contains',uid),limit(100));
+  return onSnapshot(q,snap=>{
+    const items=snap.docs.map(d=>normalizeConversation(d.id,d.data())).sort((a,b)=>b.updatedAt-a.updatedAt);
+    onChange(items);
+  },onError);
+}
+
+export function observeDirectMessages(conversationId,onChange,onError=()=>{}){
+  const q=query(collection(db,'conversations',conversationId,'messages'),orderBy('createdAt'),limit(250));
+  return onSnapshot(q,snap=>onChange(snap.docs.map(d=>({
+    id:d.id,
+    senderId:String(d.data().senderId||''),
+    senderName:String(d.data().senderName||'Chef'),
+    text:String(d.data().text||''),
+    createdAt:Number(d.data().createdAt||0)
+  }))),onError);
+}
+
+/**
+ * Opens the conversation with another chef, creating it if this is the first
+ * message. Both display names must match their profiles exactly -- the rule checks
+ * each with profileNameMatches -- so the caller supplies the target's real profile
+ * name rather than whatever a feed card happened to render.
+ */
+export async function startConversation(targetUid,targetName,ownName){
+  assertWrites();
+  const user=requireUser('Sign in to message chefs.');
+  if(!targetUid||targetUid===user.uid)throw new Error('Choose another ChefVoice member to message.');
+  const own=String(ownName||'').trim();
+  const target=String(targetName||'').trim();
+  if(!own||!target)throw new Error('Chef profiles are still loading. Try again in a moment.');
+
+  const ids=[user.uid,targetUid].sort();
+  const conversationId=ids.join('--');
+  const ref=doc(db,'conversations',conversationId);
+  const existing=await getDoc(ref);
+  if(existing.exists())return normalizeConversation(conversationId,existing.data());
+
+  const now=Date.now();
+  const participantNames={[user.uid]:own,[targetUid]:target};
+  // lastMessage/lastSenderId must be empty on create; the backend fills them in.
+  await setDoc(ref,{participantIds:ids,participantNames,lastMessage:'',lastSenderId:'',createdAt:now,updatedAt:now});
+  return normalizeConversation(conversationId,{participantIds:ids,participantNames,lastMessage:'',lastSenderId:'',createdAt:now,updatedAt:now});
+}
+
+export async function sendDirectMessage(conversation,text,senderName){
+  assertWrites();
+  const user=requireUser('Sign in to send messages.');
+  if(!conversation?.participantIds?.includes(user.uid))throw new Error('This conversation is not available to this account.');
+  const clean=String(text||'').trim().slice(0,2000);
+  if(!clean)throw new Error('Write a message first.');
+  const name=String(senderName||'').trim();
+  if(!name)throw new Error('Your chef profile is still loading. Try again in a moment.');
+  await setDoc(doc(collection(db,'conversations',conversation.id,'messages')),{
+    senderId:user.uid,senderName:name,text:clean,createdAt:Date.now()
+  });
+}
+
+export function observeMessageReads(uid,onChange,onError=()=>{}){
+  return onSnapshot(collection(db,'users',uid,'messageReads'),
+    snap=>{
+      const map={};
+      snap.docs.forEach(d=>{map[d.id]=Number(d.data().lastReadAt||0);});
+      onChange(map);
+    },onError);
+}
+
+/**
+ * The rule requires lastReadAt to be monotonic on update, so a stale listener can
+ * never walk a read marker backwards and resurrect old unread badges.
+ */
+export async function markConversationRead(conversationId,lastReadAt){
+  assertWrites();
+  const user=requireUser('Sign in to update unread messages.');
+  if(!conversationId||!(lastReadAt>0))return;
+  const belongsToUser=conversationId.startsWith(user.uid+'--')||conversationId.endsWith('--'+user.uid);
+  if(!belongsToUser)throw new Error('This conversation is not available to this account.');
+  await setDoc(doc(db,'users',user.uid,'messageReads',conversationId),{conversationId,lastReadAt:Math.floor(lastReadAt)});
+}
+
+// ---- In-app activity notifications -----------------------------------------
+// Records are backend-created (`allow create: if false`); the client may read its
+// own and advance `readAt`, nothing else. This is the in-app feed only -- FCM web
+// push is a separate piece of infrastructure and is not wired up here.
+
+export function observeNotifications(uid,onChange,onError=()=>{}){
+  const q=query(collection(db,'users',uid,'notifications'),orderBy('createdAt','desc'),limit(100));
+  return onSnapshot(q,snap=>onChange(snap.docs.map(d=>{
+    const data=d.data()||{};
+    return {
+      id:d.id,
+      type:String(data.type||''),
+      actorUid:String(data.actorUid||''),
+      actorName:String(data.actorName||'Chef'),
+      title:String(data.title||'ChefVoice'),
+      body:String(data.body||''),
+      recipeId:String(data.recipeId||''),
+      conversationId:String(data.conversationId||''),
+      liveSessionId:String(data.liveSessionId||''),
+      commentId:String(data.commentId||''),
+      createdAt:Number(data.createdAt||0),
+      readAt:Number(data.readAt||0)
+    };
+  })),onError);
+}
+
+export async function markNotificationRead(notificationId,readAt=Date.now()){
+  assertWrites();
+  const user=requireUser('Sign in to update notifications.');
+  // The rule allows only readAt to change, and only forwards.
+  await updateDoc(doc(db,'users',user.uid,'notifications',notificationId),{readAt:Math.floor(readAt)});
+}
+
+export async function deleteNotification(notificationId){
+  assertWrites();
+  const user=requireUser('Sign in to update notifications.');
+  await deleteDoc(doc(db,'users',user.uid,'notifications',notificationId));
 }
 
 // ---- Safety: blocking and reporting ----------------------------------------
@@ -269,7 +422,20 @@ function normalizeCloudRecipe(id,data={}){
   };
 }
 function normalizeProfile(uid,data={}){return {uid,displayName:String(data.displayName||'Chef'),bio:String(data.bio||''),photoUrl:String(data.photoUrl||''),createdAt:Number(data.createdAt||Date.now())};}
-function normalizeComment(data={}){return {authorId:String(data.authorId||''),authorName:String(data.authorName||'Chef'),text:String(data.text||''),createdAt:Number(data.createdAt||0)};}
+function normalizeComment(data={}){return {authorId:String(data.authorId||''),authorName:String(data.authorName||'Chef'),text:String(data.text||''),createdAt:Number(data.createdAt||0),parentCommentId:String(data.parentCommentId||''),replyToUid:String(data.replyToUid||''),replyToName:String(data.replyToName||'')};}
+function normalizeConversation(id,data={}){
+  const participantIds=Array.isArray(data.participantIds)?data.participantIds.map(String):[];
+  return {
+    id,
+    participantIds,
+    participantNames:data.participantNames&&typeof data.participantNames==='object'?data.participantNames:{},
+    lastMessage:String(data.lastMessage||''),
+    lastSenderId:String(data.lastSenderId||''),
+    createdAt:Number(data.createdAt||0),
+    updatedAt:Number(data.updatedAt||0)
+  };
+}
+export function otherParticipant(conversation,uid){return (conversation?.participantIds||[]).find(id=>id!==uid)||'';}
 function requireUser(message){if(!auth.currentUser)throw new Error(message);return auth.currentUser;}
 function assertWrites(){if(!CLOUD_WRITES_ENABLED)throw new Error('ChefVoice cloud writes are disabled.');}
 function cloudMediaType(mime=''){return String(mime).startsWith('video/')?'VIDEO':'IMAGE';}

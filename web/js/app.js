@@ -10,6 +10,10 @@ import {
   isEntitlementActive, isFounding, isPromo, PaywallTrigger, remainingLabel
 } from './entitlement.js';
 import * as ChefAnalytics from './chef-analytics.js';
+import {
+  conversationUnread as isConversationUnread, otherParticipant, otherParticipantName,
+  threadComments, unreadCounts as computeUnreadCounts, withoutBlocked
+} from './inbox.js';
 
 const main=document.querySelector('#main');
 const tabs=[...document.querySelectorAll('[data-tab]')];
@@ -22,8 +26,15 @@ const form={title:'',description:'',servings:'2'};
 const cloud={
   state:'connecting',message:'Connecting to ChefVoice Community…',api:null,user:null,profile:null,recipes:[],feedError:'',
   liked:new Set(),bookmarks:new Set(),following:new Set(),entitlement:{...FREE_ENTITLEMENT},blocked:new Set(),
-  unsubAuth:null,unsubFeed:null,unsubProfile:null,unsubLiked:null,unsubBookmarks:null,unsubFollowing:null,unsubComments:null,unsubEntitlement:null,unsubBlocked:null
+  conversations:[],messageReads:{},notifications:[],
+  unsubAuth:null,unsubFeed:null,unsubProfile:null,unsubLiked:null,unsubBookmarks:null,unsubFollowing:null,unsubComments:null,unsubEntitlement:null,unsubBlocked:null,
+  unsubConversations:null,unsubMessageReads:null,unsubNotifications:null,unsubThread:null
 };
+
+// Inbox view state: which conversation is open, if any.
+let openConversation=null;
+let threadMessages=[];
+let inboxSection='messages';
 
 // The single value the UI gates on. Fails closed to Free: signed out, offline, or a
 // failed entitlement read all read as Free rather than accidentally unlocking Pro.
@@ -32,9 +43,11 @@ const cloudRecipeCount=()=>recipes.filter(r=>r.isPublic).length;
 let paywallTrigger='';
 
 function clearUserObservers(){
-  for(const key of ['unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubEntitlement','unsubBlocked']){try{cloud[key]?.();}catch{} cloud[key]=null;}
+  for(const key of ['unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread']){try{cloud[key]?.();}catch{} cloud[key]=null;}
   cloud.profile=null;cloud.liked=new Set();cloud.bookmarks=new Set();cloud.following=new Set();
   cloud.entitlement={...FREE_ENTITLEMENT};cloud.blocked=new Set();
+  cloud.conversations=[];cloud.messageReads={};cloud.notifications=[];
+  openConversation=null;threadMessages=[];
 }
 function startUserObservers(user){
   clearUserObservers();
@@ -42,6 +55,9 @@ function startUserObservers(user){
   cloud.unsubProfile=cloud.api.observeProfile(user.uid,p=>{cloud.profile=p;if(currentTab==='profile'||currentTab==='community'||currentTab==='recipes')render();});
   cloud.unsubEntitlement=cloud.api.observeProEntitlement(user.uid,e=>{cloud.entitlement=e;if(currentTab==='profile'||currentTab==='recipes')render();});
   cloud.unsubBlocked=cloud.api.observeBlockedUserIds(user.uid,s=>{cloud.blocked=s;if(currentTab==='community'||currentTab==='profile')render();});
+  cloud.unsubConversations=cloud.api.observeConversations(user.uid,items=>{cloud.conversations=items;updateInboxBadge();if(currentTab==='inbox')render();});
+  cloud.unsubMessageReads=cloud.api.observeMessageReads(user.uid,map=>{cloud.messageReads=map;updateInboxBadge();if(currentTab==='inbox')render();});
+  cloud.unsubNotifications=cloud.api.observeNotifications(user.uid,items=>{cloud.notifications=items;updateInboxBadge();if(currentTab==='inbox')render();});
   cloud.unsubLiked=cloud.api.observeUserRecipeIds(user.uid,'likes',s=>{cloud.liked=s;if(currentTab==='community')render();});
   cloud.unsubBookmarks=cloud.api.observeUserRecipeIds(user.uid,'bookmarks',s=>{cloud.bookmarks=s;if(currentTab==='community')render();});
   cloud.unsubFollowing=cloud.api.observeUserRecipeIds(user.uid,'following',s=>{cloud.following=s;if(currentTab==='community')render();});
@@ -99,6 +115,20 @@ function renderPaywall(){
 }
 const fmt=ms=>`${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
 const chefName=()=>cloud.profile?.displayName||cloud.user?.email?.split('@')[0]||'Chef';
+
+/**
+ * The name to send on any write the rules check with `profileNameMatches` --
+ * publishing, comments, replies, conversations and messages all compare the name in
+ * the payload against `users/{uid}.displayName` and reject a mismatch. `chefName()`
+ * falls back to an email prefix or "Chef" for display, and sending that fallback is
+ * a permission-denied, so rule-bound writes use this instead and fail with
+ * something a chef can act on.
+ */
+function requireProfileName(){
+  const name=String(cloud.profile?.displayName||'').trim();
+  if(!name)throw new Error('Your chef profile is still loading. Try again in a moment.');
+  return name;
+}
 const cloudReady=()=>cloud.state==='ready'&&cloud.api;
 
 const capture=new VoiceCapture({
@@ -112,7 +142,19 @@ function captureForm(){
   const desc=document.querySelector('#description');if(desc)form.description=desc.value;
   const servings=document.querySelector('#servings');if(servings)form.servings=servings.value;
 }
-function nav(tab){captureForm();try{cloud.unsubComments?.();}catch{}cloud.unsubComments=null;currentTab=tab;tabs.forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));render();window.scrollTo({top:0,behavior:'smooth'});}
+function nav(tab){
+  captureForm();
+  try{cloud.unsubComments?.();}catch{}
+  cloud.unsubComments=null;
+  setReplyTarget(null);
+  // Leaving the Inbox closes any open thread listener; openConversationView
+  // re-establishes it when a conversation is opened again.
+  if(tab!=='inbox')closeConversationView();
+  currentTab=tab;
+  tabs.forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+  render();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
 tabs.forEach(b=>b.addEventListener('click',()=>nav(b.dataset.tab)));
 
 function cookTemplate(){
@@ -233,8 +275,9 @@ async function publishLocalRecipe(id,button){
     const assets=[];
     for(const item of r.media||[]){const remote=(r.remoteMedia||[]).find(x=>x.id===item.id);assets.push({...item,blob:await loadMediaBlob(r.id,item.id),remoteUrl:remote?.url||'',cloudType:item.type?.startsWith('video/')?'VIDEO':'IMAGE'});}
     const voiceBlob=await loadAudioBlob(r.id);
-    const result=await cloud.api.publishRecipe(r,chefName(),{mediaAssets:assets,voiceBlob});
-    Object.assign(r,{isPublic:true,authorId:cloud.user.uid,authorName:chefName(),updatedAt:result.recipe.updatedAt,remoteMedia:result.recipe.media,voiceClips:result.recipe.voiceClips,likes:result.recipe.likes,commentCount:result.recipe.commentCount});
+    const authorName=requireProfileName();
+    const result=await cloud.api.publishRecipe(r,authorName,{mediaAssets:assets,voiceBlob});
+    Object.assign(r,{isPublic:true,authorId:cloud.user.uid,authorName,updatedAt:result.recipe.updatedAt,remoteMedia:result.recipe.media,voiceClips:result.recipe.voiceClips,likes:result.recipe.likes,commentCount:result.recipe.commentCount});
     saveRecipes(recipes);if(status)status.textContent=result.warnings.length?`Published. ${result.warnings.join(' ')}`:'Published to ChefVoice Community.';render();
   }catch(e){if(status)status.textContent=e?.message||'Could not publish recipe.';button.disabled=false;}
 }
@@ -261,12 +304,12 @@ function communityTemplate(){
   // Blocking has to actually hide the blocked chef's cooking, or the button is a
   // broken promise. Firestore rules already stop writes in both directions between
   // a blocked pair; this is the read half.
-  const visible=cloud.recipes.filter(r=>!cloud.blocked.has(r.authorId));
+  const visible=withoutBlocked(cloud.recipes,cloud.blocked);
   const hiddenCount=cloud.recipes.length-visible.length;
   const feed=visible.length?visible.map(r=>{
     const liked=cloud.liked.has(r.id),bookmarked=cloud.bookmarks.has(r.id),following=cloud.following.has(r.authorId),self=cloud.user?.uid===r.authorId;
     const hero=r.media?.find(m=>m.type!=='VIDEO')?.url;
-    return `<article class="card community-card">${hero?`<img class="community-thumb" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}">`:''}<div class="row between"><div><h3>${escapeHtml(r.title)}</h3><p class="status">by ${escapeHtml(r.authorName||'Chef')} · ${r.ingredients.length} ingredients · ${r.steps.length} steps</p></div><span class="pill">♥ ${r.likes||0}</span></div>${r.description?`<p>${escapeHtml(r.description)}</p>`:''}<div class="row wrap"><button class="${liked?'primary':'secondary'}" data-like="${r.id}">${liked?'♥ Liked':'♡ Like'}</button><button class="${bookmarked?'primary':'secondary'}" data-bookmark="${r.id}">${bookmarked?'★ Saved':'☆ Save'}</button><button class="secondary" data-comments="${r.id}">💬 ${r.commentCount||0}</button>${cloud.user&&!self?`<button class="${following?'primary':'ghost'}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow chef'}</button>`:''}${cloud.user&&!self?`<button class="ghost" data-report="${escapeHtml(r.id)}" data-report-uid="${escapeHtml(r.authorId)}">⚑ Report</button><button class="ghost" data-block="${escapeHtml(r.authorId)}">Block chef</button>`:''}</div></article>`;
+    return `<article class="card community-card">${hero?`<img class="community-thumb" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}">`:''}<div class="row between"><div><h3>${escapeHtml(r.title)}</h3><p class="status">by ${escapeHtml(r.authorName||'Chef')} · ${r.ingredients.length} ingredients · ${r.steps.length} steps</p></div><span class="pill">♥ ${r.likes||0}</span></div>${r.description?`<p>${escapeHtml(r.description)}</p>`:''}<div class="row wrap"><button class="${liked?'primary':'secondary'}" data-like="${r.id}">${liked?'♥ Liked':'♡ Like'}</button><button class="${bookmarked?'primary':'secondary'}" data-bookmark="${r.id}">${bookmarked?'★ Saved':'☆ Save'}</button><button class="secondary" data-comments="${r.id}">💬 ${r.commentCount||0}</button>${cloud.user&&!self?`<button class="${following?'primary':'ghost'}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow chef'}</button>`:''}${cloud.user&&!self?`<button class="secondary" data-message="${escapeHtml(r.authorId)}" data-message-name="${escapeHtml(r.authorName||'')}">✉ Message</button><button class="ghost" data-report="${escapeHtml(r.id)}" data-report-uid="${escapeHtml(r.authorId)}">⚑ Report</button><button class="ghost" data-block="${escapeHtml(r.authorId)}">Block chef</button>`:''}</div></article>`;
   }).join(''):`<div class="empty card">${cloud.feedError?`Community could not load: ${escapeHtml(cloud.feedError)}`:cloud.state==='connecting'?'Connecting to the real ChefVoice Community…':'No public Community recipes were returned.'}</div>`;
   const blockedNote=hiddenCount?`<div class="notice">${hiddenCount} recipe${hiddenCount===1?'':'s'} from chefs you blocked ${hiddenCount===1?'is':'are'} hidden. Manage blocked chefs from your Profile.</div>`:'';
   return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">ChefVoice Community</div><h1>Android and iPhone, one kitchen.</h1><p>Both clients now use the same Firebase Authentication, Firestore and Storage project.</p></section><div class="row between" style="margin:10px 2px"><strong>Community feed</strong>${cloudStatus}</div><div id="safetyStatus" class="hint"></div>${!cloud.user?'<div class="notice">You can browse public recipes now. Sign in from Profile to like, save, follow and comment.</div>':''}${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${blockedNote}${feed}`;
@@ -279,6 +322,23 @@ function bindCommunity(){
   main.querySelectorAll('[data-comments]').forEach(b=>b.onclick=()=>openCommunityRecipe(b.dataset.comments));
   main.querySelectorAll('[data-report]').forEach(b=>b.onclick=()=>reportTarget({targetType:'recipe',targetId:b.dataset.report,targetUid:b.dataset.reportUid,contextId:b.dataset.report}));
   main.querySelectorAll('[data-block]').forEach(b=>b.onclick=()=>blockChef(b.dataset.block));
+  main.querySelectorAll('[data-message]').forEach(b=>b.onclick=()=>messageChef(b.dataset.message));
+}
+
+// Which comment a reply is aimed at, if any. Cleared after posting so the next
+// comment does not silently become a reply to something the chef forgot about.
+let replyTarget=null;
+function setReplyTarget(target){
+  replyTarget=target;
+  const banner=document.querySelector('#replyBanner');
+  if(banner){
+    banner.innerHTML=target
+      ?`Replying to <strong>${escapeHtml(target.authorName)}</strong> · <button class="ghost" id="cancelReply">Cancel</button>`
+      :'';
+    document.querySelector('#cancelReply')?.addEventListener('click',()=>setReplyTarget(null));
+  }
+  const box=document.querySelector('#commentText');
+  if(box&&target)box.focus();
 }
 
 function safetyStatus(message){
@@ -324,19 +384,37 @@ function openCommunityRecipe(id){
   try{cloud.unsubComments?.();}catch{}
   const mediaHtml=(r.media||[]).map(m=>m.type==='VIDEO'?`<video class="detail-media" controls src="${escapeHtml(m.url)}"></video>`:`<img class="detail-media" src="${escapeHtml(m.url)}" alt="Recipe media">`).join('');
   const voiceHtml=(r.voiceClips||[]).map(v=>`<audio class="audio-player" controls src="${escapeHtml(v.url)}"></audio>`).join('');
-  main.innerHTML=`<button id="backCommunity" class="ghost">← Community</button><section class="card"><h1>${escapeHtml(r.title)}</h1><p class="status">by ${escapeHtml(r.authorName)} · serves ${r.servings}</p><p>${escapeHtml(r.description||'')}</p></section>${mediaHtml?`<section class="card"><div class="detail-media-grid">${mediaHtml}</div></section>`:''}<div class="section-title"><h2>Ingredients</h2></div>${r.ingredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${r.steps.map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}${voiceHtml?`<section class="card"><h2>Chef voice</h2><p class="hint">Original cooking-session audio published by the chef.</p>${voiceHtml}</section>`:''}<div class="section-title"><h2>Comments</h2></div><div id="safetyStatus" class="hint"></div><div id="comments"><div class="empty card">Loading comments…</div></div>${cloud.user?`<section class="card"><textarea id="commentText" maxlength="800" placeholder="Add a comment"></textarea><button id="postComment" class="primary wide">Post comment</button><div id="commentStatus" class="hint"></div></section>`:'<div class="notice">Sign in to comment.</div>'}`;
+  main.innerHTML=`<button id="backCommunity" class="ghost">← Community</button><section class="card"><h1>${escapeHtml(r.title)}</h1><p class="status">by ${escapeHtml(r.authorName)} · serves ${r.servings}</p><p>${escapeHtml(r.description||'')}</p></section>${mediaHtml?`<section class="card"><div class="detail-media-grid">${mediaHtml}</div></section>`:''}<div class="section-title"><h2>Ingredients</h2></div>${r.ingredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${r.steps.map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}${voiceHtml?`<section class="card"><h2>Chef voice</h2><p class="hint">Original cooking-session audio published by the chef.</p>${voiceHtml}</section>`:''}<div class="section-title"><h2>Comments</h2></div><div id="safetyStatus" class="hint"></div><div id="comments"><div class="empty card">Loading comments…</div></div>${cloud.user?`<section class="card"><div id="replyBanner" class="hint"></div><textarea id="commentText" maxlength="800" placeholder="Add a comment"></textarea><button id="postComment" class="primary wide">Post comment</button><div id="commentStatus" class="hint"></div></section>`:'<div class="notice">Sign in to comment.</div>'}`;
   document.querySelector('#backCommunity').onclick=()=>{try{cloud.unsubComments?.();}catch{}cloud.unsubComments=null;render();};
   cloud.unsubComments=cloud.api.observeComments(r.id,comments=>{
     const el=document.querySelector('#comments');
     if(!el)return;
     // Same read half of blocking as the feed: a blocked chef's words are hidden too.
-    const visible=comments.filter(c=>!cloud.blocked.has(c.authorId));
-    el.innerHTML=visible.length
-      ?visible.map(c=>`<div class="card"><div class="row between"><strong>${escapeHtml(c.authorName)}</strong>${cloud.user&&c.authorId!==cloud.user.uid?`<button class="ghost" data-report-comment="${escapeHtml(c.id)}" data-comment-uid="${escapeHtml(c.authorId)}">⚑</button>`:''}</div><p class="status">${escapeHtml(c.text)}</p></div>`).join('')
+    const visible=withoutBlocked(comments,cloud.blocked);
+    const {roots,repliesFor}=threadComments(visible);
+    const actions=c=>cloud.user
+      ?`<div class="row wrap" style="margin-top:6px"><button class="ghost" data-reply="${escapeHtml(c.id)}" data-reply-uid="${escapeHtml(c.authorId)}" data-reply-name="${escapeHtml(c.authorName)}">Reply</button>${c.authorId!==cloud.user.uid?`<button class="ghost" data-report-comment="${escapeHtml(c.id)}" data-comment-uid="${escapeHtml(c.authorId)}">⚑</button>`:''}</div>`
+      :'';
+    const card=(c,isReply)=>`<div class="card${isReply?' reply':''}"${isReply?' style="margin-left:18px"':''}><div class="row between"><strong>${escapeHtml(c.authorName)}</strong><small>${c.createdAt?new Date(c.createdAt).toLocaleDateString():''}</small></div>${isReply&&c.replyToName?`<p class="hint">to ${escapeHtml(c.replyToName)}</p>`:''}<p class="status">${escapeHtml(c.text)}</p>${actions(c)}</div>`;
+    el.innerHTML=roots.length
+      ?roots.map(c=>card(c,false)+repliesFor(c.id).map(x=>card(x,true)).join('')).join('')
       :'<div class="empty card">No comments yet.</div>';
     el.querySelectorAll('[data-report-comment]').forEach(b=>b.onclick=()=>reportTarget({targetType:'comment',targetId:b.dataset.reportComment,targetUid:b.dataset.commentUid,contextId:r.id}));
+    el.querySelectorAll('[data-reply]').forEach(b=>b.onclick=()=>setReplyTarget({id:b.dataset.reply,authorId:b.dataset.replyUid,authorName:b.dataset.replyName}));
   },err=>{const el=document.querySelector('#comments');if(el)el.innerHTML=`<div class="notice">${escapeHtml(err?.message||'Could not load comments.')}</div>`;});
-  const post=document.querySelector('#postComment');if(post)post.onclick=async()=>{const text=document.querySelector('#commentText').value;const status=document.querySelector('#commentStatus');post.disabled=true;status.textContent='Posting…';try{await cloud.api.addComment(r.id,text,chefName());document.querySelector('#commentText').value='';status.textContent='Posted.';}catch(e){status.textContent=e?.message||'Could not post comment.';}finally{post.disabled=false;}};
+  const post=document.querySelector('#postComment');
+  if(post)post.onclick=async()=>{
+    const box=document.querySelector('#commentText');
+    const status=document.querySelector('#commentStatus');
+    post.disabled=true;status.textContent=replyTarget?'Posting reply…':'Posting…';
+    try{
+      await cloud.api.addComment(r.id,box.value,requireProfileName(),replyTarget);
+      box.value='';
+      status.textContent=replyTarget?'Reply posted.':'Posted.';
+      setReplyTarget(null);
+    }catch(e){status.textContent=e?.message||'Could not post comment.';}
+    finally{post.disabled=false;}
+  };
 }
 
 /**
@@ -392,17 +470,152 @@ function bindProfile(){
   const signOut=document.querySelector('#cloudSignOut');if(signOut)signOut.onclick=async()=>{signOut.disabled=true;try{await cloud.api?.signOutUser();}catch{signOut.disabled=false;}};
 }
 
+// ---- Inbox: direct messages + activity notifications ------------------------
+
+// Read markers are monotonic by rule, so a stale listener cannot walk one
+// backwards and resurrect an old badge.
+const conversationUnread=c=>isConversationUnread(c,cloud.user?.uid,cloud.messageReads);
+const unreadCounts=()=>computeUnreadCounts(cloud.conversations,cloud.notifications,cloud.user?.uid,cloud.messageReads);
+function updateInboxBadge(){
+  const badge=document.querySelector('#inboxBadge');
+  if(!badge)return;
+  const {messages,activity}=unreadCounts();
+  const total=messages+activity;
+  badge.hidden=total===0;
+  badge.textContent=total>99?'99+':String(total);
+}
+
+const otherUid=c=>otherParticipant(c,cloud.user?.uid);
+const otherName=c=>otherParticipantName(c,cloud.user?.uid);
+
+function inboxTemplate(){
+  if(!cloud.user){
+    return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">Inbox</div><h1>Messages and activity.</h1></section><div class="notice">Sign in from Profile to see your messages and activity.</div>`;
+  }
+  if(openConversation)return conversationTemplate();
+
+  const {messages,activity}=unreadCounts();
+  const tabs=`<div class="row" style="margin:10px 2px;gap:8px"><button class="${inboxSection==='messages'?'primary':'secondary'}" data-inbox="messages">Messages${messages?` (${messages})`:''}</button><button class="${inboxSection==='activity'?'primary':'secondary'}" data-inbox="activity">Activity${activity?` (${activity})`:''}</button></div>`;
+
+  if(inboxSection==='activity'){
+    const list=cloud.notifications.length
+      ?cloud.notifications.map(n=>`<article class="card ${n.readAt<=0?'unread':''}" data-notification="${escapeHtml(n.id)}"><div class="row between"><strong>${escapeHtml(n.title)}</strong>${n.readAt<=0?'<span class="pill">New</span>':''}</div>${n.body?`<p class="status">${escapeHtml(n.body)}</p>`:''}<div class="row wrap" style="margin-top:8px">${n.readAt<=0?`<button class="secondary" data-read="${escapeHtml(n.id)}">Mark read</button>`:''}<button class="ghost" data-dismiss-notification="${escapeHtml(n.id)}">Dismiss</button></div></article>`).join('')
+      :'<div class="empty card">No activity yet. Likes, comments, replies, follows and Live alerts show up here.</div>';
+    return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">Inbox</div><h1>Messages and activity.</h1></section>${tabs}<div id="safetyStatus" class="hint"></div>${list}`;
+  }
+
+  const visible=cloud.conversations.filter(c=>!cloud.blocked.has(otherUid(c)));
+  const hidden=cloud.conversations.length-visible.length;
+  // Conversations are hidden from the list but the thread itself stays reachable
+  // and readable if already open -- blocking stops new contact, it does not erase
+  // history the chef may need.
+  const list=visible.length
+    ?visible.map(c=>`<article class="card" data-conversation="${escapeHtml(c.id)}"><div class="row between"><strong>${escapeHtml(otherName(c))}</strong>${conversationUnread(c)?'<span class="pill">New</span>':''}</div><p class="status">${escapeHtml(c.lastMessage||'No messages yet.')}</p><button class="secondary" data-open-conversation="${escapeHtml(c.id)}">Open</button></article>`).join('')
+    :'<div class="empty card">No conversations yet. Open a chef\'s recipe in Community and choose Message chef.</div>';
+  const blockedNote=hidden?`<div class="notice">${hidden} conversation${hidden===1?'':'s'} with blocked chefs ${hidden===1?'is':'are'} hidden.</div>`:'';
+  return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">Inbox</div><h1>Messages and activity.</h1></section>${tabs}<div id="safetyStatus" class="hint"></div>${blockedNote}${list}`;
+}
+
+function conversationTemplate(){
+  const c=openConversation;
+  const name=otherName(c);
+  const blocked=cloud.blocked.has(otherUid(c));
+  const thread=threadMessages.length
+    ?threadMessages.map(m=>`<div class="card ${m.senderId===cloud.user.uid?'mine':''}"><div class="row between"><strong>${escapeHtml(m.senderName)}</strong><small>${new Date(m.createdAt).toLocaleString()}</small></div><p class="status">${escapeHtml(m.text)}</p></div>`).join('')
+    :'<div class="empty card">No messages yet. Say hello.</div>';
+  const composer=blocked
+    ?'<div class="notice">You blocked this chef. Unblock them to send messages again. Your history stays visible.</div>'
+    :`<section class="card"><textarea id="messageText" maxlength="2000" placeholder="Write a message"></textarea><button id="sendMessage" class="primary wide">Send</button></section>`;
+  return `<button id="backInbox" class="ghost">← Inbox</button><section class="card"><div class="row between"><h1>${escapeHtml(name)}</h1><span class="pill">${blocked?'Blocked':'Direct messages'}</span></div><div class="row wrap"><button class="ghost" data-report-user="${escapeHtml(otherUid(c))}">⚑ Report chef</button><button class="ghost" data-toggle-block="${escapeHtml(otherUid(c))}">${blocked?'Unblock chef':'Block chef'}</button></div></section><div id="safetyStatus" class="hint"></div>${thread}${composer}`;
+}
+
+function bindInbox(){
+  main.querySelectorAll('[data-inbox]').forEach(b=>b.onclick=()=>{inboxSection=b.dataset.inbox;render();});
+  main.querySelectorAll('[data-open-conversation]').forEach(b=>b.onclick=()=>openConversationView(b.dataset.openConversation));
+  main.querySelectorAll('[data-read]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    try{await cloud.api.markNotificationRead(b.dataset.read);}catch(e){safetyStatus(e?.message||'Could not mark that as read.');b.disabled=false;}
+  });
+  main.querySelectorAll('[data-dismiss-notification]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    try{await cloud.api.deleteNotification(b.dataset.dismissNotification);}catch(e){safetyStatus(e?.message||'Could not dismiss that.');b.disabled=false;}
+  });
+
+  const back=document.querySelector('#backInbox');
+  if(back)back.onclick=()=>{closeConversationView();render();};
+  main.querySelectorAll('[data-report-user]').forEach(b=>b.onclick=()=>reportTarget({targetType:'user',targetId:b.dataset.reportUser,targetUid:b.dataset.reportUser,contextId:openConversation?.id||''}));
+  main.querySelectorAll('[data-toggle-block]').forEach(b=>b.onclick=async()=>{
+    const uid=b.dataset.toggleBlock;
+    if(cloud.blocked.has(uid))await unblockChef(uid);
+    else await blockChef(uid);
+  });
+  const send=document.querySelector('#sendMessage');
+  if(send)send.onclick=async()=>{
+    const box=document.querySelector('#messageText');
+    const text=box.value;
+    if(!text.trim())return;
+    send.disabled=true;
+    try{
+      await cloud.api.sendDirectMessage(openConversation,text,requireProfileName());
+      box.value='';
+    }catch(e){safetyStatus(e?.message||'Could not send the message.');}
+    finally{send.disabled=false;}
+  };
+}
+
+function openConversationView(conversationId){
+  const c=cloud.conversations.find(x=>x.id===conversationId);
+  if(!c)return;
+  closeConversationView();
+  openConversation=c;
+  threadMessages=[];
+  cloud.unsubThread=cloud.api.observeDirectMessages(c.id,items=>{
+    threadMessages=items;
+    // Mark read against the newest message actually seen, not "now" -- the rule
+    // keeps the marker monotonic and this keeps it honest.
+    const newest=items.reduce((max,m)=>Math.max(max,m.createdAt),0);
+    if(newest>(cloud.messageReads[c.id]||0))cloud.api.markConversationRead(c.id,newest).catch(()=>{});
+    if(currentTab==='inbox')render();
+  },err=>safetyStatus(err?.message||'Conversation could not be loaded.'));
+  render();
+}
+function closeConversationView(){
+  try{cloud.unsubThread?.();}catch{}
+  cloud.unsubThread=null;
+  openConversation=null;
+  threadMessages=[];
+}
+
+async function messageChef(targetUid){
+  if(!requireCommunitySignIn())return;
+  if(!targetUid||targetUid===cloud.user.uid)return;
+  try{
+    // The rule checks both names against the *live* profiles, so a recipe card's
+    // cached authorName is not good enough -- it goes stale when a chef renames.
+    const profile=await cloud.api.getProfile(targetUid);
+    const targetName=String(profile?.displayName||'').trim();
+    if(!targetName)throw new Error('That chef profile could not be loaded.');
+    const conversation=await cloud.api.startConversation(targetUid,targetName,requireProfileName());
+    if(!cloud.conversations.some(c=>c.id===conversation.id))cloud.conversations=[conversation,...cloud.conversations];
+    inboxSection='messages';
+    nav('inbox');
+    openConversationView(conversation.id);
+  }catch(e){safetyStatus(e?.message||'Could not open messages with this chef.');}
+}
+
 function liveTemplate(){return `<section class="hero" style="--hero:url('../assets/live-hero.webp')"><div class="eyebrow">Live kitchen</div><h1>Cook together, in real time.</h1><p>Community is now writable across Android and iPhone. WebRTC Live stays behind a separate device-test gate so it cannot interfere with the protected microphone/ingredient workflow.</p></section><div class="card"><strong>Live remains intentionally gated</strong><p class="status">The next Live milestone is Android ↔ iPhone signaling, camera, microphone and reconnection testing on real devices.</p></div>`;}
 
 function render(){
   if(currentTab==='cook'){main.innerHTML=cookTemplate();bindCook();}
   if(currentTab==='recipes'){main.innerHTML=recipesTemplate();bindRecipes();}
   if(currentTab==='community'){main.innerHTML=communityTemplate();bindCommunity();}
+  if(currentTab==='inbox'){main.innerHTML=inboxTemplate();bindInbox();}
   if(currentTab==='live')main.innerHTML=liveTemplate();
   if(currentTab==='profile'){main.innerHTML=profileTemplate();bindProfile();}
   renderPaywall();
+  updateInboxBadge();
 }
 
 if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
-window.addEventListener('beforeunload',()=>{capture.close();for(const key of ['unsubAuth','unsubFeed','unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubComments'])try{cloud[key]?.();}catch{}});
+window.addEventListener('beforeunload',()=>{capture.close();for(const key of ['unsubAuth','unsubFeed','unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubComments','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread'])try{cloud[key]?.();}catch{}});
 render();
