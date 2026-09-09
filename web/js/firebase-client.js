@@ -48,14 +48,43 @@ export async function signOutUser(){await signOut(auth);}
 export function observeProfile(uid,onChange,onError=()=>{}){
   return onSnapshot(doc(db,'users',uid),snap=>onChange(snap.exists()?normalizeProfile(uid,snap.data()):null),onError);
 }
+/**
+ * Writes the signed-in chef's profile.
+ *
+ * firestore.rules pins this shape hard, and getting it wrong is silent and total:
+ *
+ * - `validUserProfileShape` requires ALL of displayName, bio, photoUrl,
+ *   coverPhotoUrl, favoriteThings and createdAt. Omitting coverPhotoUrl and
+ *   favoriteThings (as this used to) fails a create outright, so the account ends
+ *   up with no profile document at all -- which then breaks every write the rules
+ *   check with profileNameMatches: comments, replies, publishing and messaging.
+ * - On update, createdAt must equal the stored value and only the five editable
+ *   keys may change, so createdAt is read back rather than guessed.
+ * - followerCount is backend-maintained and deliberately never sent; merge keeps
+ *   it, and the update rule forbids changing it anyway.
+ */
 export async function saveUserProfile(uid,profile){
   assertWrites();
   if(auth.currentUser?.uid!==uid)throw new Error('You can only edit your own ChefVoice profile.');
-  await setDoc(doc(db,'users',uid),{
-    displayName:String(profile.displayName||'Chef').trim()||'Chef',
-    bio:String(profile.bio||'').trim(),
-    photoUrl:String(profile.photoUrl||''),
-    createdAt:Number(profile.createdAt||Date.now())
+
+  const ref=doc(db,'users',uid);
+  const existing=await getDoc(ref);
+  const stored=existing.exists()?existing.data():null;
+
+  const displayName=String(profile.displayName||'').trim().slice(0,80)||'Chef';
+  const favoriteThings=(Array.isArray(profile.favoriteThings)?profile.favoriteThings
+    :Array.isArray(stored?.favoriteThings)?stored.favoriteThings
+    :[]).map(String).slice(0,12);
+
+  await setDoc(ref,{
+    displayName,
+    bio:String(profile.bio??stored?.bio??'').trim().slice(0,500),
+    photoUrl:String(profile.photoUrl??stored?.photoUrl??'').slice(0,2000),
+    coverPhotoUrl:String(profile.coverPhotoUrl??stored?.coverPhotoUrl??'').slice(0,2000),
+    favoriteThings,
+    // Immutable once set. A create must sit inside the rule's 24h window, so a
+    // brand-new profile uses now rather than anything carried in from the caller.
+    createdAt:stored?Number(stored.createdAt||0):Date.now()
   },{merge:true});
 }
 

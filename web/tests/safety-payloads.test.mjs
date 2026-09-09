@@ -115,6 +115,46 @@ test('client writes never touch the backend-maintained recipe counters', () => {
   assert.ok(!/batch\.update\(recipeRef/.test(compact), 'addComment must not update the recipe document');
 });
 
+test('the profile payload writes every field validUserProfileShape requires', () => {
+  // The rule uses hasAll, so a missing field fails the write completely. Omitting
+  // coverPhotoUrl and favoriteThings meant a create was rejected and the account
+  // ended up with no profile document -- which then broke every write the rules
+  // check with profileNameMatches: comments, replies, publishing and messaging.
+  const shape = ruleBlock('function validUserProfileShape');
+  const required = ['displayName', 'bio', 'photoUrl', 'coverPhotoUrl', 'favoriteThings', 'createdAt'];
+  assert.ok(shape.includes(`hasAll([${required.map((k) => `'${k}'`).join(', ')}])`),
+    'the required profile field set changed');
+  for (const key of required) {
+    assert.ok(new RegExp(`\\b${key}\\s*:`).test(clientSource), `saveUserProfile no longer writes ${key}`);
+  }
+});
+
+test('the profile write never sends the backend-maintained follower count', () => {
+  // followerCount is backend-owned, and the update rule forbids changing it.
+  // merge preserves it only because the client does not send it.
+  const saveBlock = clientSource.slice(
+    clientSource.indexOf('export async function saveUserProfile'),
+    clientSource.indexOf('export function observePublicRecipes')
+  );
+  assert.ok(saveBlock.length > 0, 'saveUserProfile not found');
+  assert.ok(!/followerCount\s*:/.test(saveBlock), 'saveUserProfile must not write followerCount');
+  assert.ok(/\{\s*merge\s*:\s*true\s*\}/.test(saveBlock), 'the profile write must merge so backend fields survive');
+});
+
+test('createdAt is read back rather than guessed on a profile update', () => {
+  // The update rule requires createdAt to equal the stored value, so sending
+  // Date.now() on an existing profile is a guaranteed permission denial.
+  const saveBlock = clientSource.slice(
+    clientSource.indexOf('export async function saveUserProfile'),
+    clientSource.indexOf('export function observePublicRecipes')
+  );
+  assert.match(saveBlock, /getDoc\(ref\)/, 'saveUserProfile must read the stored profile before writing');
+  assert.match(saveBlock, /stored\s*\?\s*Number\(stored\.createdAt/,
+    'createdAt must come from the stored document when one exists');
+  const updateRule = ruleBlock('match /users/{uid}');
+  assert.ok(updateRule.includes('request.resource.data.createdAt == resource.data.createdAt'));
+});
+
 test('a chef cannot block themselves, matching the rule', () => {
   assert.ok(ruleBlock('match /blocks/{blockedUid}').includes('blockedUid != uid'));
   assert.ok(/blockedUid===user\.uid|blockedUid === user\.uid/.test(clientSource),

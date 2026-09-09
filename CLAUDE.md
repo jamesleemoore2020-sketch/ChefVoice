@@ -30,7 +30,7 @@ Tests live under `app/src/test/java/com/chefvoice/app/...`. The most important o
 
 **Billing gates** (`RUN_BILLING_GATES.cmd`): runs `node --test billing/launch-access.test.js` plus `node --check billing/functions/index.js`. Same limitation as the notification gates — source text and deploy scoping only, no rule evaluation.
 
-**Firestore rules gates** (`RUN_RULES_GATES.cmd`): from `rules-tests/`, runs `npm install` (first run) then `npm test`, which is `firebase emulators:exec --only firestore --project chefvoice-rules-test "node --test firestore-rules.test.js"` — requires the Firebase CLI and emulator.
+**Firestore rules gates** (`RUN_RULES_GATES.cmd`): from `rules-tests/`, runs `npm install` (first run) then `npm test`, which is `firebase emulators:exec --only firestore --project chefvoice-rules-test "node --test firestore-rules.test.js"` — requires the Firebase CLI and emulator. This is the **only** gate that actually evaluates a security rule; everything else is source-text checking. Note the emulator JVM often survives `emulators:exec` on Windows and then blocks the next run with "port taken" — clear it with `Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -like '*firebase*emulator*' } | Stop-Process -Force`.
 
 **Deploying backend pieces** (each is deliberately scoped/isolated — do not broaden them without being asked):
 - `DEPLOY_NOTIFICATIONS.cmd` — deploys only the `chefvoice-notifications` Cloud Functions codebase (`firebase deploy --only functions:chefvoice-notifications`). Does not touch `transcribeChefVoice`, Hosting, Storage, or App Check.

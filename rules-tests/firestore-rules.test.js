@@ -416,3 +416,55 @@ test("a chef on a 90-day promo cannot extend their own expiry", async () => {
     })
   );
 });
+
+// Regression: the PWA's saveUserProfile wrote only displayName, bio, photoUrl and
+// createdAt. validUserProfileShape uses hasAll, so the create was rejected and the
+// account ended up with no profile document -- which then broke every write the
+// rules check with profileNameMatches (comments, replies, publishing, messaging).
+// The chef only ever saw "your chef profile is still loading".
+test("a profile create missing coverPhotoUrl and favoriteThings is rejected", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    await deleteDoc(doc(context.firestore(), "users", ALICE));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "users", ALICE), {
+      displayName: "Alice",
+      bio: "",
+      photoUrl: "",
+      createdAt: now(),
+    })
+  );
+  // The same write with the two missing keys present is accepted, which is the
+  // whole difference between a working account and one with no profile at all.
+  await assertSucceeds(setDoc(doc(db, "users", ALICE), profile("Alice", now())));
+});
+
+test("a profile update may not move createdAt", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE), profile("Alice", now() - 90 * DAY_MS));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  // What the client did when the profile had not loaded: a fresh timestamp.
+  await assertFails(setDoc(doc(db, "users", ALICE), profile("Alice Renamed", now()), { merge: true }));
+});
+
+test("a profile update preserving the stored createdAt succeeds", async () => {
+  const createdAt = now() - 90 * DAY_MS;
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE), profile("Alice", createdAt));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(setDoc(doc(db, "users", ALICE), profile("Alice Renamed", createdAt), { merge: true }));
+});
+
+test("a chef cannot raise their own follower count through a profile write", async () => {
+  const createdAt = now() - 90 * DAY_MS;
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE), { ...profile("Alice", createdAt), followerCount: 3 });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "users", ALICE), { ...profile("Alice", createdAt), followerCount: 9999 }, { merge: true })
+  );
+});

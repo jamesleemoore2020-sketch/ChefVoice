@@ -30,6 +30,7 @@ const form={title:'',description:'',servings:'2'};
 const cloud={
   state:'connecting',message:'Connecting to ChefVoice Community…',api:null,user:null,profile:null,recipes:[],feedError:'',
   liked:new Set(),bookmarks:new Set(),following:new Set(),entitlement:{...FREE_ENTITLEMENT},blocked:new Set(),
+  profileLoaded:false,profileError:'',
   conversations:[],messageReads:{},notifications:[],
   unsubAuth:null,unsubFeed:null,unsubProfile:null,unsubLiked:null,unsubBookmarks:null,unsubFollowing:null,unsubComments:null,unsubEntitlement:null,unsubBlocked:null,
   unsubConversations:null,unsubMessageReads:null,unsubNotifications:null,unsubThread:null,unsubChefRecipes:null
@@ -51,6 +52,7 @@ function clearUserObservers(){
   for(const key of ['unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread']){try{cloud[key]?.();}catch{} cloud[key]=null;}
   cloud.profile=null;cloud.liked=new Set();cloud.bookmarks=new Set();cloud.following=new Set();
   cloud.entitlement={...FREE_ENTITLEMENT};cloud.blocked=new Set();
+  cloud.profileLoaded=false;cloud.profileError='';
   cloud.conversations=[];cloud.messageReads={};cloud.notifications=[];
   openConversation=null;threadMessages=[];
   // Chef search is sign-in gated, so signing out has to clear its results too.
@@ -60,7 +62,16 @@ function clearUserObservers(){
 function startUserObservers(user){
   clearUserObservers();
   if(!user||!cloud.api)return;
-  cloud.unsubProfile=cloud.api.observeProfile(user.uid,p=>{cloud.profile=p;if(currentTab==='profile'||currentTab==='community'||currentTab==='recipes')render();});
+  // profileLoaded distinguishes "the listener has not fired yet" from "it fired
+  // and this account has no profile document", which need different messages:
+  // one resolves itself, the other needs the chef to save a display name.
+  cloud.unsubProfile=cloud.api.observeProfile(user.uid,p=>{
+    cloud.profile=p;cloud.profileLoaded=true;cloud.profileError='';
+    if(currentTab==='profile'||currentTab==='community'||currentTab==='recipes')render();
+  },err=>{
+    cloud.profileLoaded=true;cloud.profileError=err?.message||'Your chef profile could not be loaded.';
+    if(currentTab==='profile')render();
+  });
   cloud.unsubEntitlement=cloud.api.observeProEntitlement(user.uid,e=>{cloud.entitlement=e;if(currentTab==='profile'||currentTab==='recipes')render();});
   cloud.unsubBlocked=cloud.api.observeBlockedUserIds(user.uid,s=>{cloud.blocked=s;if(currentTab==='community'||currentTab==='profile')render();});
   cloud.unsubConversations=cloud.api.observeConversations(user.uid,items=>{cloud.conversations=items;updateInboxBadge();if(currentTab==='inbox')render();});
@@ -134,8 +145,12 @@ const chefName=()=>cloud.profile?.displayName||cloud.user?.email?.split('@')[0]|
  */
 function requireProfileName(){
   const name=String(cloud.profile?.displayName||'').trim();
-  if(!name)throw new Error('Your chef profile is still loading. Try again in a moment.');
-  return name;
+  if(name)return name;
+  if(cloud.profileError)throw new Error(cloud.profileError);
+  // Once the listener has reported, a missing name means there is no profile
+  // document — the chef has to save one before any name-checked write can pass.
+  if(cloud.profileLoaded)throw new Error('Set your chef display name in Profile before posting.');
+  throw new Error('Your chef profile is still loading. Try again in a moment.');
 }
 const cloudReady=()=>cloud.state==='ready'&&cloud.api;
 
@@ -651,7 +666,12 @@ function membershipTemplate(){
 function profileTemplate(){
   const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
   const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
-  const firebaseCard=cloud.user?`<section class="card"><div class="quality">Connected to ChefVoice Firebase</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2><div class="field"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><div id="cloudAuthStatus" class="hint">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint"></div></div></section>`;
+  const profileNotice=cloud.user&&cloud.profileError
+    ?`<div class="notice">${escapeHtml(cloud.profileError)}</div>`
+    :cloud.user&&cloud.profileLoaded&&!cloud.profile
+      ?'<div class="notice">This account has no chef profile yet. Set a display name and save — Community posting, messages and publishing all need it.</div>'
+      :'';
+  const firebaseCard=cloud.user?`<section class="card"><div class="quality">Connected to ChefVoice Firebase</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2>${profileNotice}<div class="field"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><div id="cloudAuthStatus" class="hint">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint"></div></div></section>`;
   const pushCard=cloud.user
     ?`<section class="card"><h2>Notifications</h2><p class="status">The Activity tab in your Inbox always works. Push also alerts you when ChefVoice is closed.</p><div id="pushStatus" class="hint">${escapeHtml(pushMessage||'')}</div><div class="row wrap" style="margin-top:8px"><button class="secondary" id="enablePush">Turn on push</button><button class="ghost" id="disablePush">Turn off on this device</button></div></section>`
     :'';
