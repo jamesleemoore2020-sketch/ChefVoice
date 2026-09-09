@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.chefvoice.app.analytics.ChefAnalytics
 import com.chefvoice.app.cloud.FirebaseSocialRepository
 import com.chefvoice.app.data.RecipeRepository
 import com.chefvoice.app.media.AudioPlayer
@@ -1055,9 +1056,23 @@ class ChefAppState(context: Context) {
 
     val videoAllowed: Boolean get() = isPro
 
-    fun showPaywall(trigger: String) { paywallTrigger = trigger }
+    /**
+     * The single way a paywall is raised. Every caller goes through here so that
+     * `paywall_shown` cannot be missed by a surface that sets the trigger directly,
+     * and so the trigger recorded in analytics is always the one the chef actually saw.
+     */
+    fun showPaywall(trigger: String) {
+        if (paywallTrigger == trigger) return
+        paywallTrigger = trigger
+        ChefAnalytics.paywallShown(trigger)
+    }
 
-    fun dismissPaywall() { paywallTrigger = "" }
+    fun dismissPaywall() {
+        val trigger = paywallTrigger
+        if (trigger.isBlank()) return
+        paywallTrigger = ""
+        ChefAnalytics.paywallDismissed(trigger)
+    }
 
     fun runSecondPass(recipe: Recipe) {
         if (secondPassBusyRecipeId.isNotBlank()) return
@@ -1075,7 +1090,7 @@ class ChefAppState(context: Context) {
             // moment the chef already understands what Second Pass does for them.
             secondPassMessage = "You have used all " + secondPassMonthlyLimit +
                 " Second Pass reviews this month."
-            paywallTrigger = "second_pass"
+            showPaywall(PaywallTrigger.SECOND_PASS)
             return
         }
                 val audioPath = secondPassAudioPath(recipe)
@@ -1085,6 +1100,10 @@ class ChefAppState(context: Context) {
         }
 
         secondPassBusyRecipeId = recipe.id
+        // Recorded here rather than at the tap: every gate above is a reason the review
+        // never ran, and counting those as opens would inflate the denominator the
+        // paywall's conversion rate is measured against.
+        ChefAnalytics.secondPassOpened()
         secondPassMessage = "Uploading the private original audio and running Chirp 3. This can take a few minutes."
         cloud.transcribePrivateChefVoice(recipe.id, audioPath) { cloudResult, error ->
             secondPassBusyRecipeId = ""
@@ -1135,6 +1154,7 @@ class ChefAppState(context: Context) {
         )
         saveRecipe(updated)
         if (selectedRecipe?.id == recipeId) selectedRecipe = updated
+        ChefAnalytics.secondPassAccepted(ChefAnalytics.KIND_INGREDIENT)
         secondPassMessage = secondPassReviewMessage(updatedResult)
     }
 
@@ -1172,6 +1192,7 @@ class ChefAppState(context: Context) {
         )
         saveRecipe(updated)
         if (selectedRecipe?.id == recipeId) selectedRecipe = updated
+        ChefAnalytics.secondPassAccepted(ChefAnalytics.KIND_METHOD)
         secondPassMessage = secondPassReviewMessage(updatedResult)
     }
 
@@ -1272,7 +1293,7 @@ class ChefAppState(context: Context) {
         if (!recipe.isPublic && cloudRecipesRemaining <= 0) {
             cloudMessage = "Free accounts sync " + FreeTierLimits.CLOUD_RECIPES +
                 " recipes to the cloud. This recipe stays saved on this phone."
-            paywallTrigger = "cloud_limit"
+            showPaywall(PaywallTrigger.CLOUD_LIMIT)
             return
         }
         val localPublished = recipe.copy(

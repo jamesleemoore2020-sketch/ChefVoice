@@ -125,6 +125,13 @@ dependencies {
     implementation("com.google.firebase:firebase-messaging")
     implementation("com.google.firebase:firebase-installations")
 
+    // Product analytics. Instrumented before the paywall ships: retrofitting
+    // events afterwards makes the first month of paywall data unusable, because
+    // there is no pre-paywall baseline to compare a conversion rate against.
+    // firebase-analytics also logs first_open automatically, which is the
+    // install event -- ChefVoice does not emit a duplicate of its own.
+    implementation("com.google.firebase:firebase-analytics")
+
     // App Check is staged in monitoring mode. Debug builds use Firebase's debug
     // provider so sideloaded real-device validation remains possible; release builds
     // use Play Integrity. Backend enforcement stays OFF until metrics are proven.

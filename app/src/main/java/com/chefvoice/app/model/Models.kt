@@ -272,6 +272,27 @@ data class ProEntitlement(
 
     val isAnnual: Boolean get() = productId == PRODUCT_ANNUAL
 
+    /** Granted a founding seat: 2 free years, never revoked by the promo kill switch. */
+    val isFounding: Boolean get() = source == SOURCE_FOUNDING
+
+    /** Inside the free 90-day launch window rather than paying. */
+    val isPromo: Boolean get() = source == SOURCE_PROMO
+
+    /**
+     * Pro without paying for it. The UI must not describe these chefs as subscribers,
+     * offer them a "manage subscription" link, or warn them about a payment method
+     * they never entered.
+     */
+    val isComplimentary: Boolean get() = isFounding || isPromo
+
+    /** Whole days of a promo window still remaining, floored at zero. */
+    fun daysRemaining(nowMs: Long = System.currentTimeMillis()): Int {
+        if (expiresAt <= 0L) return Int.MAX_VALUE
+        val remaining = expiresAt - nowMs
+        if (remaining <= 0L) return 0
+        return ((remaining + 86_400_000L - 1L) / 86_400_000L).toInt()
+    }
+
     companion object {
         const val STATUS_ACTIVE = "active"
         const val STATUS_IN_GRACE = "in_grace"
@@ -281,6 +302,15 @@ data class ProEntitlement(
 
         const val PRODUCT_MONTHLY = "chefvoice_pro_monthly"
         const val PRODUCT_ANNUAL = "chefvoice_pro_annual"
+
+        /** A verified Google Play purchase. */
+        const val SOURCE_PLAY = "play"
+
+        /** One of the first 10 signups. Two free years, written by chefvoice-billing. */
+        const val SOURCE_FOUNDING = "founding"
+
+        /** The free 90-day launch window granted at signup. */
+        const val SOURCE_PROMO = "promo"
 
         val FREE = ProEntitlement()
     }
@@ -303,4 +333,19 @@ object FreeTierLimits {
 object ProTierLimits {
     const val SECOND_PASS_PER_MONTH = 30
     const val VIDEO_ALLOWED = true
+}
+
+/**
+ * Launch access, granted by the `chefvoice-billing` Functions codebase.
+ *
+ * These numbers are display copy only. The backend owns the real decision and writes
+ * the entitlement document; the app never grants itself anything. They are mirrored
+ * here so the membership card can say "one of the first 10", "2 years" and "90 days"
+ * without inventing numbers, and they must be changed in both places together —
+ * `billing/functions/index.js` holds the authoritative set.
+ */
+object FoundingAccess {
+    const val SEATS = 10
+    const val FOUNDING_YEARS = 2
+    const val PROMO_DAYS = 90
 }

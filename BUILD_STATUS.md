@@ -38,6 +38,43 @@ See `LAUNCH_ACCESS_FOUNDING_AND_PROMO_0.11.0.md`.
 
 ---
 
+# ChefVoice Android 0.11.0 work — Product Analytics Instrumentation
+
+- Work Item D of the monetization handoff. Instrumentation only: no user-visible
+  change, no behaviour change, no new gating.
+- Adds `com.google.firebase:firebase-analytics` (BoM-managed) and
+  `analytics/ChefAnalytics.kt`, a single object owning the event vocabulary and every
+  emission.
+- Events wired: `first_recipe_started`, `first_recipe_completed` (the activation
+  metric), `second_recipe_completed`, `second_pass_opened`, `second_pass_accepted`
+  (with `kind`), `paywall_shown` (with `trigger`), `paywall_dismissed`.
+- Billing events (`checkout_started`, `purchase_completed`, `subscription_cancelled`,
+  `billing_failure`) are declared but have no emitter — there is no Play Billing
+  integration yet. The names are fixed now so the vocabulary does not drift.
+- `install` is deliberately not emitted: Firebase Analytics logs `first_open`
+  automatically with campaign attribution, and a custom duplicate would double-count
+  installs in every funnel built on it.
+- The module never throws, is a no-op when Firebase is not configured, and sends no
+  personal or recipe content — no titles, transcripts, ingredients, names, emails,
+  uids or purchase tokens.
+- Only behavioural edit: `runSecondPass` and `publish` assigned `paywallTrigger`
+  directly, bypassing `showPaywall`. Both now route through it so `paywall_shown`
+  cannot be missed. Behaviour-preserving — same trigger strings, now from the
+  `PaywallTrigger` constants rather than repeated literals.
+- Protected parser and golden cooking corpus, Second Pass semantics, Firestore and
+  Storage rules, Live/WebRTC, App Check state (still OFF), `transcribeChefVoice` and
+  the `chefvoice-notifications` codebase are all unchanged. Nothing was deployed.
+- Version intentionally NOT bumped: stays 0.10.6 / `versionCode 58`, matching the two
+  monetization commits before it. 0.11.0 is not shippable without billing, and the
+  four `versionCode 58` pins in `notifications/*.test.js` still hold.
+- Status: compiles, `:app:testDebugUnitTest` and the golden cooking corpus pass.
+  **Not yet verified on a real device** — the events still need a Firebase DebugView
+  run to confirm they arrive with the right parameters.
+
+See `ANALYTICS_INSTRUMENTATION_0.11.0.md`.
+
+---
+
 # ChefVoice Android v0.10.6 — Account Deletion Re-auth + Web Deletion Resource
 
 - Policy fix only, shipped standalone (not bundled with feature work).

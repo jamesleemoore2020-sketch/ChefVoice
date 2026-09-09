@@ -1,6 +1,7 @@
 package com.chefvoice.app
 
 import android.app.Application
+import com.chefvoice.app.analytics.ChefAnalytics
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -21,6 +22,13 @@ import okio.Path.Companion.toOkioPath
  * us size-aware decoding, a memory cache, a disk cache and request cancellation.
  */
 class ChefVoiceApplication : Application(), SingletonImageLoader.Factory {
+
+    override fun onCreate() {
+        super.onCreate()
+        // Analytics is best-effort and self-guarding: if Firebase is not configured in
+        // this checkout, every event becomes a no-op rather than a crash on launch.
+        ChefAnalytics.initialize(this)
+    }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)

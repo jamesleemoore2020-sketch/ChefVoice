@@ -79,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.chefvoice.app.R
 import androidx.core.content.FileProvider
+import com.chefvoice.app.analytics.ChefAnalytics
 import com.chefvoice.app.media.AudioPlayer
 import com.chefvoice.app.media.AudioRecorder
 import com.chefvoice.app.media.copyPickedMedia
@@ -94,6 +95,7 @@ import com.chefvoice.app.model.LiveSession
 import com.chefvoice.app.model.MediaAttachment
 import com.chefvoice.app.model.MediaType
 import com.chefvoice.app.model.NotificationPreferences
+import com.chefvoice.app.model.FoundingAccess
 import com.chefvoice.app.model.FreeTierLimits
 import com.chefvoice.app.model.ProEntitlement
 import com.chefvoice.app.model.ProTierLimits
@@ -413,6 +415,11 @@ fun ChefVoiceApp(
                                 authorName = appState.displayName,
                                 onSaved = {
                                     appState.saveRecipe(it)
+                                    // Recorded here rather than inside saveRecipe, which
+                                    // is also the update path for edits, second-pass
+                                    // accepts and publishing. Only this callback means a
+                                    // chef finished making a new recipe.
+                                    ChefAnalytics.recipeCompleted()
                                     navigateTab(Tab.LIBRARY)
                                 }
                             )
@@ -796,6 +803,9 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
         isProcessingSession = false
         if (sessionCapture.start()) {
             isSessionCapturing = true
+            // Only once recognition is actually running: a denied microphone permission
+            // or a failed start is not a chef who began narrating.
+            ChefAnalytics.recipeCaptureStarted()
             // Hold the microphone open if the chef leaves the app or the screen
             // locks. Without this the session kept running but captured silence.
             ChefVoiceForegroundService.start(context, ChefVoiceForegroundService.MODE_COOKING)
@@ -3098,6 +3108,20 @@ private object DemoPricing {
     const val ANNUAL_NOTE = "Save about 52% versus monthly"
 }
 
+/**
+ * Remaining complimentary access in whatever unit reads naturally. "641 days left" is
+ * true and useless; a chef two years into free Pro wants to hear months. Only used for
+ * the founding window — the 90-day promo stays in days, where the precision is the
+ * point and "2 months left" would blur a deadline that is close enough to matter.
+ */
+private fun remainingLabel(days: Int): String =
+    if (days >= 60) {
+        val months = days / 30
+        "$months month${if (months == 1) "" else "s"}"
+    } else {
+        "$days day${if (days == 1) "" else "s"}"
+    }
+
 @Composable
 private fun ProMembershipCard(
     isPro: Boolean,
@@ -3111,7 +3135,12 @@ private fun ProMembershipCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (isPro) "ChefVoice Pro" else "ChefVoice Free",
+                    when {
+                        isPro && entitlement.isFounding -> "ChefVoice Pro · Founding member"
+                        isPro && entitlement.isPromo -> "ChefVoice Pro · Free launch access"
+                        isPro -> "ChefVoice Pro"
+                        else -> "ChefVoice Free"
+                    },
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
@@ -3119,6 +3148,40 @@ private fun ProMembershipCard(
             }
 
             when {
+                // Complimentary access is stated plainly, before any payment-state
+                // messaging below. These chefs never entered a payment method, so
+                // warning them about one, or offering to manage a subscription they
+                // do not have, would be nonsense.
+                isPro && entitlement.isFounding -> {
+                    val days = entitlement.daysRemaining()
+                    Text(
+                        when {
+                            days <= 0 ->
+                                "Your founding Pro access has ended. Everything you cooked stays yours."
+                            // Defensive: a founding grant always carries an expiry now.
+                            days == Int.MAX_VALUE ->
+                                "You were one of the first ${FoundingAccess.SEATS} chefs on " +
+                                    "ChefVoice. Pro is yours — no card, no renewal, nothing to cancel."
+                            else ->
+                                "You were one of the first ${FoundingAccess.SEATS} chefs on " +
+                                    "ChefVoice. Pro is free for ${FoundingAccess.FOUNDING_YEARS} " +
+                                    "years — ${remainingLabel(days)} left. No card, no renewal, " +
+                                    "nothing to cancel."
+                        },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                isPro && entitlement.isPromo -> {
+                    val days = entitlement.daysRemaining()
+                    Text(
+                        if (days > 0)
+                            "The first ${FoundingAccess.PROMO_DAYS} days of Pro are free — " +
+                                "$days ${if (days == 1) "day" else "days"} left. " +
+                                "No card, and nothing happens automatically when it ends."
+                        else "Your free Pro access has ended. Everything you cooked stays yours.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 // Grace period and account hold are the states worth surfacing plainly.
                 // A large share of subscription churn is a failed card, not a decision,
                 // and a chef who does not know their payment failed cannot fix it.
