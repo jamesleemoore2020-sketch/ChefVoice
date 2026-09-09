@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ChefVoice is an Android app (Kotlin/Compose) that lets a chef narrate a cooking session out loud; a deterministic (non-LLM) parser turns the raw speech transcript into structured ingredients and method steps. Around that core sits a Firebase-backed social/community layer (recipes, profiles, following, comments, likes, messaging, live video) and a notifications system, each isolated in their own deploy unit.
 
-There is no top-level package manager for the whole repo — this is a Gradle Android project (`app/`) plus several independent Node.js test/function projects (`notifications/functions/`, `rules-tests/`). It is a git repository (`master` is the main branch).
+There is no top-level package manager for the whole repo — this is a Gradle Android project (`app/`) plus several independent Node.js test/function/web projects (`notifications/functions/`, `billing/functions/`, `rules-tests/`, `web/`). It is a git repository (`master` is the main branch).
 
 ## Commands
 
@@ -24,7 +24,7 @@ gradlew.bat :app:testDebugUnitTest
 ```
 Tests live under `app/src/test/java/com/chefvoice/app/...`. The most important one is `voice/GoldenCookingCorpusTest.kt`, which runs `shared/golden-cooking-corpus.tsv` through the parser (see Architecture below).
 
-**Parser gates** (`RUN_PARSER_GATES.cmd`): runs PWA tests in a `web/` directory *and* `gradlew.bat :app:testDebugUnitTest`. Note: there is currently no `web/` directory in this checkout, so this script will fail at the PWA step until/unless that project exists again — don't be surprised by it, and don't try to recreate `web/` unless asked.
+**Parser gates** (`RUN_PARSER_GATES.cmd`): runs PWA tests in `web/` (`npm test`, i.e. `node --test tests/*.test.mjs` — no npm dependencies required) *and* `gradlew.bat :app:testDebugUnitTest`.
 
 **Notification gates** (`RUN_NOTIFICATION_GATES.cmd`): runs `node --test` over the JS test files in `notifications/` and `notifications/functions/`, plus `node --check notifications/functions/index.js` as a syntax gate. Requires Node on PATH. This only checks source text / path shapes — it cannot evaluate a Firestore security rule.
 
@@ -55,7 +55,7 @@ Key invariants, stated repeatedly across those docs and worth internalizing:
 - **Second Pass (`SecondPassReviewer.kt`) is explicit, opt-in review**, not automatic correction — it re-runs a returned transcript (e.g. from the Chirp 3 speech backend) through the same deterministic parser and presents differences for the user to accept ("Use second pass") or reject ("Keep current").
 - Files in the voice pipeline, in rough data-flow order: `CookingSessionCapture.kt` (recording/ASR segments) → `CookingSessionParser.kt` (segment/window/whole-transcript parsing → `CookingDraft`) → `IngredientParser.kt` / `IngredientNormalizer.kt` / `IngredientReviewClassifier.kt` (ingredient-specific cleanup and confidence classification) → `RecipeCanonicalizer.kt` (final shape) → `SecondPassReviewer.kt` (optional re-parse + diff against original).
 
-**`shared/golden-cooking-corpus.tsv`** is the cross-platform regression contract: each row is a real or representative transcript fixture with its expected structured ingredients and required method-step substrings. The rule (from `shared/README.md`): when a real phrase fails on-device, add it as a new corpus row *first*, confirm which platform fails, then fix the parser without weakening any existing row. `GoldenCookingCorpusTest.kt` runs this corpus against the Android parser. A PWA counterpart used to run the same corpus (see the `web/` note above).
+**`shared/golden-cooking-corpus.tsv`** is the cross-platform regression contract: each row is a real or representative transcript fixture with its expected structured ingredients and required method-step substrings. The rule (from `shared/README.md`): when a real phrase fails on-device, add it as a new corpus row *first*, confirm which platform fails, then fix the parser without weakening any existing row. `GoldenCookingCorpusTest.kt` runs this corpus against the Android parser; `web/tests/golden-corpus.test.mjs` runs the identical corpus against the PWA's JS port of the same parser (`web/js/cooking-session-parser.js` / `ingredient-parser.js`). Both must pass every row before either side ships a parser change — when you fix one, port the fix to the other and re-run both gates.
 
 ### Android app structure
 

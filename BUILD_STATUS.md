@@ -1,3 +1,34 @@
+# ChefVoice PWA — Parser Parity Restored (0.11.0)
+
+- `web/` was missing from this checkout entirely, not just out of date. Recovered
+  the real source (v0.7.0 alpha.3, `chefvoice-pwa@0.3.0`) from a user-supplied
+  backup and brought it back into the repo.
+- Its JS parser predated roughly fifteen real-device point-release fixes and
+  passed 36/56 rows of the current `shared/golden-cooking-corpus.tsv`.
+- Rewrote `web/js/cooking-session-parser.js` and `web/js/ingredient-parser.js`
+  to port every remaining piece of `CookingSessionParser.kt`/`IngredientParser.kt`
+  (determiner-gated `need`, yield-sentence suppression, back-reference rejection,
+  trailing-quantity ingredients, segment-aware step collection, scratch/wait/
+  quantity corrections, `RecipeCanonicalizer` post-processing, the `chunk` unit
+  alias, `cupful`/`tbsp spoon` ASR repairs), staying line-close to the Kotlin
+  source so a future fix is easy to port either direction.
+- Added `web/tests/golden-corpus.test.mjs` (runs the identical 56-row corpus,
+  same row-count guard as Android) and `web/tests/real-device-fixtures.test.mjs`
+  (ports the 5 Kotlin fixture tests that assert exact step order and step
+  "must NOT contain X" negatives, which the corpus can't express).
+- Result: 56/56 corpus rows, 26/26 `npm test`, all 20 pre-existing PWA tests
+  unmodified and passing. `RUN_PARSER_GATES.cmd` now runs to completion.
+- Explicitly out of scope: the rest of the PWA UI (community/profile/live,
+  `app.js`, `firebase-client.js`) is still the v0.3.0 alpha and does not reflect
+  Android's newer social/analytics/monetization features. Parser parity only.
+- Protected: Android parser, rules, Live/WebRTC, App Check (still OFF), both
+  Functions codebases, `transcribeChefVoice` all unchanged. Nothing deployed.
+  Version unchanged: 0.10.6 / `versionCode 58`.
+
+See `PWA_PARSER_PARITY_0.11.0.md`.
+
+---
+
 # ChefVoice Android 0.11.0 work — Parser: Ingredient Declarations, Yield Sentences, Back-references
 
 - Deterministic parser fix driven by a real Android nachos capture (0909). Corpus-first

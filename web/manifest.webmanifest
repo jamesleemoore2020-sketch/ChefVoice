@@ -1,0 +1,14 @@
+{
+  "name": "ChefVoice",
+  "short_name": "ChefVoice",
+  "description": "Cook, talk, and let ChefVoice build an editable recipe draft while preserving the chef's original voice.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fffbf8",
+  "theme_color": "#f06423",
+  "orientation": "portrait-primary",
+  "icons": [
+    {"src":"assets/chefvoice-icon.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}
