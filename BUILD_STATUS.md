@@ -1,3 +1,42 @@
+# ChefVoice PWA — Entitlements, Analytics, Blocking & Moderation (0.11.0)
+
+- Brings the Android feature work that sits *around* the parser across to `web/`,
+  following the parser-parity restore below.
+- `entitlement.js` mirrors `ProEntitlement`/tier limits/`FoundingAccess`: active and
+  in_grace unlock Pro, on_hold/paused/unknown do not, founding and promo read as
+  complimentary so the membership card never treats those chefs as subscribers, and
+  every check fails closed to Free. Read-only by rule; the client grants nothing.
+- Found and fixed by its own test: Kotlin's `getString` returns null for a
+  non-string field so a malformed status falls through to `expired`, but JS
+  coercion turns `['active']` into `'active'` and would have unlocked Pro. The
+  normalizer now reads strictly by type.
+- `chef-analytics.js` mirrors `ChefAnalytics.kt`'s vocabulary and its three rules
+  (never throws, no-op without Analytics, no personal or recipe content).
+  `showPaywall`/`dismissPaywall` are the only entrance/exit, as on Android.
+- Deliberately NOT enforced: the video and per-recipe photo caps. Both exist in the
+  tier model on both platforms but Android has no call site for either. An earlier
+  draft gated them on web and it was reverted before shipping — enforcing on web
+  alone would give a Free chef a worse deal in Safari than on their phone.
+- Blocking and moderation reporting ported with payloads byte-compatible with
+  `firestore.rules` (exact key sets, 500-char reason cap, fixed `open` status).
+  Blocked chefs' recipes and comments are hidden from the Community feed and can be
+  unblocked from Profile.
+- Known gap filed as follow-up: Android consults `isUserBlocked` only in the
+  messaging UI, so its Community feed is still unfiltered.
+- `npm test` 39/39 (up from 26), including source-text gates asserting the block and
+  report payloads still match the rules. Android `:app:testDebugUnitTest` untouched
+  and still passing.
+- Verified in a browser against live Firebase: loads clean, feed renders, membership
+  card/paywall render and dismiss, cloud-recipe gate blocks at 10 for Free not Pro.
+  **Not verified:** the signed-in block/unblock/report round trip — needs real
+  credentials.
+- Still missing versus Android: messaging, push notifications, threaded replies,
+  chef search, Second Pass, Live. Nothing deployed. Version unchanged 0.10.6 / 58.
+
+See `PWA_SOCIAL_BILLING_ANALYTICS_0.11.0.md`.
+
+---
+
 # ChefVoice PWA — Parser Parity Restored (0.11.0)
 
 - `web/` was missing from this checkout entirely, not just out of date. Recovered
