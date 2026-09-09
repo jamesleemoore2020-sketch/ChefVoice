@@ -28,7 +28,7 @@ const cloud={
   liked:new Set(),bookmarks:new Set(),following:new Set(),entitlement:{...FREE_ENTITLEMENT},blocked:new Set(),
   conversations:[],messageReads:{},notifications:[],
   unsubAuth:null,unsubFeed:null,unsubProfile:null,unsubLiked:null,unsubBookmarks:null,unsubFollowing:null,unsubComments:null,unsubEntitlement:null,unsubBlocked:null,
-  unsubConversations:null,unsubMessageReads:null,unsubNotifications:null,unsubThread:null
+  unsubConversations:null,unsubMessageReads:null,unsubNotifications:null,unsubThread:null,unsubChefRecipes:null
 };
 
 // Inbox view state: which conversation is open, if any.
@@ -48,6 +48,9 @@ function clearUserObservers(){
   cloud.entitlement={...FREE_ENTITLEMENT};cloud.blocked=new Set();
   cloud.conversations=[];cloud.messageReads={};cloud.notifications=[];
   openConversation=null;threadMessages=[];
+  // Chef search is sign-in gated, so signing out has to clear its results too.
+  chefSearchTerm='';chefSearchResults=[];chefSearchStatus='';
+  closeChefProfile();
 }
 function startUserObservers(user){
   clearUserObservers();
@@ -150,6 +153,7 @@ function nav(tab){
   // Leaving the Inbox closes any open thread listener; openConversationView
   // re-establishes it when a conversation is opened again.
   if(tab!=='inbox')closeConversationView();
+  if(tab!=='community')closeChefProfile();
   currentTab=tab;
   tabs.forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   render();
@@ -299,7 +303,30 @@ function openRecipe(id){
   const load=document.querySelector('#loadChefVoice');if(load)load.onclick=async()=>{load.disabled=true;load.textContent='Loading…';const blob=await loadAudioBlob(r.id);const target=document.querySelector('#chefVoicePlayer');if(blob){const url=URL.createObjectURL(blob);target.innerHTML=`<audio class="audio-player" controls src="${url}"></audio>${isIOS?'<p class="hint">ChefVoice will refresh the voice engine before your next capture after audio playback if iOS requires it.</p>':''}`;}else target.innerHTML='<p class="status">The stored recording could not be found.</p>';load.remove();};
 }
 
+// Chef discovery state. Search needs sign-in because listing the users collection
+// does; a signed-out chef still gets the public feed.
+let chefSearchTerm='';
+let chefSearchResults=[];
+let chefSearchStatus='';
+let openChefProfile=null;
+let openChefRecipes=[];
+
+function chefProfileTemplate(){
+  const p=openChefProfile;
+  const self=cloud.user?.uid===p.uid;
+  const following=cloud.following.has(p.uid);
+  const blocked=cloud.blocked.has(p.uid);
+  const recipes=openChefRecipes.length
+    ?openChefRecipes.map(r=>`<article class="card"><div class="row between"><strong>${escapeHtml(r.title)}</strong><span class="pill">♥ ${r.likes||0}</span></div><p class="status">${r.ingredients.length} ingredients · ${r.steps.length} steps</p><button class="secondary" data-open-community-recipe="${escapeHtml(r.id)}">Open</button></article>`).join('')
+    :'<div class="empty card">No public recipes from this chef yet.</div>';
+  const actions=cloud.user&&!self
+    ?`<div class="row wrap"><button class="${following?'primary':'secondary'}" data-follow="${escapeHtml(p.uid)}">${following?'Following':'Follow chef'}</button><button class="secondary" data-message="${escapeHtml(p.uid)}">✉ Message</button><button class="ghost" data-report-user="${escapeHtml(p.uid)}">⚑ Report</button><button class="ghost" data-toggle-block="${escapeHtml(p.uid)}">${blocked?'Unblock':'Block'}</button></div>`
+    :'';
+  return `<button id="backCommunity" class="ghost">← Community</button><section class="card"><div class="row between"><h1>${escapeHtml(p.displayName)}</h1><span class="pill">${p.followerCount} follower${p.followerCount===1?'':'s'}</span></div>${p.bio?`<p class="status">${escapeHtml(p.bio)}</p>`:''}${p.favoriteThings?.length?`<div class="row wrap" style="margin-top:8px">${p.favoriteThings.map(t=>`<span class="pill">${escapeHtml(t)}</span>`).join('')}</div>`:''}${actions}</section><div id="safetyStatus" class="hint"></div>${blocked?'<div class="notice">You blocked this chef. Their recipes stay hidden in your Community feed.</div>':''}<div class="section-title"><h2>Public recipes</h2></div>${recipes}`;
+}
+
 function communityTemplate(){
+  if(openChefProfile)return chefProfileTemplate();
   const cloudStatus=cloud.state==='ready'?'<span class="pill">Firebase connected</span>':cloud.state==='connecting'?'<span class="pill">Connecting…</span>':'<span class="pill">Local mode</span>';
   // Blocking has to actually hide the blocked chef's cooking, or the button is a
   // broken promise. Firestore rules already stop writes in both directions between
@@ -312,7 +339,13 @@ function communityTemplate(){
     return `<article class="card community-card">${hero?`<img class="community-thumb" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}">`:''}<div class="row between"><div><h3>${escapeHtml(r.title)}</h3><p class="status">by ${escapeHtml(r.authorName||'Chef')} · ${r.ingredients.length} ingredients · ${r.steps.length} steps</p></div><span class="pill">♥ ${r.likes||0}</span></div>${r.description?`<p>${escapeHtml(r.description)}</p>`:''}<div class="row wrap"><button class="${liked?'primary':'secondary'}" data-like="${r.id}">${liked?'♥ Liked':'♡ Like'}</button><button class="${bookmarked?'primary':'secondary'}" data-bookmark="${r.id}">${bookmarked?'★ Saved':'☆ Save'}</button><button class="secondary" data-comments="${r.id}">💬 ${r.commentCount||0}</button>${cloud.user&&!self?`<button class="${following?'primary':'ghost'}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow chef'}</button>`:''}${cloud.user&&!self?`<button class="secondary" data-message="${escapeHtml(r.authorId)}" data-message-name="${escapeHtml(r.authorName||'')}">✉ Message</button><button class="ghost" data-report="${escapeHtml(r.id)}" data-report-uid="${escapeHtml(r.authorId)}">⚑ Report</button><button class="ghost" data-block="${escapeHtml(r.authorId)}">Block chef</button>`:''}</div></article>`;
   }).join(''):`<div class="empty card">${cloud.feedError?`Community could not load: ${escapeHtml(cloud.feedError)}`:cloud.state==='connecting'?'Connecting to the real ChefVoice Community…':'No public Community recipes were returned.'}</div>`;
   const blockedNote=hiddenCount?`<div class="notice">${hiddenCount} recipe${hiddenCount===1?'':'s'} from chefs you blocked ${hiddenCount===1?'is':'are'} hidden. Manage blocked chefs from your Profile.</div>`:'';
-  return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">ChefVoice Community</div><h1>Android and iPhone, one kitchen.</h1><p>Both clients now use the same Firebase Authentication, Firestore and Storage project.</p></section><div class="row between" style="margin:10px 2px"><strong>Community feed</strong>${cloudStatus}</div><div id="safetyStatus" class="hint"></div>${!cloud.user?'<div class="notice">You can browse public recipes now. Sign in from Profile to like, save, follow and comment.</div>':''}${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${blockedNote}${feed}`;
+  const searchResults=chefSearchResults.length
+    ?`<div class="section-title"><h2>Chefs</h2><span class="count">${chefSearchResults.length} found</span></div>${chefSearchResults.map(p=>`<article class="card"><div class="row between"><div><strong>${escapeHtml(p.displayName)}</strong><p class="status">${escapeHtml(p.bio||'ChefVoice member')}</p></div><span class="pill">${p.followerCount} follower${p.followerCount===1?'':'s'}</span></div><button class="secondary" data-open-chef="${escapeHtml(p.uid)}">View chef</button></article>`).join('')}`
+    :'';
+  const search=cloud.user
+    ?`<section class="card"><div class="row"><input id="chefSearch" class="grow" placeholder="Search chefs by name, bio or favourites" value="${escapeHtml(chefSearchTerm)}"><button id="chefSearchBtn" class="secondary">Search</button></div>${chefSearchStatus?`<p class="hint">${escapeHtml(chefSearchStatus)}</p>`:''}</section>${searchResults}`
+    :'';
+  return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">ChefVoice Community</div><h1>Android and iPhone, one kitchen.</h1><p>Both clients now use the same Firebase Authentication, Firestore and Storage project.</p></section><div class="row between" style="margin:10px 2px"><strong>Community feed</strong>${cloudStatus}</div><div id="safetyStatus" class="hint"></div>${!cloud.user?'<div class="notice">You can browse public recipes now. Sign in from Profile to like, save, follow, comment and search for chefs.</div>':''}${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${search}${blockedNote}${feed}`;
 }
 function requireCommunitySignIn(){if(cloud.user)return true;nav('profile');return false;}
 function bindCommunity(){
@@ -323,6 +356,53 @@ function bindCommunity(){
   main.querySelectorAll('[data-report]').forEach(b=>b.onclick=()=>reportTarget({targetType:'recipe',targetId:b.dataset.report,targetUid:b.dataset.reportUid,contextId:b.dataset.report}));
   main.querySelectorAll('[data-block]').forEach(b=>b.onclick=()=>blockChef(b.dataset.block));
   main.querySelectorAll('[data-message]').forEach(b=>b.onclick=()=>messageChef(b.dataset.message));
+  main.querySelectorAll('[data-open-chef]').forEach(b=>b.onclick=()=>openChef(b.dataset.openChef));
+  main.querySelectorAll('[data-open-community-recipe]').forEach(b=>b.onclick=()=>openCommunityRecipe(b.dataset.openCommunityRecipe));
+  main.querySelectorAll('[data-report-user]').forEach(b=>b.onclick=()=>reportTarget({targetType:'user',targetId:b.dataset.reportUser,targetUid:b.dataset.reportUser,contextId:''}));
+  main.querySelectorAll('[data-toggle-block]').forEach(b=>b.onclick=async()=>{
+    const uid=b.dataset.toggleBlock;
+    if(cloud.blocked.has(uid))await unblockChef(uid);else await blockChef(uid);
+  });
+
+  const back=document.querySelector('#backCommunity');
+  if(back&&openChefProfile)back.onclick=()=>{closeChefProfile();render();};
+
+  const searchBtn=document.querySelector('#chefSearchBtn');
+  const searchBox=document.querySelector('#chefSearch');
+  const runSearch=async()=>{
+    chefSearchTerm=searchBox.value;
+    if(chefSearchTerm.trim().length<2){chefSearchStatus='Type at least two characters to search.';chefSearchResults=[];render();return;}
+    chefSearchStatus='Searching…';
+    render();
+    try{
+      chefSearchResults=await cloud.api.searchChefProfiles(chefSearchTerm);
+      chefSearchStatus=chefSearchResults.length?'':'No chefs matched that search.';
+    }catch(e){chefSearchResults=[];chefSearchStatus=e?.message||'Chef search could not be loaded.';}
+    render();
+  };
+  if(searchBtn)searchBtn.onclick=runSearch;
+  if(searchBox)searchBox.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();runSearch();}};
+}
+
+async function openChef(uid){
+  try{
+    const profile=await cloud.api.getProfile(uid);
+    if(!profile){safetyStatus('That chef profile could not be loaded.');return;}
+    closeChefProfile();
+    openChefProfile=profile;
+    openChefRecipes=[];
+    cloud.unsubChefRecipes=cloud.api.observeChefRecipes(uid,items=>{
+      openChefRecipes=items;
+      if(currentTab==='community')render();
+    },err=>safetyStatus(err?.message||'That chef\'s recipes could not be loaded.'));
+    render();
+  }catch(e){safetyStatus(e?.message||'That chef profile could not be loaded.');}
+}
+function closeChefProfile(){
+  try{cloud.unsubChefRecipes?.();}catch{}
+  cloud.unsubChefRecipes=null;
+  openChefProfile=null;
+  openChefRecipes=[];
 }
 
 // Which comment a reply is aimed at, if any. Cleared after posting so the next
@@ -617,5 +697,5 @@ function render(){
 }
 
 if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
-window.addEventListener('beforeunload',()=>{capture.close();for(const key of ['unsubAuth','unsubFeed','unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubComments','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread'])try{cloud[key]?.();}catch{}});
+window.addEventListener('beforeunload',()=>{capture.close();for(const key of ['unsubAuth','unsubFeed','unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubComments','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread','unsubChefRecipes'])try{cloud[key]?.();}catch{}});
 render();

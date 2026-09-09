@@ -16,7 +16,7 @@ const {initializeApp}=appSdk;
 const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut}=authSdk;
 const {
   getFirestore,collection,doc,limit,onSnapshot,query,setDoc,where,orderBy,
-  getDoc,deleteDoc,updateDoc,runTransaction,writeBatch
+  getDoc,getDocs,deleteDoc,updateDoc,runTransaction,writeBatch,documentId,startAfter
 }=firestoreSdk;
 const {getStorage,ref:storageRef,uploadBytes,getDownloadURL}=storageSdk;
 
@@ -217,6 +217,52 @@ export async function addComment(recipeId,text,authorName,parent=null){
     payload.replyToName=String(parent.authorName||'Chef');
   }
   await setDoc(doc(collection(db,'recipes',recipeId,'comments')),payload);
+}
+
+// ---- Chef discovery ---------------------------------------------------------
+// `allow get: if true` keeps single profile reads open for recipe cards, but
+// listing requires sign-in: "read: if true" would let anyone holding the API key
+// enumerate every chef's display name, bio and favorite things. Search therefore
+// pages the collection while signed in and filters client-side, matching
+// FirebaseSocialRepository.searchChefProfiles including its scan caps.
+
+const SEARCH_PAGE=50;
+const SEARCH_MAX_MATCHES=12;
+const SEARCH_MAX_SCANNED=300;
+
+export async function searchChefProfiles(searchText){
+  const term=String(searchText||'').trim().toLowerCase();
+  if(term.length<2)return [];
+  requireUser('Sign in to search for chefs.');
+
+  const matches=[];
+  let scanned=0;
+  let cursor=null;
+
+  while(matches.length<SEARCH_MAX_MATCHES&&scanned<SEARCH_MAX_SCANNED){
+    const constraints=[orderBy(documentId()),limit(SEARCH_PAGE)];
+    if(cursor)constraints.push(startAfter(cursor));
+    const snap=await getDocs(query(collection(db,'users'),...constraints));
+    scanned+=snap.size;
+    for(const d of snap.docs){
+      if(matches.length>=SEARCH_MAX_MATCHES)break;
+      const profile=normalizeProfile(d.id,d.data());
+      const haystack=[profile.displayName,profile.bio,...(profile.favoriteThings||[])].join(' ').toLowerCase();
+      if(haystack.includes(term))matches.push(profile);
+    }
+    cursor=snap.docs[snap.docs.length-1]||null;
+    if(snap.size<SEARCH_PAGE||!cursor)break;
+  }
+  return matches;
+}
+
+/** Public recipes by one chef. Follower identities stay private; only the count is public. */
+export function observeChefRecipes(authorUid,onChange,onError=()=>{}){
+  const q=query(collection(db,'recipes'),where('authorId','==',authorUid),where('isPublic','==',true),limit(50));
+  return onSnapshot(q,snap=>{
+    const items=snap.docs.map(d=>normalizeCloudRecipe(d.id,d.data())).sort((a,b)=>b.updatedAt-a.updatedAt);
+    onChange(items);
+  },onError);
 }
 
 // ---- Direct messages --------------------------------------------------------
@@ -421,7 +467,19 @@ function normalizeCloudRecipe(id,data={}){
     isPublic:data.isPublic===true,authorId:String(data.authorId||''),authorName:String(data.authorName||'Chef'),createdAt:Number(data.createdAt||0),updatedAt:Number(data.updatedAt||0),likes:Math.max(0,Number(data.likes||0)),commentCount:Math.max(0,Number(data.commentCount||0))
   };
 }
-function normalizeProfile(uid,data={}){return {uid,displayName:String(data.displayName||'Chef'),bio:String(data.bio||''),photoUrl:String(data.photoUrl||''),createdAt:Number(data.createdAt||Date.now())};}
+function normalizeProfile(uid,data={}){
+  return {
+    uid,
+    displayName:String(data.displayName||'Chef'),
+    bio:String(data.bio||''),
+    photoUrl:String(data.photoUrl||''),
+    coverPhotoUrl:String(data.coverPhotoUrl||''),
+    favoriteThings:Array.isArray(data.favoriteThings)?data.favoriteThings.map(String):[],
+    createdAt:Number(data.createdAt||Date.now()),
+    // Backend-maintained. Follower identities are private; only the count is public.
+    followerCount:Math.max(0,Number(data.followerCount||0))
+  };
+}
 function normalizeComment(data={}){return {authorId:String(data.authorId||''),authorName:String(data.authorName||'Chef'),text:String(data.text||''),createdAt:Number(data.createdAt||0),parentCommentId:String(data.parentCommentId||''),replyToUid:String(data.replyToUid||''),replyToName:String(data.replyToName||'')};}
 function normalizeConversation(id,data={}){
   const participantIds=Array.isArray(data.participantIds)?data.participantIds.map(String):[];
