@@ -15,13 +15,13 @@ import com.chefvoice.app.MainActivity
 import com.chefvoice.app.R
 
 /**
- * Keeps the microphone (and, while broadcasting, the camera) alive when ChefVoice
- * is not the foreground app.
+ * Keeps the microphone alive when ChefVoice is not the foreground app.
  *
- * Android 11 cuts microphone input to background apps and Android 9 blocks the
- * camera outright. Without this service a cooking session recorded silence the
- * moment the chef switched apps or the screen locked, and a Live broadcast had to
- * be killed on ON_STOP to avoid it dying silently.
+ * Android 11 cuts microphone input to background apps, so without this service a
+ * cooking session recorded silence the moment the chef switched apps or the screen
+ * locked. Live broadcasts start this service too, but only for the microphone type:
+ * ChefVoiceApp ends a broadcast on ON_STOP by design, so ChefVoice neither declares
+ * nor uses a camera foreground service type.
  */
 class ChefVoiceForegroundService : Service() {
 
@@ -57,9 +57,11 @@ class ChefVoiceForegroundService : Service() {
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            if (mode == MODE_LIVE) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-            startForeground(NOTIFICATION_ID, notification, types)
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            )
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
