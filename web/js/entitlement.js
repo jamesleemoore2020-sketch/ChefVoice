@@ -160,6 +160,47 @@ export function secondPassMonthlyLimit(isPro) {
   return isPro ? ProTierLimits.SECOND_PASS_PER_MONTH : FreeTierLimits.SECOND_PASS_PER_MONTH;
 }
 
+const SECOND_PASS_KEY = 'chefvoice.secondPass.usage';
+
+/** Calendar-month key, so the allowance resets the way the copy says it does. */
+export function monthKey(nowMs = Date.now()) {
+  const date = new Date(nowMs);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Second Pass reviews used this calendar month, on this device. Local bookkeeping
+ * only -- the cloud call is the real cost centre and the backend enforces its own
+ * budget; this exists so the UI can say what is left without lying.
+ */
+export function secondPassUsedThisMonth(nowMs = Date.now()) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(SECOND_PASS_KEY) || 'null');
+    if (!stored || stored.monthKey !== monthKey(nowMs)) return 0;
+    return Math.max(0, Number(stored.used) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Counted only after a successful cloud call. A failed review must not burn an
+ * allowance the chef never got the benefit of.
+ */
+export function recordSecondPassUse(nowMs = Date.now()) {
+  const used = secondPassUsedThisMonth(nowMs) + 1;
+  try {
+    localStorage.setItem(SECOND_PASS_KEY, JSON.stringify({ monthKey: monthKey(nowMs), used }));
+  } catch {
+    /* a browser with storage disabled still gets the review */
+  }
+  return used;
+}
+
+export function secondPassRemaining(isPro, nowMs = Date.now()) {
+  return Math.max(0, secondPassMonthlyLimit(isPro) - secondPassUsedThisMonth(nowMs));
+}
+
 /**
  * Remaining complimentary access in whatever unit reads naturally. "641 days left" is
  * true and useless; a chef two years into free Pro wants to hear months. Only used for

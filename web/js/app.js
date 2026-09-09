@@ -7,8 +7,12 @@ import {
 } from './storage.js';
 import {
   cloudRecipesRemaining, daysRemaining, FoundingAccess, FreeTierLimits, FREE_ENTITLEMENT,
-  isEntitlementActive, isFounding, isPromo, PaywallTrigger, remainingLabel
+  isEntitlementActive, isFounding, isPromo, PaywallTrigger, recordSecondPassUse, remainingLabel,
+  secondPassMonthlyLimit, secondPassRemaining
 } from './entitlement.js';
+import {
+  applyMethodSuggestion, applySuggestion, fromCloudTranscript
+} from './second-pass-reviewer.js';
 import * as ChefAnalytics from './chef-analytics.js';
 import {
   conversationUnread as isConversationUnread, otherParticipant, otherParticipantName,
@@ -295,11 +299,124 @@ function bindRecipes(){
   main.querySelectorAll('[data-unpublish]').forEach(b=>b.onclick=()=>unpublishLocalRecipe(b.dataset.unpublish,b));
   main.querySelectorAll('[data-delete-recipe]').forEach(b=>b.onclick=async()=>{const id=b.dataset.deleteRecipe;const r=recipes.find(x=>x.id===id);recipes=recipes.filter(x=>x.id!==id);saveRecipes(recipes);await deleteAudioBlob(id);await deleteRecipeMedia(r);render();});
 }
+// ---- Second Pass (ChefVoice Review) ----------------------------------------
+// Explicit, opt-in review. The result is held here until the chef accepts a
+// specific card; the saved recipe is never rewritten automatically.
+let secondPass={recipeId:'',busy:false,message:'',result:null};
+
+function secondPassTemplate(recipe){
+  if(!recipe.sessionAudio?.stored)return '';
+  const pro=isPro();
+  const remaining=secondPassRemaining(pro);
+  const limit=secondPassMonthlyLimit(pro);
+  if(secondPass.recipeId!==recipe.id||!secondPass.result){
+    return `<section class="card"><h2>ChefVoice Review</h2><p class="hint">Re-transcribes your original cooking audio in the cloud and shows what a cleaner transcript heard. Nothing changes until you accept a suggestion.</p><p class="status">${remaining} of ${limit} reviews left this month.</p><button id="runSecondPass" class="secondary wide"${secondPass.busy?' disabled':''}>${secondPass.busy?'Running…':'Run ChefVoice Review'}</button>${secondPass.message?`<p class="hint">${escapeHtml(secondPass.message)}</p>`:''}</section>`;
+  }
+
+  const result=secondPass.result;
+  const card=(issue,kind)=>{
+    const suggestion=kind==='ingredient'
+      ?(issue.suggested?[issue.suggested.quantity,issue.suggested.unit,issue.suggested.name].filter(Boolean).join(' '):'')
+      :(issue.suggestedStep||'');
+    // A live-only card has nothing to apply -- it is a heads-up, not an action.
+    const canApply=kind==='ingredient'?issue.type!=='live-only-low-confidence':issue.type!=='live-only-step';
+    return `<article class="card"><div class="row between"><strong>${escapeHtml(issue.title)}</strong><span class="pill">${Math.round(issue.confidence*100)}%</span></div><p class="status">${escapeHtml(issue.detail)}</p>${canApply?`<div class="row wrap"><button class="secondary" data-accept-${kind}="${escapeHtml(issue.id)}">${issue.type.startsWith('remove')?'Remove':'Use second pass'}</button><button class="ghost" data-dismiss-issue="${escapeHtml(issue.id)}">Keep current</button></div>`:''}${suggestion?`<p class="hint">Suggested: ${escapeHtml(suggestion)}</p>`:''}</article>`;
+  };
+  const issues=[...result.issues.map(i=>card(i,'ingredient')),...result.methodIssues.map(i=>card(i,'method'))].join('');
+  return `<section class="card"><h2>ChefVoice Review</h2><p class="status">${result.confirmedCount+result.methodConfirmedCount} confirmed · ${result.issues.length+result.methodIssues.length} to review.</p><p class="hint">Provider: ${escapeHtml(result.provider)} · ${escapeHtml(result.model)}. Your original audio is unchanged.</p><button id="closeSecondPass" class="ghost wide">Close review</button>${secondPass.message?`<p class="hint">${escapeHtml(secondPass.message)}</p>`:''}</section>${issues||'<div class="empty card">The second pass agreed with everything. Nothing to review.</div>'}<section class="card"><h3>Second pass transcript</h3><p class="hint">${escapeHtml(result.transcript||'No transcript returned.')}</p></section>`;
+}
+
+function bindSecondPass(recipe){
+  const run=document.querySelector('#runSecondPass');
+  if(run)run.onclick=()=>runSecondPass(recipe);
+  const close=document.querySelector('#closeSecondPass');
+  if(close)close.onclick=()=>{secondPass={recipeId:'',busy:false,message:'',result:null};openRecipe(recipe.id);};
+
+  main.querySelectorAll('[data-accept-ingredient]').forEach(b=>b.onclick=()=>{
+    const issue=secondPass.result.issues.find(i=>i.id===b.dataset.acceptIngredient);
+    if(!issue)return;
+    const updated={...recipe,ingredients:applySuggestion(recipe.ingredients||[],issue),updatedAt:Date.now()};
+    persistReviewed(updated,issue.id,'ingredient');
+  });
+  main.querySelectorAll('[data-accept-method]').forEach(b=>b.onclick=()=>{
+    const issue=secondPass.result.methodIssues.find(i=>i.id===b.dataset.acceptMethod);
+    if(!issue)return;
+    const updated={...recipe,steps:applyMethodSuggestion(recipe.steps||[],issue),updatedAt:Date.now()};
+    persistReviewed(updated,issue.id,'method');
+  });
+  main.querySelectorAll('[data-dismiss-issue]').forEach(b=>b.onclick=()=>{
+    // "Keep current" simply drops the card. The chef's text already stands.
+    secondPass.result={
+      ...secondPass.result,
+      issues:secondPass.result.issues.filter(i=>i.id!==b.dataset.dismissIssue),
+      methodIssues:secondPass.result.methodIssues.filter(i=>i.id!==b.dataset.dismissIssue)
+    };
+    openRecipe(recipe.id);
+  });
+}
+
+function persistReviewed(updated,issueId,kind){
+  const index=recipes.findIndex(x=>x.id===updated.id);
+  if(index<0)return;
+  recipes[index]=updated;
+  saveRecipes(recipes);
+  ChefAnalytics.secondPassAccepted(kind==='ingredient'?ChefAnalytics.KIND_INGREDIENT:ChefAnalytics.KIND_METHOD);
+  // Indices in the remaining cards refer to the list that just changed, so the
+  // review is rebuilt against the updated recipe rather than left stale.
+  secondPass.result=fromCloudTranscript({
+    liveIngredients:updated.ingredients||[],
+    liveSteps:updated.steps||[],
+    transcript:secondPass.result.transcript,
+    rawSegments:secondPass.result.rawSegments||[],
+    provider:secondPass.result.provider,
+    model:secondPass.result.model
+  });
+  secondPass.result.rawSegments=secondPass.rawSegments||[];
+  secondPass.message='Applied. Your recipe was updated on this device.';
+  openRecipe(updated.id);
+}
+
+async function runSecondPass(recipe){
+  if(!cloud.user){safetyStatus('Sign in to run ChefVoice Review.');nav('profile');return;}
+  const pro=isPro();
+  if(secondPassRemaining(pro)<=0){
+    secondPass.message=`You have used all ${secondPassMonthlyLimit(pro)} ChefVoice Reviews this month.`;
+    showPaywall(PaywallTrigger.SECOND_PASS);
+    openRecipe(recipe.id);
+    return;
+  }
+  secondPass={recipeId:recipe.id,busy:true,message:'Uploading the private original audio and running Chirp 3. This can take a few minutes.',result:null};
+  openRecipe(recipe.id);
+  try{
+    const blob=await loadAudioBlob(recipe.id);
+    if(!blob)throw new Error('The original local cooking audio could not be found.');
+    const cloudResult=await cloud.api.transcribePrivateChefVoice(recipe.id,blob);
+    // Counted only on success: a failed review must not burn an allowance.
+    recordSecondPassUse();
+    ChefAnalytics.secondPassOpened();
+    const result=fromCloudTranscript({
+      liveIngredients:recipe.ingredients||[],
+      liveSteps:recipe.steps||[],
+      transcript:cloudResult.transcript,
+      rawSegments:cloudResult.segments,
+      provider:cloudResult.provider,
+      model:cloudResult.model
+    });
+    result.rawSegments=cloudResult.segments;
+    secondPass={recipeId:recipe.id,busy:false,message:'',result};
+  }catch(e){
+    secondPass={recipeId:recipe.id,busy:false,message:e?.message||'ChefVoice Review could not finish. Your local recipe and audio are unchanged.',result:null};
+  }
+  openRecipe(recipe.id);
+}
+
 function openRecipe(id){
   const r=recipes.find(x=>x.id===id);if(!r)return;
   const remoteMedia=(r.remoteMedia||[]).map(m=>m.type==='VIDEO'?`<video class="detail-media" controls src="${escapeHtml(m.url)}"></video>`:`<img class="detail-media" src="${escapeHtml(m.url)}" alt="Recipe media">`).join('');
-  main.innerHTML=`<button id="backRecipes" class="ghost">← Recipes</button><section class="card"><div class="row between"><h1>${escapeHtml(r.title)}</h1>${r.isPublic?'<span class="pill">Community</span>':'<span class="pill">Private</span>'}</div><p class="status">${escapeHtml(r.description||'')}</p><span class="pill">Serves ${r.servings||2}</span></section>${remoteMedia?`<section class="card"><h2>Recipe media</h2><div class="detail-media-grid">${remoteMedia}</div></section>`:''}${r.sessionAudio?.stored?'<section class="card"><h2>Original chef voice</h2><p class="hint">The full microphone recording is stored separately from the transcript.</p><button id="loadChefVoice" class="secondary wide">▶ Load chef voice</button><div id="chefVoicePlayer"></div></section>':''}<div class="section-title"><h2>Ingredients</h2></div>${(r.ingredients||[]).map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${(r.steps||[]).map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}<div class="section-title"><h2>Cooking transcript</h2></div><div class="card transcript">${(r.transcript||[]).map(s=>`<div class="transcript-line">${escapeHtml(s.text)}</div>`).join('')||'No transcript saved.'}</div>`;
-  document.querySelector('#backRecipes').onclick=()=>render();
+  main.innerHTML=`<button id="backRecipes" class="ghost">← Recipes</button><section class="card"><div class="row between"><h1>${escapeHtml(r.title)}</h1>${r.isPublic?'<span class="pill">Community</span>':'<span class="pill">Private</span>'}</div><p class="status">${escapeHtml(r.description||'')}</p><span class="pill">Serves ${r.servings||2}</span></section>${remoteMedia?`<section class="card"><h2>Recipe media</h2><div class="detail-media-grid">${remoteMedia}</div></section>`:''}${r.sessionAudio?.stored?'<section class="card"><h2>Original chef voice</h2><p class="hint">The full microphone recording is stored separately from the transcript.</p><button id="loadChefVoice" class="secondary wide">▶ Load chef voice</button><div id="chefVoicePlayer"></div></section>':''}<div id="paywall"></div>${secondPassTemplate(r)}<div class="section-title"><h2>Ingredients</h2></div>${(r.ingredients||[]).map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${(r.steps||[]).map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}<div class="section-title"><h2>Cooking transcript</h2></div><div class="card transcript">${(r.transcript||[]).map(s=>`<div class="transcript-line">${escapeHtml(s.text)}</div>`).join('')||'No transcript saved.'}</div>`;
+  document.querySelector('#backRecipes').onclick=()=>{secondPass={recipeId:'',busy:false,message:'',result:null};render();};
+  bindSecondPass(r);
+  renderPaywall();
   const load=document.querySelector('#loadChefVoice');if(load)load.onclick=async()=>{load.disabled=true;load.textContent='Loading…';const blob=await loadAudioBlob(r.id);const target=document.querySelector('#chefVoicePlayer');if(blob){const url=URL.createObjectURL(blob);target.innerHTML=`<audio class="audio-player" controls src="${url}"></audio>${isIOS?'<p class="hint">ChefVoice will refresh the voice engine before your next capture after audio playback if iOS requires it.</p>':''}`;}else target.innerHTML='<p class="status">The stored recording could not be found.</p>';load.remove();};
 }
 

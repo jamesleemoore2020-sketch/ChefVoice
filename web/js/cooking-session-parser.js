@@ -572,7 +572,7 @@ const speechTails = /\s+(?:you(?:'re| are)?\s+gonna\s+need|you(?:'ll| will)?\s+n
 const invalidStandalone = new Set(['the', 'a', 'an', 'there', 'hey', 'just', 'okay', 'ok', 'lets', "let's", 'um', 'uh']);
 const measurementNoise = /^\s*(?:\d+(?:\.\d+)?\s*)?(?:degrees?|minutes?|mins?|seconds?|secs?)\s*$/i;
 
-function canonicalizeIngredients(items) {
+export function canonicalizeIngredients(items) {
   const cleaned = items
     .map((item) => ({
       ...item,

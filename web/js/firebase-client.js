@@ -219,6 +219,104 @@ export async function addComment(recipeId,text,authorName,parent=null){
   await setDoc(doc(collection(db,'recipes',recipeId,'comments')),payload);
 }
 
+// ---- Second Pass (ChefVoice Review) -----------------------------------------
+// Explicit, opt-in re-transcription of the original cooking audio. The audio is
+// uploaded to the private path (never attached to a public recipe), re-parsed by
+// the same deterministic parser, and the differences are shown for the chef to
+// accept or reject. Nothing is rewritten automatically.
+//
+// The upload is permit-gated: authorizeChefVoiceStorageUpload reserves budget and
+// issues a token that the Storage rule checks against the object's metadata, so a
+// client cannot upload without server authorization.
+
+const SECOND_PASS_MAX_DURATION_MS=90*60*1000;
+const SECOND_PASS_MAX_BYTES=120*1024*1024;
+
+function audioContentType(blob){
+  const raw=String(blob?.type||'').split(';')[0].trim().toLowerCase();
+  if(raw.startsWith('audio/'))return raw;
+  // MediaRecorder on some browsers reports video/webm for an audio-only capture,
+  // but the permit and the Storage rule both require an audio/* content type.
+  if(raw==='video/webm')return 'audio/webm';
+  if(raw==='video/mp4')return 'audio/mp4';
+  return 'audio/webm';
+}
+
+/** Reads duration without decoding the whole file. Returns 0 when unknown. */
+function audioDurationMs(blob){
+  return new Promise(resolve=>{
+    let url='';
+    try{
+      url=URL.createObjectURL(blob);
+      const probe=new Audio();
+      const done=value=>{try{URL.revokeObjectURL(url);}catch{} resolve(value);};
+      probe.preload='metadata';
+      probe.onloadedmetadata=()=>{
+        const seconds=probe.duration;
+        done(Number.isFinite(seconds)&&seconds>0?Math.round(seconds*1000):0);
+      };
+      probe.onerror=()=>done(0);
+      // A browser that never fires either event must not hang the review.
+      setTimeout(()=>done(0),8000);
+      probe.src=url;
+    }catch{
+      if(url)try{URL.revokeObjectURL(url);}catch{}
+      resolve(0);
+    }
+  });
+}
+
+async function callFunction(name,payload){
+  const functionsSdk=await import(`https://www.gstatic.com/firebasejs/${SDK}/firebase-functions.js`);
+  const functions=functionsSdk.getFunctions(app,'us-central1');
+  return (await functionsSdk.httpsCallable(functions,name,{timeout:30*60*1000})(payload)).data;
+}
+
+/**
+ * Uploads the original cooking audio privately and runs the cloud transcription.
+ * Returns the raw cloud result; diffing it against the current recipe is
+ * second-pass-reviewer.js's job.
+ */
+export async function transcribePrivateChefVoice(recipeId,audioBlob){
+  assertWrites();
+  const user=requireUser('Sign in before running ChefVoice Review.');
+  if(!audioBlob?.size||audioBlob.size<=44)throw new Error('The original local cooking audio could not be found.');
+  if(!user.emailVerified)throw new Error('Verify your email before using ChefVoice Review. Local Cook & Capture remains available.');
+  if(audioBlob.size>SECOND_PASS_MAX_BYTES)throw new Error('That cooking recording is too large for ChefVoice Review. The local recording is unchanged.');
+
+  const durationMs=await audioDurationMs(audioBlob);
+  if(durationMs<=0)throw new Error('ChefVoice could not read the original audio duration. The local recording was not changed.');
+  if(durationMs>SECOND_PASS_MAX_DURATION_MS)throw new Error('ChefVoice Review supports cooking recordings up to 90 minutes. The original local audio is unchanged.');
+
+  const contentType=audioContentType(audioBlob);
+  const permit=await callFunction('authorizeChefVoiceStorageUpload',{
+    kind:'private_session',recipeId,fileName:'session',bytes:audioBlob.size,contentType
+  });
+  if(!permit?.permitId||!permit?.token)throw new Error('ChefVoice could not authorize the private audio upload.');
+
+  const target=storageRef(storage,`privateVoice/${user.uid}/${recipeId}/session`);
+  await uploadBytes(target,audioBlob,{
+    contentType,
+    // The Storage rule compares both against the permit document.
+    customMetadata:{
+      chefvoiceDurationMs:String(durationMs),
+      chefvoicePermitId:permit.permitId,
+      chefvoiceUploadToken:permit.token
+    }
+  });
+
+  const data=await callFunction('transcribeChefVoice',{recipeId});
+  if(!data||typeof data!=='object')throw new Error('ChefVoice Review returned an unreadable response.');
+  const rawSegments=Array.isArray(data.segments)?data.segments:[];
+  return {
+    provider:String(data.provider||'')||'google-cloud-speech-v2',
+    model:String(data.model||'')||'chirp_3',
+    transcript:String(data.transcript||''),
+    segments:rawSegments.map(row=>String(row?.text||'').trim()).filter(Boolean),
+    processedAt:Number(data.processedAt||Date.now())
+  };
+}
+
 // ---- Chef discovery ---------------------------------------------------------
 // `allow get: if true` keeps single profile reads open for recipe cards, but
 // listing requires sign-in: "read: if true" would let anyone holding the API key
