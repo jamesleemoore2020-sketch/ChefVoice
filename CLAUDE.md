@@ -35,7 +35,11 @@ Tests live under `app/src/test/java/com/chefvoice/app/...`. The most important o
 **Deploying backend pieces** (each is deliberately scoped/isolated — do not broaden them without being asked):
 - `DEPLOY_NOTIFICATIONS.cmd` — deploys only the `chefvoice-notifications` Cloud Functions codebase (`firebase deploy --only functions:chefvoice-notifications`). Does not touch `transcribeChefVoice`, Hosting, Storage, or App Check.
 - `DEPLOY_BILLING.cmd` — deploys only the `chefvoice-billing` Cloud Functions codebase (`firebase deploy --only functions:chefvoice-billing`). Entitlement grants live here, deliberately apart from `chefvoice-notifications`.
-- `DEPLOY_COMMUNITY_RULES.cmd` / `DEPLOY_COMMUNITY_PROFILE_RULES.cmd` — deploys only `firestore:rules`. Does not touch Functions, Hosting, Speech, or App Check.
+- `DEPLOY_COMMUNITY_RULES.cmd` / `DEPLOY_COMMUNITY_PROFILE_RULES.cmd` — deploys only `firestore:rules`. Does not touch Functions, Hosting, Speech, or App Check. **A rules deploy replaces the entire ruleset**, so diff `firestore.rules` against the live ruleset (Firebase Console → Firestore → Rules) before running it; there is no CLI command to fetch deployed rules.
+- `DEPLOY_PWA.cmd` — deploys only the `pwa` Hosting target (`web/` → the default `chefvoice-d7fec` site). Runs the PWA gates first and refuses to publish a client that fails them.
+- `DEPLOY_ACCOUNT_DELETION_PAGE.cmd` — deploys only the `delete-account` Hosting target (`hosting/` → the `chefvoice-delete-account` site).
+
+Hosting is a **multi-site** config: `firebase.json` holds an array of pinned targets and `.firebaserc` maps each target to its site. Never run `firebase deploy --only hosting` unpinned — it deploys every target at once. Both deploy scripts refuse to run if their target is missing from `firebase.json`.
 
 Single-test invocation examples:
 ```
