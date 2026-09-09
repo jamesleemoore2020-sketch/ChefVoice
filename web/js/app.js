@@ -21,8 +21,8 @@ let audioBlob=null;let audioUrl='';let capturing=false;let media=[];
 const form={title:'',description:'',servings:'2'};
 const cloud={
   state:'connecting',message:'Connecting to ChefVoice Community…',api:null,user:null,profile:null,recipes:[],feedError:'',
-  liked:new Set(),bookmarks:new Set(),following:new Set(),entitlement:{...FREE_ENTITLEMENT},
-  unsubAuth:null,unsubFeed:null,unsubProfile:null,unsubLiked:null,unsubBookmarks:null,unsubFollowing:null,unsubComments:null,unsubEntitlement:null
+  liked:new Set(),bookmarks:new Set(),following:new Set(),entitlement:{...FREE_ENTITLEMENT},blocked:new Set(),
+  unsubAuth:null,unsubFeed:null,unsubProfile:null,unsubLiked:null,unsubBookmarks:null,unsubFollowing:null,unsubComments:null,unsubEntitlement:null,unsubBlocked:null
 };
 
 // The single value the UI gates on. Fails closed to Free: signed out, offline, or a
@@ -32,15 +32,16 @@ const cloudRecipeCount=()=>recipes.filter(r=>r.isPublic).length;
 let paywallTrigger='';
 
 function clearUserObservers(){
-  for(const key of ['unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubEntitlement']){try{cloud[key]?.();}catch{} cloud[key]=null;}
+  for(const key of ['unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubEntitlement','unsubBlocked']){try{cloud[key]?.();}catch{} cloud[key]=null;}
   cloud.profile=null;cloud.liked=new Set();cloud.bookmarks=new Set();cloud.following=new Set();
-  cloud.entitlement={...FREE_ENTITLEMENT};
+  cloud.entitlement={...FREE_ENTITLEMENT};cloud.blocked=new Set();
 }
 function startUserObservers(user){
   clearUserObservers();
   if(!user||!cloud.api)return;
   cloud.unsubProfile=cloud.api.observeProfile(user.uid,p=>{cloud.profile=p;if(currentTab==='profile'||currentTab==='community'||currentTab==='recipes')render();});
   cloud.unsubEntitlement=cloud.api.observeProEntitlement(user.uid,e=>{cloud.entitlement=e;if(currentTab==='profile'||currentTab==='recipes')render();});
+  cloud.unsubBlocked=cloud.api.observeBlockedUserIds(user.uid,s=>{cloud.blocked=s;if(currentTab==='community'||currentTab==='profile')render();});
   cloud.unsubLiked=cloud.api.observeUserRecipeIds(user.uid,'likes',s=>{cloud.liked=s;if(currentTab==='community')render();});
   cloud.unsubBookmarks=cloud.api.observeUserRecipeIds(user.uid,'bookmarks',s=>{cloud.bookmarks=s;if(currentTab==='community')render();});
   cloud.unsubFollowing=cloud.api.observeUserRecipeIds(user.uid,'following',s=>{cloud.following=s;if(currentTab==='community')render();});
@@ -257,12 +258,18 @@ function openRecipe(id){
 
 function communityTemplate(){
   const cloudStatus=cloud.state==='ready'?'<span class="pill">Firebase connected</span>':cloud.state==='connecting'?'<span class="pill">Connecting…</span>':'<span class="pill">Local mode</span>';
-  const feed=cloud.recipes.length?cloud.recipes.map(r=>{
+  // Blocking has to actually hide the blocked chef's cooking, or the button is a
+  // broken promise. Firestore rules already stop writes in both directions between
+  // a blocked pair; this is the read half.
+  const visible=cloud.recipes.filter(r=>!cloud.blocked.has(r.authorId));
+  const hiddenCount=cloud.recipes.length-visible.length;
+  const feed=visible.length?visible.map(r=>{
     const liked=cloud.liked.has(r.id),bookmarked=cloud.bookmarks.has(r.id),following=cloud.following.has(r.authorId),self=cloud.user?.uid===r.authorId;
     const hero=r.media?.find(m=>m.type!=='VIDEO')?.url;
-    return `<article class="card community-card">${hero?`<img class="community-thumb" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}">`:''}<div class="row between"><div><h3>${escapeHtml(r.title)}</h3><p class="status">by ${escapeHtml(r.authorName||'Chef')} · ${r.ingredients.length} ingredients · ${r.steps.length} steps</p></div><span class="pill">♥ ${r.likes||0}</span></div>${r.description?`<p>${escapeHtml(r.description)}</p>`:''}<div class="row wrap"><button class="${liked?'primary':'secondary'}" data-like="${r.id}">${liked?'♥ Liked':'♡ Like'}</button><button class="${bookmarked?'primary':'secondary'}" data-bookmark="${r.id}">${bookmarked?'★ Saved':'☆ Save'}</button><button class="secondary" data-comments="${r.id}">💬 ${r.commentCount||0}</button>${cloud.user&&!self?`<button class="${following?'primary':'ghost'}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow chef'}</button>`:''}</div></article>`;
+    return `<article class="card community-card">${hero?`<img class="community-thumb" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}">`:''}<div class="row between"><div><h3>${escapeHtml(r.title)}</h3><p class="status">by ${escapeHtml(r.authorName||'Chef')} · ${r.ingredients.length} ingredients · ${r.steps.length} steps</p></div><span class="pill">♥ ${r.likes||0}</span></div>${r.description?`<p>${escapeHtml(r.description)}</p>`:''}<div class="row wrap"><button class="${liked?'primary':'secondary'}" data-like="${r.id}">${liked?'♥ Liked':'♡ Like'}</button><button class="${bookmarked?'primary':'secondary'}" data-bookmark="${r.id}">${bookmarked?'★ Saved':'☆ Save'}</button><button class="secondary" data-comments="${r.id}">💬 ${r.commentCount||0}</button>${cloud.user&&!self?`<button class="${following?'primary':'ghost'}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow chef'}</button>`:''}${cloud.user&&!self?`<button class="ghost" data-report="${escapeHtml(r.id)}" data-report-uid="${escapeHtml(r.authorId)}">⚑ Report</button><button class="ghost" data-block="${escapeHtml(r.authorId)}">Block chef</button>`:''}</div></article>`;
   }).join(''):`<div class="empty card">${cloud.feedError?`Community could not load: ${escapeHtml(cloud.feedError)}`:cloud.state==='connecting'?'Connecting to the real ChefVoice Community…':'No public Community recipes were returned.'}</div>`;
-  return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">ChefVoice Community</div><h1>Android and iPhone, one kitchen.</h1><p>Both clients now use the same Firebase Authentication, Firestore and Storage project.</p></section><div class="row between" style="margin:10px 2px"><strong>Community feed</strong>${cloudStatus}</div>${!cloud.user?'<div class="notice">You can browse public recipes now. Sign in from Profile to like, save, follow and comment.</div>':''}${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${feed}`;
+  const blockedNote=hiddenCount?`<div class="notice">${hiddenCount} recipe${hiddenCount===1?'':'s'} from chefs you blocked ${hiddenCount===1?'is':'are'} hidden. Manage blocked chefs from your Profile.</div>`:'';
+  return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">ChefVoice Community</div><h1>Android and iPhone, one kitchen.</h1><p>Both clients now use the same Firebase Authentication, Firestore and Storage project.</p></section><div class="row between" style="margin:10px 2px"><strong>Community feed</strong>${cloudStatus}</div><div id="safetyStatus" class="hint"></div>${!cloud.user?'<div class="notice">You can browse public recipes now. Sign in from Profile to like, save, follow and comment.</div>':''}${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${blockedNote}${feed}`;
 }
 function requireCommunitySignIn(){if(cloud.user)return true;nav('profile');return false;}
 function bindCommunity(){
@@ -270,15 +277,65 @@ function bindCommunity(){
   main.querySelectorAll('[data-bookmark]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.toggleBookmark(b.dataset.bookmark);}catch(e){alert(e?.message||'Could not update bookmark.');b.disabled=false;}});
   main.querySelectorAll('[data-follow]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.toggleFollow(b.dataset.follow);}catch(e){alert(e?.message||'Could not update follow.');b.disabled=false;}});
   main.querySelectorAll('[data-comments]').forEach(b=>b.onclick=()=>openCommunityRecipe(b.dataset.comments));
+  main.querySelectorAll('[data-report]').forEach(b=>b.onclick=()=>reportTarget({targetType:'recipe',targetId:b.dataset.report,targetUid:b.dataset.reportUid,contextId:b.dataset.report}));
+  main.querySelectorAll('[data-block]').forEach(b=>b.onclick=()=>blockChef(b.dataset.block));
+}
+
+function safetyStatus(message){
+  const el=document.querySelector('#safetyStatus');
+  if(el)el.textContent=message;
+}
+
+/**
+ * Opens a moderation report. The status is fixed at 'open' by rule -- a client can
+ * raise a report and nothing else; advancing it is the moderator-only callable.
+ */
+async function reportTarget({targetType,targetId,targetUid,contextId}){
+  if(!requireCommunitySignIn())return;
+  const reason=prompt('What is wrong with this content? A moderator will review it.','');
+  if(reason===null)return;
+  const clean=String(reason).trim();
+  if(!clean){safetyStatus('A report needs a short reason so a moderator can act on it.');return;}
+  try{
+    await cloud.api.reportContent({targetType,targetId,targetUid,contextId,reason:clean});
+    safetyStatus('Report submitted. A moderator will review it. Thank you.');
+  }catch(e){safetyStatus(e?.message||'Could not submit the report.');}
+}
+
+async function blockChef(targetUid){
+  if(!requireCommunitySignIn())return;
+  if(!targetUid||targetUid===cloud.user.uid)return;
+  if(!confirm('Block this chef? Their recipes and comments will be hidden from you, and neither of you can message or interact with the other.'))return;
+  try{
+    await cloud.api.setUserBlocked(targetUid,true);
+    safetyStatus('Chef blocked. You can unblock them from your Profile.');
+    render();
+  }catch(e){safetyStatus(e?.message||'Could not block this chef.');}
+}
+
+async function unblockChef(targetUid){
+  try{
+    await cloud.api.setUserBlocked(targetUid,false);
+    render();
+  }catch(e){alert(e?.message||'Could not unblock this chef.');}
 }
 function openCommunityRecipe(id){
   const r=cloud.recipes.find(x=>x.id===id);if(!r)return;
   try{cloud.unsubComments?.();}catch{}
   const mediaHtml=(r.media||[]).map(m=>m.type==='VIDEO'?`<video class="detail-media" controls src="${escapeHtml(m.url)}"></video>`:`<img class="detail-media" src="${escapeHtml(m.url)}" alt="Recipe media">`).join('');
   const voiceHtml=(r.voiceClips||[]).map(v=>`<audio class="audio-player" controls src="${escapeHtml(v.url)}"></audio>`).join('');
-  main.innerHTML=`<button id="backCommunity" class="ghost">← Community</button><section class="card"><h1>${escapeHtml(r.title)}</h1><p class="status">by ${escapeHtml(r.authorName)} · serves ${r.servings}</p><p>${escapeHtml(r.description||'')}</p></section>${mediaHtml?`<section class="card"><div class="detail-media-grid">${mediaHtml}</div></section>`:''}<div class="section-title"><h2>Ingredients</h2></div>${r.ingredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${r.steps.map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}${voiceHtml?`<section class="card"><h2>Chef voice</h2><p class="hint">Original cooking-session audio published by the chef.</p>${voiceHtml}</section>`:''}<div class="section-title"><h2>Comments</h2></div><div id="comments"><div class="empty card">Loading comments…</div></div>${cloud.user?`<section class="card"><textarea id="commentText" maxlength="800" placeholder="Add a comment"></textarea><button id="postComment" class="primary wide">Post comment</button><div id="commentStatus" class="hint"></div></section>`:'<div class="notice">Sign in to comment.</div>'}`;
+  main.innerHTML=`<button id="backCommunity" class="ghost">← Community</button><section class="card"><h1>${escapeHtml(r.title)}</h1><p class="status">by ${escapeHtml(r.authorName)} · serves ${r.servings}</p><p>${escapeHtml(r.description||'')}</p></section>${mediaHtml?`<section class="card"><div class="detail-media-grid">${mediaHtml}</div></section>`:''}<div class="section-title"><h2>Ingredients</h2></div>${r.ingredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${r.steps.map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}${voiceHtml?`<section class="card"><h2>Chef voice</h2><p class="hint">Original cooking-session audio published by the chef.</p>${voiceHtml}</section>`:''}<div class="section-title"><h2>Comments</h2></div><div id="safetyStatus" class="hint"></div><div id="comments"><div class="empty card">Loading comments…</div></div>${cloud.user?`<section class="card"><textarea id="commentText" maxlength="800" placeholder="Add a comment"></textarea><button id="postComment" class="primary wide">Post comment</button><div id="commentStatus" class="hint"></div></section>`:'<div class="notice">Sign in to comment.</div>'}`;
   document.querySelector('#backCommunity').onclick=()=>{try{cloud.unsubComments?.();}catch{}cloud.unsubComments=null;render();};
-  cloud.unsubComments=cloud.api.observeComments(r.id,comments=>{const el=document.querySelector('#comments');if(el)el.innerHTML=comments.length?comments.map(c=>`<div class="card"><strong>${escapeHtml(c.authorName)}</strong><p class="status">${escapeHtml(c.text)}</p></div>`).join(''):'<div class="empty card">No comments yet.</div>';},err=>{const el=document.querySelector('#comments');if(el)el.innerHTML=`<div class="notice">${escapeHtml(err?.message||'Could not load comments.')}</div>`;});
+  cloud.unsubComments=cloud.api.observeComments(r.id,comments=>{
+    const el=document.querySelector('#comments');
+    if(!el)return;
+    // Same read half of blocking as the feed: a blocked chef's words are hidden too.
+    const visible=comments.filter(c=>!cloud.blocked.has(c.authorId));
+    el.innerHTML=visible.length
+      ?visible.map(c=>`<div class="card"><div class="row between"><strong>${escapeHtml(c.authorName)}</strong>${cloud.user&&c.authorId!==cloud.user.uid?`<button class="ghost" data-report-comment="${escapeHtml(c.id)}" data-comment-uid="${escapeHtml(c.authorId)}">⚑</button>`:''}</div><p class="status">${escapeHtml(c.text)}</p></div>`).join('')
+      :'<div class="empty card">No comments yet.</div>';
+    el.querySelectorAll('[data-report-comment]').forEach(b=>b.onclick=()=>reportTarget({targetType:'comment',targetId:b.dataset.reportComment,targetUid:b.dataset.commentUid,contextId:r.id}));
+  },err=>{const el=document.querySelector('#comments');if(el)el.innerHTML=`<div class="notice">${escapeHtml(err?.message||'Could not load comments.')}</div>`;});
   const post=document.querySelector('#postComment');if(post)post.onclick=async()=>{const text=document.querySelector('#commentText').value;const status=document.querySelector('#commentStatus');post.disabled=true;status.textContent='Posting…';try{await cloud.api.addComment(r.id,text,chefName());document.querySelector('#commentText').value='';status.textContent='Posted.';}catch(e){status.textContent=e?.message||'Could not post comment.';}finally{post.disabled=false;}};
 }
 
@@ -319,10 +376,16 @@ function profileTemplate(){
   const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
   const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
   const firebaseCard=cloud.user?`<section class="card"><div class="quality">Connected to ChefVoice Firebase</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2><div class="field"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><div id="cloudAuthStatus" class="hint">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint"></div></div></section>`;
-  return `<div id="paywall"></div>${membershipTemplate()}${firebaseCard}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Voice → ingredient parsing remains local and protected from Firebase changes.</div></section><section class="card"><h2>Protected voice behavior</h2><p class="status">Measurement-preserving recognition, spoken fractions, ASR homophone repair, cross-segment ingredient recovery, shared measurements, and spoken corrections remain unchanged by the Community integration.</p></section>`;
+  const blockedCard=cloud.user
+    ?`<section class="card"><h2>Blocked chefs</h2>${cloud.blocked.size
+        ?`<p class="hint">Their recipes and comments are hidden from you, and neither of you can interact with the other.</p>${[...cloud.blocked].map(uid=>`<div class="row between" style="margin-top:8px"><code>${escapeHtml(uid.slice(0,12))}…</code><button class="secondary" data-unblock="${escapeHtml(uid)}">Unblock</button></div>`).join('')}`
+        :'<p class="status">You have not blocked anyone. You can block a chef from any recipe in Community.</p>'}</section>`
+    :'';
+  return `<div id="paywall"></div>${membershipTemplate()}${firebaseCard}${blockedCard}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Voice → ingredient parsing remains local and protected from Firebase changes.</div></section><section class="card"><h2>Protected voice behavior</h2><p class="status">Measurement-preserving recognition, spoken fractions, ASR homophone repair, cross-segment ingredient recovery, shared measurements, and spoken corrections remain unchanged by the Community integration.</p></section>`;
 }
 function bindProfile(){
   document.querySelector('#showPaywall')?.addEventListener('click',()=>showPaywall(PaywallTrigger.PROFILE));
+  main.querySelectorAll('[data-unblock]').forEach(b=>b.onclick=()=>unblockChef(b.dataset.unblock));
   const signIn=document.querySelector('#cloudSignIn');if(signIn)signIn.onclick=async()=>{const status=document.querySelector('#cloudAuthStatus');if(!cloud.api){status.textContent='Firebase has not finished loading.';return;}const email=document.querySelector('#cloudEmail').value.trim();const password=document.querySelector('#cloudPassword').value;if(!email||!password){status.textContent='Enter your email and password.';return;}signIn.disabled=true;status.textContent='Signing in…';try{await cloud.api.signIn(email,password);status.textContent='Signed in.';}catch(e){status.textContent=e?.message||'Could not sign in.';signIn.disabled=false;}};
   const signUp=document.querySelector('#cloudSignUp');if(signUp)signUp.onclick=async()=>{const status=document.querySelector('#cloudSignUpStatus');const name=document.querySelector('#newChefName').value.trim();const email=document.querySelector('#newEmail').value.trim();const password=document.querySelector('#newPassword').value;if(!email||password.length<6){status.textContent='Enter an email and a password of at least 6 characters.';return;}signUp.disabled=true;status.textContent='Creating account…';try{await cloud.api.signUp(email,password,name);status.textContent='Account created.';}catch(e){status.textContent=e?.message||'Could not create account.';signUp.disabled=false;}};
   const save=document.querySelector('#saveProfile');if(save)save.onclick=async()=>{const status=document.querySelector('#profileStatus');save.disabled=true;status.textContent='Saving…';try{await cloud.api.saveUserProfile(cloud.user.uid,{displayName:document.querySelector('#profileName').value,bio:document.querySelector('#profileBio').value,photoUrl:cloud.profile?.photoUrl||'',createdAt:cloud.profile?.createdAt||Date.now()});status.textContent='Profile saved.';}catch(e){status.textContent=e?.message||'Could not save profile.';}finally{save.disabled=false;}};

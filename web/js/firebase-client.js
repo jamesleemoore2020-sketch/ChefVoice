@@ -201,6 +201,51 @@ export async function addComment(recipeId,text,authorName){
   await batch.commit();
 }
 
+// ---- Safety: blocking and reporting ----------------------------------------
+// Both write shapes are pinned by firestore.rules, which accepts an exact key set
+// and rejects anything else. Keep these payloads byte-compatible with
+// FirebaseSocialRepository.setUserBlocked/reportContent -- a divergence here is a
+// permission-denied at best and a moderation gap at worst.
+
+export const REPORT_TARGET_TYPES=Object.freeze(['user','recipe','comment','reply','message']);
+
+export function observeBlockedUserIds(uid,onChange,onError=()=>{}){
+  const q=query(collection(db,'users',uid,'blocks'),limit(500));
+  return onSnapshot(q,snap=>onChange(new Set(snap.docs.map(d=>d.id))),onError);
+}
+
+export async function setUserBlocked(blockedUid,blocked){
+  assertWrites();
+  const user=requireUser('Sign in to manage blocked chefs.');
+  if(!blockedUid||blockedUid===user.uid)throw new Error('Choose another ChefVoice member.');
+  const target=doc(db,'users',user.uid,'blocks',blockedUid);
+  if(!blocked){await deleteDoc(target);return false;}
+  // The rule requires exactly these two keys, the document id to match
+  // blockedUid, and a client clock within five minutes of the server's.
+  await setDoc(target,{blockedUid,createdAt:Date.now()});
+  return true;
+}
+
+export async function reportContent({targetType,targetId='',targetUid='',contextId='',reason=''}={}){
+  assertWrites();
+  const user=requireUser('Sign in to report ChefVoice content.');
+  const type=String(targetType||'').trim();
+  if(!REPORT_TARGET_TYPES.includes(type))throw new Error('Unsupported report type.');
+  const cleanReason=String(reason||'').trim().slice(0,500)||'Safety concern';
+  await setDoc(doc(collection(db,'reports')),{
+    reporterUid:user.uid,
+    targetType:type,
+    targetId:String(targetId||'').trim().slice(0,180),
+    targetUid:String(targetUid||'').trim().slice(0,180),
+    contextId:String(contextId||'').trim().slice(0,180),
+    reason:cleanReason,
+    createdAt:Date.now(),
+    // Moderation state is advanced only by the moderator-only callable; the
+    // client may open a report and nothing else.
+    status:'open'
+  });
+}
+
 function toCloudMap(recipe){
   return {
     id:recipe.id,
