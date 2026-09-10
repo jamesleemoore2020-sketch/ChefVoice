@@ -7,7 +7,11 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.speech.RecognizerIntent
 import android.os.Build
+import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,12 +35,16 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -65,6 +73,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -354,10 +363,12 @@ fun ChefVoiceApp(
                     isSignedIn = appState.isSignedIn,
                     loading = appState.selectedChefProfileLoading,
                     activeLive = appState.activeLiveFor(appState.selectedChefUid),
+                    isBlocked = appState.isUserBlocked(appState.selectedChefUid),
                     onBack = appState::closeChefProfile,
                     onFollow = { appState.toggleFollowUid(appState.selectedChefUid) },
                     onMessage = { appState.startConversationWithChef(appState.selectedChefUid, appState.selectedChefProfile?.displayName ?: "Chef") },
                     onReport = { appState.reportChef(appState.selectedChefUid) },
+                    onToggleBlock = { appState.setUserBlocked(appState.selectedChefUid, !appState.isUserBlocked(appState.selectedChefUid)) },
                     onWatchLive = { live ->
                         appState.closeChefProfile()
                         if (appState.selectedRecipe != null) appState.closeRecipe()
@@ -440,10 +451,14 @@ fun ChefVoiceApp(
                                 onSearchChefs = appState::searchChefs,
                                 isLiked = appState::isLiked,
                                 isBookmarked = appState::isBookmarked,
+                                isUserBlocked = appState::isUserBlocked,
                                 onLike = appState::toggleLike,
                                 onBookmark = appState::toggleBookmark,
                                 onOpen = appState::openRecipe,
                                 onChefProfile = appState::openChefProfile,
+                                onMessageChef = appState::startConversationWithChef,
+                                onReportRecipe = appState::reportRecipe,
+                                onToggleBlock = { uid -> appState.setUserBlocked(uid, !appState.isUserBlocked(uid)) },
                                 unreadMessageCount = appState.unreadConversationCount,
                                 unreadNotificationCount = appState.unreadNotificationCount,
                                 onMessages = { navigateTab(Tab.MESSAGES) },
@@ -720,6 +735,23 @@ private fun RecipeMediaBanner(attachment: MediaAttachment, modifier: Modifier = 
     ) {
         Text(if (attachment.type == MediaType.VIDEO) "🎬 Video" else "📷 Photo")
     }
+}
+
+/**
+ * The double-tap-to-like heart: pops in, settles, holds, then fades. `trigger`
+ * is a counter rather than a boolean so tapping again while it is still
+ * playing restarts the animation instead of doing nothing.
+ */
+@Composable
+private fun HeartBurstOverlay(trigger: Int, modifier: Modifier = Modifier) {
+    if (trigger == 0) return
+    val alpha = remember(trigger) { Animatable(1f) }
+    LaunchedEffect(trigger) {
+        alpha.snapTo(1f)
+        delay(350)
+        alpha.animateTo(0f, tween(300))
+    }
+    Text("❤", color = Color.White.copy(alpha = alpha.value), style = MaterialTheme.typography.displayLarge, modifier = modifier)
 }
 
 @Composable
@@ -1236,6 +1268,22 @@ private fun formatElapsed(elapsedMs: Long): String {
     return "%02d:%02d".format(minutes, seconds)
 }
 
+private fun relativeTime(epochMs: Long): String {
+    if (epochMs <= 0L) return ""
+    return DateUtils.getRelativeTimeSpanString(
+        epochMs, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE
+    ).toString()
+}
+
+private fun formatCount(count: Int): String {
+    val value = count.coerceAtLeast(0)
+    return when {
+        value < 1000 -> value.toString()
+        value < 1_000_000 -> "%.1f".format(value / 1000.0).removeSuffix(".0") + "K"
+        else -> "%.1f".format(value / 1_000_000.0).removeSuffix(".0") + "M"
+    }
+}
+
 @Composable
 private fun IngredientRow(ingredient: Ingredient, onChange: (Ingredient) -> Unit, onDelete: () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
@@ -1328,10 +1376,14 @@ private fun CommunityScreen(
     onSearchChefs: (String) -> Unit,
     isLiked: (String) -> Boolean,
     isBookmarked: (String) -> Boolean,
+    isUserBlocked: (String) -> Boolean,
     onLike: (Recipe) -> Unit,
     onBookmark: (Recipe) -> Unit,
     onOpen: (Recipe) -> Unit,
     onChefProfile: (String) -> Unit,
+    onMessageChef: (String, String) -> Unit,
+    onReportRecipe: (Recipe) -> Unit,
+    onToggleBlock: (String) -> Unit,
     unreadMessageCount: Int,
     unreadNotificationCount: Int,
     onMessages: () -> Unit,
@@ -1444,12 +1496,29 @@ private fun CommunityScreen(
                 items(visibleItems, key = { it.recipe.id }) { item ->
                     val recipe = item.recipe
                     val profile = item.authorProfile
+                    val context = LocalContext.current
+                    var menuOpen by remember { mutableStateOf(false) }
+                    var heartTrigger by remember { mutableIntStateOf(0) }
+                    val canModerate = isSignedIn && recipe.authorId.isNotBlank() && recipe.authorId != signedInUserId
                     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
-                        Box(Modifier.fillMaxWidth().height(360.dp).clickable { onOpen(recipe) }) {
+                        Box(
+                            Modifier.fillMaxWidth().height(360.dp).pointerInput(recipe.id) {
+                                detectTapGestures(
+                                    onTap = { onOpen(recipe) },
+                                    // Instagram-style: a double-tap always likes and always
+                                    // shows the heart, but never removes an existing like.
+                                    onDoubleTap = {
+                                        if (!isLiked(recipe.id)) onLike(recipe)
+                                        heartTrigger++
+                                    }
+                                )
+                            }
+                        ) {
                             val hero = recipe.media.firstOrNull { it.type == MediaType.IMAGE } ?: recipe.media.firstOrNull()
                             if (hero != null) RecipeMediaBanner(hero, Modifier.fillMaxSize())
                             else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondary), contentAlignment = Alignment.Center) { Text("🍽️", style = MaterialTheme.typography.displayMedium, color = Color.White) }
                             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.16f)))
+                            HeartBurstOverlay(heartTrigger, Modifier.align(Alignment.Center))
                             Row(
                                 modifier = Modifier.align(Alignment.TopStart).padding(12.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(24.dp)).clickable(enabled = recipe.authorId.isNotBlank()) { onChefProfile(recipe.authorId) }.padding(horizontal = 7.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -1457,14 +1526,43 @@ private fun CommunityScreen(
                                 RemoteProfileImage(profile?.photoUrl.orEmpty(), "${profile?.displayName ?: recipe.authorName} profile", Modifier.size(36.dp))
                                 Spacer(Modifier.width(8.dp)); Text(profile?.displayName?.ifBlank { recipe.authorName } ?: recipe.authorName, color = Color.White, fontWeight = FontWeight.Bold)
                             }
+                            if (canModerate) {
+                                Row(
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    val following = isFollowing(recipe.authorId)
+                                    TextButton(
+                                        onClick = { onFollowChef(recipe.authorId) },
+                                        modifier = Modifier.background(if (following) Color.Black.copy(alpha = 0.5f) else Color.White, CircleShape),
+                                        colors = ButtonDefaults.textButtonColors(contentColor = if (following) Color.White else Color.Black)
+                                    ) { Text(if (following) "Following" else "Follow", style = MaterialTheme.typography.labelSmall) }
+                                    Box {
+                                        TextButton(
+                                            onClick = { menuOpen = true },
+                                            modifier = Modifier.background(Color.Black.copy(alpha = 0.58f), CircleShape)
+                                        ) { Text("⋯", color = Color.White, fontWeight = FontWeight.Bold) }
+                                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                            DropdownMenuItem(text = { Text("✉ Message chef") }, onClick = { menuOpen = false; onMessageChef(recipe.authorId, recipe.authorName) })
+                                            DropdownMenuItem(text = { Text("⚑ Report") }, onClick = { menuOpen = false; onReportRecipe(recipe) })
+                                            DropdownMenuItem(
+                                                text = { Text(if (isUserBlocked(recipe.authorId)) "Unblock chef" else "🚫 Block chef") },
+                                                onClick = { menuOpen = false; onToggleBlock(recipe.authorId) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             Column(modifier = Modifier.align(Alignment.BottomStart).padding(14.dp).background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(16.dp)).padding(10.dp)) {
                                 Text(recipe.title, color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Text("${recipe.ingredients.size} ingredients · 💬 ${recipe.commentCount}", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                                Text("${recipe.ingredients.size} ingredients · 💬 ${formatCount(recipe.commentCount)} · ${relativeTime(recipe.createdAt)}", color = Color.White, style = MaterialTheme.typography.bodySmall)
                             }
                             Column(modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp)), horizontalAlignment = Alignment.CenterHorizontally) {
-                                TextButton(onClick = { onLike(recipe) }) { Text(if (isLiked(recipe.id)) "♥ ${recipe.likes}" else "♡ ${recipe.likes}", color = Color.White) }
-                                TextButton(onClick = { onBookmark(recipe) }) { Text(if (isBookmarked(recipe.id)) "★" else "☆", color = Color.White) }
+                                TextButton(onClick = { onLike(recipe) }) { Text(if (isLiked(recipe.id)) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}", color = Color.White) }
                                 TextButton(onClick = { onOpen(recipe) }) { Text("💬", color = Color.White) }
+                                TextButton(onClick = { shareRecipe(context, recipe) }) { Text("📤", color = Color.White) }
+                                TextButton(onClick = { onBookmark(recipe) }) { Text(if (isBookmarked(recipe.id)) "★" else "☆", color = Color.White) }
                             }
                         }
                     }
@@ -2408,10 +2506,11 @@ private fun RecipeDetailScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onShare, modifier = Modifier.weight(1f)) { Text("Share") }
                     OutlinedButton(onClick = onLike, modifier = Modifier.weight(1f)) {
-                        Text(if (isLiked) "♥ ${recipe.likes}" else "♡ ${recipe.likes}")
+                        Text(if (isLiked) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}")
                     }
                 }
             }
+            if (recipe.isPublic && recipe.createdAt > 0) item { Text("Published ${relativeTime(recipe.createdAt)}", style = MaterialTheme.typography.bodySmall) }
             if (recipe.authorId.isNotBlank()) {
                 item {
                     OutlinedButton(onClick = onBookmark, modifier = Modifier.fillMaxWidth()) {
@@ -2583,10 +2682,12 @@ private fun PublicChefProfileScreen(
     isSignedIn: Boolean,
     loading: Boolean,
     activeLive: LiveSession?,
+    isBlocked: Boolean,
     onBack: () -> Unit,
     onFollow: () -> Unit,
     onMessage: () -> Unit,
     onReport: () -> Unit,
+    onToggleBlock: () -> Unit,
     onWatchLive: (LiveSession) -> Unit,
     onOpenRecipe: (Recipe) -> Unit
 ) {
@@ -2609,10 +2710,19 @@ private fun PublicChefProfileScreen(
                         Column { Text("${recipes.size}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Text("Recipes", style = MaterialTheme.typography.bodySmall) }
                     }
                     if (!profile?.favoriteThings.isNullOrEmpty()) { Spacer(Modifier.height(10.dp)); Text(profile!!.favoriteThings.joinToString("  ·  "), Modifier.padding(horizontal = 14.dp), style = MaterialTheme.typography.bodySmall) }
-                    Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (!isSelf) Button(enabled = isSignedIn, onClick = onFollow, modifier = Modifier.weight(1f)) { Text(if (isFollowing) "✓ Following" else "+ Follow") }
                         if (!isSelf && isSignedIn) OutlinedButton(onClick = onMessage, modifier = Modifier.weight(1f)) { Text("✉ Message") }
-                        if (!isSelf && isSignedIn) TextButton(onClick = onReport) { Text("Report chef", color = MaterialTheme.colorScheme.error) }
+                        if (!isSelf && isSignedIn) {
+                            var menuOpen by remember { mutableStateOf(false) }
+                            Box {
+                                TextButton(onClick = { menuOpen = true }) { Text("⋯", fontWeight = FontWeight.Bold) }
+                                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                    DropdownMenuItem(text = { Text("⚑ Report chef", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onReport() })
+                                    DropdownMenuItem(text = { Text(if (isBlocked) "Unblock chef" else "🚫 Block chef", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onToggleBlock() })
+                                }
+                            }
+                        }
                     }
                     if (activeLive != null) Button(onClick = { onWatchLive(activeLive) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(bottom = 14.dp)) { Text("🔴 Watch Live") }
                 }

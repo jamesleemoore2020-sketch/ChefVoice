@@ -759,17 +759,23 @@ class ChefAppState(context: Context) {
 
     fun setConversationUserBlocked(blocked: Boolean) {
         val conversation = selectedConversation ?: return
-        val otherUid = conversation.otherUserId(signedInUserId)
-        if (otherUid.isBlank() || messageBusy) return
+        setUserBlocked(conversation.otherUserId(signedInUserId), blocked)
+    }
+
+    /** Community feed cards and chef profiles block by uid directly, with no
+     * open conversation to derive the target from -- setConversationUserBlocked
+     * is now just the conversation-scoped case of this. */
+    fun setUserBlocked(targetUid: String, blocked: Boolean) {
+        if (targetUid.isBlank() || targetUid == signedInUserId || messageBusy) return
         messageBusy = true
-        cloud.setUserBlocked(otherUid, blocked) { error ->
+        cloud.setUserBlocked(targetUid, blocked) { error ->
             messageBusy = false
             if (error == null) {
                 if (blocked) {
-                    if (!blockedUserIds.contains(otherUid)) blockedUserIds.add(otherUid)
-                    cloudMessage = "Chef blocked. Message history stays visible, but new private messages are disabled."
+                    if (!blockedUserIds.contains(targetUid)) blockedUserIds.add(targetUid)
+                    cloudMessage = "Chef blocked. Their recipes stay hidden and neither of you can message the other."
                 } else {
-                    blockedUserIds.remove(otherUid)
+                    blockedUserIds.remove(targetUid)
                     cloudMessage = "Chef unblocked."
                 }
             } else {

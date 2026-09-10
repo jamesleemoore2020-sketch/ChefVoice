@@ -17,6 +17,13 @@ fun recipeShareText(recipe: Recipe): String = buildString {
     recipe.steps.forEachIndexed { index, step -> appendLine("${index + 1}. $step") }
     appendLine()
     append("Shared from ChefVoice by ${recipe.authorName}")
+    // Only a published recipe is reachable at this URL -- the PWA's ?recipe=
+    // deep link opens straight into it; anything else would just 404 into the
+    // bare feed, so a private/unpublished recipe shares as plain text only.
+    if (recipe.isPublic) {
+        appendLine()
+        append("https://chefvoice-d7fec.web.app/?tab=community&recipe=${recipe.id}")
+    }
 }
 
 fun shareRecipe(context: Context, recipe: Recipe) {
