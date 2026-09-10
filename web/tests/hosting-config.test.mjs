@@ -60,6 +60,27 @@ test('service workers are served no-cache', () => {
   }
 });
 
+test('the app shell and its JS/CSS are served no-cache', () => {
+  // None of index.html, app.js or the other JS/CSS files are content-hashed, so
+  // Firebase Hosting's default Cache-Control (max-age=3600) lets a browser -- or
+  // this app's own service worker, whose "network" fetch still consults the HTTP
+  // cache -- keep serving a build from before the latest deploy for up to an hour.
+  // A chef testing a just-shipped fix would silently be running the old code.
+  //
+  // '/' needs its own entry distinct from '/index.html': Hosting matches header
+  // rules against the path actually requested, not the rewrite's destination, so
+  // a rule on '/index.html' alone never applies to the root request every chef
+  // actually makes.
+  const pwa = firebaseJson.hosting.find((h) => h.target === 'pwa');
+  const sources = (pwa.headers || []).map((h) => h.source);
+  for (const noCached of ['/', '/index.html', '/js/**', '/css/**']) {
+    assert.ok(sources.includes(noCached), `${noCached} must be served with no-cache`);
+    const entry = pwa.headers.find((h) => h.source === noCached);
+    const cacheControl = entry.headers.find((h) => h.key === 'Cache-Control');
+    assert.match(cacheControl.value, /no-cache/);
+  }
+});
+
 test('deploy scripts stay pinned to their own target', () => {
   const pwaScript = readRoot('DEPLOY_PWA.cmd');
   const deleteScript = readRoot('DEPLOY_ACCOUNT_DELETION_PAGE.cmd');

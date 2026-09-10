@@ -20,4 +20,4 @@ export const firebaseConfig = Object.freeze({
  * feed, which needs no key and already works. Nothing else in the app depends on
  * it, so an empty value is a supported state rather than a broken one.
  */
-export const messagingVapidKey = "";
+export const messagingVapidKey = "BBPsneedlG2ChqSZUbKxrMLUtxmH9Ek1y__flL-vF0He6OYW_V4H6NDK9QKqg039Bs4jTjgEOAzF2u9t5gxUIrE";

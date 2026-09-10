@@ -21,7 +21,14 @@ import {
 
 const main=document.querySelector('#main');
 const tabs=[...document.querySelectorAll('[data-tab]')];
-let currentTab='cook';
+// A clicked push notification opens '/?tab=inbox' or '/?tab=community' (see
+// firebase-messaging-sw.js) since a brand-new window has no in-app state to
+// resume into. Anything other than one of the app's own tab names is ignored.
+const requestedTab=new URLSearchParams(location.search).get('tab');
+// A shared recipe link (see shareRecipe()) always opens on Community regardless
+// of its own ?tab=, since that's the only tab that can show a community recipe.
+let pendingSharedRecipeId=new URLSearchParams(location.search).get('recipe')||null;
+let currentTab=pendingSharedRecipeId?'community':(tabs.some(b=>b.dataset.tab===requestedTab)?requestedTab:'cook');
 let recipes=loadRecipes();
 let ingredients=[];let steps=[];let transcript=[];let livePartial='';
 let captureStatus='Talk naturally while you cook. ChefVoice will turn the session into an editable recipe draft.';
@@ -59,6 +66,9 @@ function clearUserObservers(){
   chefSearchTerm='';chefSearchResults=[];chefSearchStatus='';
   closeChefProfile();
 }
+// See openCommunityRecipeId's declaration below for why the community tab's
+// listener-driven re-renders all gate on this instead of just the tab name.
+const shouldRenderCommunity=()=>currentTab==='community'&&!openCommunityRecipeId;
 function startUserObservers(user){
   clearUserObservers();
   if(!user||!cloud.api)return;
@@ -67,29 +77,40 @@ function startUserObservers(user){
   // one resolves itself, the other needs the chef to save a display name.
   cloud.unsubProfile=cloud.api.observeProfile(user.uid,p=>{
     cloud.profile=p;cloud.profileLoaded=true;cloud.profileError='';
-    if(currentTab==='profile'||currentTab==='community'||currentTab==='recipes')render();
+    if(currentTab==='profile'||currentTab==='recipes'||shouldRenderCommunity())render();
   },err=>{
     cloud.profileLoaded=true;cloud.profileError=err?.message||'Your chef profile could not be loaded.';
     if(currentTab==='profile')render();
   });
   cloud.unsubEntitlement=cloud.api.observeProEntitlement(user.uid,e=>{cloud.entitlement=e;if(currentTab==='profile'||currentTab==='recipes')render();});
-  cloud.unsubBlocked=cloud.api.observeBlockedUserIds(user.uid,s=>{cloud.blocked=s;if(currentTab==='community'||currentTab==='profile')render();});
+  cloud.unsubBlocked=cloud.api.observeBlockedUserIds(user.uid,s=>{cloud.blocked=s;if(shouldRenderCommunity()||currentTab==='profile')render();});
   cloud.unsubConversations=cloud.api.observeConversations(user.uid,items=>{cloud.conversations=items;updateInboxBadge();if(currentTab==='inbox')render();});
   cloud.unsubMessageReads=cloud.api.observeMessageReads(user.uid,map=>{cloud.messageReads=map;updateInboxBadge();if(currentTab==='inbox')render();});
   cloud.unsubNotifications=cloud.api.observeNotifications(user.uid,items=>{cloud.notifications=items;updateInboxBadge();if(currentTab==='inbox')render();});
-  cloud.unsubLiked=cloud.api.observeUserRecipeIds(user.uid,'likes',s=>{cloud.liked=s;if(currentTab==='community')render();});
-  cloud.unsubBookmarks=cloud.api.observeUserRecipeIds(user.uid,'bookmarks',s=>{cloud.bookmarks=s;if(currentTab==='community')render();});
-  cloud.unsubFollowing=cloud.api.observeUserRecipeIds(user.uid,'following',s=>{cloud.following=s;if(currentTab==='community')render();});
+  cloud.unsubLiked=cloud.api.observeUserRecipeIds(user.uid,'likes',s=>{cloud.liked=s;if(shouldRenderCommunity())render();});
+  cloud.unsubBookmarks=cloud.api.observeUserRecipeIds(user.uid,'bookmarks',s=>{cloud.bookmarks=s;if(shouldRenderCommunity())render();});
+  cloud.unsubFollowing=cloud.api.observeUserRecipeIds(user.uid,'following',s=>{cloud.following=s;if(shouldRenderCommunity())render();});
 }
 async function initCloud(){
   try{
     const api=await import('./firebase-client.js');
     cloud.api=api;cloud.state='ready';cloud.message='Connected to ChefVoice Firebase. Community writes are enabled.';
-    cloud.unsubAuth=api.observeAuth(user=>{cloud.user=user;startUserObservers(user);if(currentTab==='profile'||currentTab==='community'||currentTab==='recipes')render();});
-    cloud.unsubFeed=api.observePublicRecipes(items=>{cloud.recipes=items;cloud.feedError='';if(currentTab==='community')render();},err=>{cloud.feedError=err?.message||'Community feed could not be loaded.';if(currentTab==='community')render();});
+    cloud.unsubAuth=api.observeAuth(user=>{cloud.user=user;startUserObservers(user);if(currentTab==='profile'||currentTab==='recipes'||shouldRenderCommunity())render();});
+    cloud.unsubFeed=api.observePublicRecipes(items=>{
+      cloud.recipes=items;cloud.feedError='';
+      // A shared link is only actionable once the feed it points into has
+      // loaded; only tried once; if the recipe is gone or unlisted, this just
+      // falls through to the ordinary feed rather than looping forever.
+      if(pendingSharedRecipeId){
+        const shared=items.find(x=>x.id===pendingSharedRecipeId);
+        pendingSharedRecipeId=null;
+        if(shared){openCommunityRecipe(shared.id);return;}
+      }
+      if(shouldRenderCommunity())render();
+    },err=>{cloud.feedError=err?.message||'Community feed could not be loaded.';if(shouldRenderCommunity())render();});
   }catch(e){
     cloud.state='offline';cloud.message='Firebase is unavailable right now. Local cooking capture still works.';cloud.feedError=e?.message||String(e);
-    if(currentTab==='profile'||currentTab==='community')render();
+    if(currentTab==='profile'||shouldRenderCommunity())render();
   }
 }
 initCloud();
@@ -134,6 +155,36 @@ function renderPaywall(){
 }
 const fmt=ms=>`${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
 const chefName=()=>cloud.profile?.displayName||cloud.user?.email?.split('@')[0]||'Chef';
+function relativeTime(ms){
+  if(!ms)return '';
+  const diff=Date.now()-ms;
+  if(diff<60000)return 'Just now';
+  if(diff<3600000)return `${Math.floor(diff/60000)}m`;
+  if(diff<86400000)return `${Math.floor(diff/3600000)}h`;
+  if(diff<604800000)return `${Math.floor(diff/86400000)}d`;
+  return new Date(ms).toLocaleDateString(undefined,{month:'short',day:'numeric'});
+}
+function formatCount(n){
+  n=Number(n)||0;
+  if(n<1000)return String(n);
+  if(n<1000000)return `${(n/1000).toFixed(n%1000>=100?1:0)}K`;
+  return `${(n/1000000).toFixed(1)}M`;
+}
+/** The IG-style double-tap: always likes, never removes a like, and always
+ * shows the heart even when already liked -- a delight gesture, not a toggle. */
+function burstHeart(container){
+  if(!container)return;
+  const heart=document.createElement('div');
+  heart.className='heart-burst';
+  heart.textContent='❤';
+  heart.addEventListener('animationend',()=>heart.remove());
+  container.appendChild(heart);
+}
+function likeFromPhoto(recipeId,container){
+  if(!requireCommunitySignIn())return;
+  burstHeart(container);
+  if(!cloud.liked.has(recipeId))cloud.api.toggleLike(recipeId).catch(()=>{});
+}
 
 /**
  * The name to send on any write the rules check with `profileNameMatches` --
@@ -165,10 +216,44 @@ function captureForm(){
   const desc=document.querySelector('#description');if(desc)form.description=desc.value;
   const servings=document.querySelector('#servings');if(servings)form.servings=servings.value;
 }
+
+// Browser/PWA back-button support. Every tab switch and the two multi-screen
+// drill-ins (an open chef profile, an open conversation) push a history entry so
+// the hardware/gesture back button navigates within the app instead of closing
+// it; only popping past the first entry leaves. `restoringHistory` stops the
+// popstate handler's own nav()/openChef()/openConversationView() calls from
+// pushing a second, redundant entry for the state history just handed back.
+let restoringHistory=false;
+function currentViewState(){
+  return {
+    tab:currentTab,
+    conversationId:currentTab==='inbox'?(openConversation?.id||null):null,
+    chefUid:currentTab==='community'?(openChefProfile?.uid||null):null
+  };
+}
+function pushViewState(){
+  if(restoringHistory)return;
+  const state=currentViewState();
+  const prev=history.state;
+  if(prev&&prev.tab===state.tab&&(prev.conversationId||null)===state.conversationId&&(prev.chefUid||null)===state.chefUid)return;
+  history.pushState(state,'');
+}
+async function restoreViewState(state){
+  state=state||{tab:'cook'};
+  restoringHistory=true;
+  try{
+    nav(state.tab||'cook');
+    if(state.tab==='inbox'&&state.conversationId)openConversationView(state.conversationId);
+    if(state.tab==='community'&&state.chefUid)await openChef(state.chefUid);
+  }finally{
+    restoringHistory=false;
+  }
+}
 function nav(tab){
   captureForm();
   try{cloud.unsubComments?.();}catch{}
   cloud.unsubComments=null;
+  openCommunityRecipeId=null;
   setReplyTarget(null);
   // Leaving the Inbox closes any open thread listener; openConversationView
   // re-establishes it when a conversation is opened again.
@@ -178,6 +263,7 @@ function nav(tab){
   tabs.forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   render();
   window.scrollTo({top:0,behavior:'smooth'});
+  pushViewState();
 }
 tabs.forEach(b=>b.addEventListener('click',()=>nav(b.dataset.tab)));
 
@@ -443,19 +529,27 @@ let chefSearchResults=[];
 let chefSearchStatus='';
 let openChefProfile=null;
 let openChefRecipes=[];
+// Set while a single community recipe's detail/comments are open. The feed and
+// social-state listeners below skip their blunt re-render while this is set --
+// without that guard, anyone else liking any post in the whole public feed
+// query would silently kick a chef out of the comments they were reading (or
+// typing) back to the feed list, since observePublicRecipes redelivers the
+// full result set (and re-renders) on any change to any recipe in it.
+let openCommunityRecipeId=null;
 
 function chefProfileTemplate(){
   const p=openChefProfile;
   const self=cloud.user?.uid===p.uid;
   const following=cloud.following.has(p.uid);
   const blocked=cloud.blocked.has(p.uid);
+  const initial=(p.displayName||'C').trim().charAt(0).toUpperCase();
+  const canModerate=cloud.user&&!self;
   const recipes=openChefRecipes.length
     ?openChefRecipes.map(r=>`<article class="card"><div class="row between"><strong>${escapeHtml(r.title)}</strong><span class="pill">♥ ${r.likes||0}</span></div><p class="status">${r.ingredients.length} ingredients · ${r.steps.length} steps</p><button class="secondary" data-open-community-recipe="${escapeHtml(r.id)}">Open</button></article>`).join('')
     :'<div class="empty card">No public recipes from this chef yet.</div>';
-  const actions=cloud.user&&!self
-    ?`<div class="row wrap"><button class="${following?'primary':'secondary'}" data-follow="${escapeHtml(p.uid)}">${following?'Following':'Follow chef'}</button><button class="secondary" data-message="${escapeHtml(p.uid)}">✉ Message</button><button class="ghost" data-report-user="${escapeHtml(p.uid)}">⚑ Report</button><button class="ghost" data-toggle-block="${escapeHtml(p.uid)}">${blocked?'Unblock':'Block'}</button></div>`
-    :'';
-  return `<button id="backCommunity" class="ghost">← Community</button><section class="card"><div class="row between"><h1>${escapeHtml(p.displayName)}</h1><span class="pill">${p.followerCount} follower${p.followerCount===1?'':'s'}</span></div>${p.bio?`<p class="status">${escapeHtml(p.bio)}</p>`:''}${p.favoriteThings?.length?`<div class="row wrap" style="margin-top:8px">${p.favoriteThings.map(t=>`<span class="pill">${escapeHtml(t)}</span>`).join('')}</div>`:''}${actions}</section><div id="safetyStatus" class="hint"></div>${blocked?'<div class="notice">You blocked this chef. Their recipes stay hidden in your Community feed.</div>':''}<div class="section-title"><h2>Public recipes</h2></div>${recipes}`;
+  const menuId=`profile-${p.uid}`;
+  const menu=canModerate?`<button class="kebab" data-menu-toggle="${escapeHtml(menuId)}" aria-label="More options">⋯</button><div class="card-menu" id="menu-${escapeHtml(menuId)}" hidden><button class="menu-item" data-message="${escapeHtml(p.uid)}">✉ Message chef</button><button class="menu-item danger" data-report-user="${escapeHtml(p.uid)}">⚑ Report</button><button class="menu-item danger" data-toggle-block="${escapeHtml(p.uid)}">${blocked?'Unblock chef':'🚫 Block chef'}</button></div>`:'';
+  return `<button id="backCommunity" class="ghost">← Community</button><section class="card"><div class="social-head"><span class="avatar-circle large">${escapeHtml(initial)}</span><div class="chef-id"><strong style="font-size:1.15rem">${escapeHtml(p.displayName)}</strong><span class="meta">${p.followerCount} follower${p.followerCount===1?'':'s'}</span></div>${canModerate?`<button class="follow-btn${following?' following':''}" data-follow="${escapeHtml(p.uid)}">${following?'Following':'Follow'}</button>`:''}${menu}</div>${p.bio?`<p class="status">${escapeHtml(p.bio)}</p>`:''}${p.favoriteThings?.length?`<div class="row wrap" style="margin-top:8px">${p.favoriteThings.map(t=>`<span class="pill">${escapeHtml(t)}</span>`).join('')}</div>`:''}</section><div id="safetyStatus" class="hint"></div>${blocked?'<div class="notice">You blocked this chef. Their recipes stay hidden in your Community feed.</div>':''}<div class="section-title"><h2>Public recipes</h2></div>${recipes}`;
 }
 
 function communityTemplate(){
@@ -469,7 +563,10 @@ function communityTemplate(){
   const feed=visible.length?visible.map(r=>{
     const liked=cloud.liked.has(r.id),bookmarked=cloud.bookmarks.has(r.id),following=cloud.following.has(r.authorId),self=cloud.user?.uid===r.authorId;
     const hero=r.media?.find(m=>m.type!=='VIDEO')?.url;
-    return `<article class="card community-card">${hero?`<img class="community-thumb" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}">`:''}<div class="row between"><div><h3>${escapeHtml(r.title)}</h3><p class="status">by ${escapeHtml(r.authorName||'Chef')} · ${r.ingredients.length} ingredients · ${r.steps.length} steps</p></div><span class="pill">♥ ${r.likes||0}</span></div>${r.description?`<p>${escapeHtml(r.description)}</p>`:''}<div class="row wrap"><button class="${liked?'primary':'secondary'}" data-like="${r.id}">${liked?'♥ Liked':'♡ Like'}</button><button class="${bookmarked?'primary':'secondary'}" data-bookmark="${r.id}">${bookmarked?'★ Saved':'☆ Save'}</button><button class="secondary" data-comments="${r.id}">💬 ${r.commentCount||0}</button>${cloud.user&&!self?`<button class="${following?'primary':'ghost'}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow chef'}</button>`:''}${cloud.user&&!self?`<button class="secondary" data-message="${escapeHtml(r.authorId)}" data-message-name="${escapeHtml(r.authorName||'')}">✉ Message</button><button class="ghost" data-report="${escapeHtml(r.id)}" data-report-uid="${escapeHtml(r.authorId)}">⚑ Report</button><button class="ghost" data-block="${escapeHtml(r.authorId)}">Block chef</button>`:''}</div></article>`;
+    const initial=(r.authorName||'C').trim().charAt(0).toUpperCase();
+    const canModerate=cloud.user&&!self;
+    const menu=canModerate?`<button class="kebab" data-menu-toggle="${escapeHtml(r.id)}" aria-label="More options">⋯</button><div class="card-menu" id="menu-${escapeHtml(r.id)}" hidden><button class="menu-item" data-message="${escapeHtml(r.authorId)}" data-message-name="${escapeHtml(r.authorName||'')}">✉ Message chef</button><button class="menu-item danger" data-report="${escapeHtml(r.id)}" data-report-uid="${escapeHtml(r.authorId)}">⚑ Report</button><button class="menu-item danger" data-block="${escapeHtml(r.authorId)}">🚫 Block chef</button></div>`:'';
+    return `<article class="card community-card"><div class="social-head"><span class="avatar-circle">${escapeHtml(initial)}</span><div class="chef-id"><strong>${escapeHtml(r.authorName||'Chef')}</strong><span class="meta">${r.ingredients.length} ingredients · ${r.steps.length} steps · ${relativeTime(r.createdAt)}</span></div>${canModerate?`<button class="follow-btn${following?' following':''}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow'}</button>`:''}${menu}</div>${hero?`<div class="thumb-wrap"><img class="community-thumb" data-dbl-like="${r.id}" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}"></div>`:''}<h3>${escapeHtml(r.title)}</h3>${r.description?`<p class="status">${escapeHtml(r.description)}</p>`:''}<div class="action-row"><button class="action-btn${liked?' active':''}" data-like="${r.id}">${liked?'♥':'♡'} ${formatCount(r.likes||0)}</button><button class="action-btn" data-comments="${r.id}">💬 ${formatCount(r.commentCount||0)}</button><button class="action-btn" data-share="${r.id}" aria-label="Share">📤</button><button class="action-btn action-spacer${bookmarked?' saved':''}" data-bookmark="${r.id}" aria-label="${bookmarked?'Saved':'Save'}">${bookmarked?'★':'☆'}</button></div></article>`;
   }).join(''):`<div class="empty card">${cloud.feedError?`Community could not load: ${escapeHtml(cloud.feedError)}`:cloud.state==='connecting'?'Connecting to the real ChefVoice Community…':'No public Community recipes were returned.'}</div>`;
   const blockedNote=hiddenCount?`<div class="notice">${hiddenCount} recipe${hiddenCount===1?'':'s'} from chefs you blocked ${hiddenCount===1?'is':'are'} hidden. Manage blocked chefs from your Profile.</div>`:'';
   const searchResults=chefSearchResults.length
@@ -486,6 +583,11 @@ function bindCommunity(){
   main.querySelectorAll('[data-bookmark]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.toggleBookmark(b.dataset.bookmark);}catch(e){alert(e?.message||'Could not update bookmark.');b.disabled=false;}});
   main.querySelectorAll('[data-follow]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.toggleFollow(b.dataset.follow);}catch(e){alert(e?.message||'Could not update follow.');b.disabled=false;}});
   main.querySelectorAll('[data-comments]').forEach(b=>b.onclick=()=>openCommunityRecipe(b.dataset.comments));
+  main.querySelectorAll('[data-share]').forEach(b=>b.onclick=()=>{
+    const r=cloud.recipes.find(x=>x.id===b.dataset.share);
+    if(r)shareRecipe(r);
+  });
+  main.querySelectorAll('[data-dbl-like]').forEach(img=>img.ondblclick=()=>likeFromPhoto(img.dataset.dblLike,img.closest('.thumb-wrap')));
   main.querySelectorAll('[data-report]').forEach(b=>b.onclick=()=>reportTarget({targetType:'recipe',targetId:b.dataset.report,targetUid:b.dataset.reportUid,contextId:b.dataset.report}));
   main.querySelectorAll('[data-block]').forEach(b=>b.onclick=()=>blockChef(b.dataset.block));
   main.querySelectorAll('[data-message]').forEach(b=>b.onclick=()=>messageChef(b.dataset.message));
@@ -496,9 +598,19 @@ function bindCommunity(){
     const uid=b.dataset.toggleBlock;
     if(cloud.blocked.has(uid))await unblockChef(uid);else await blockChef(uid);
   });
+  // Only one "more options" menu is ever open at a time; stopPropagation keeps
+  // this same click from immediately re-triggering the document-level closer.
+  main.querySelectorAll('[data-menu-toggle]').forEach(b=>b.onclick=(e)=>{
+    e.stopPropagation();
+    const menu=document.getElementById('menu-'+b.dataset.menuToggle);
+    if(!menu)return;
+    const wasHidden=menu.hidden;
+    main.querySelectorAll('.card-menu').forEach(m=>m.hidden=true);
+    menu.hidden=!wasHidden;
+  });
 
   const back=document.querySelector('#backCommunity');
-  if(back&&openChefProfile)back.onclick=()=>{closeChefProfile();render();};
+  if(back&&openChefProfile)back.onclick=()=>{history.back();};
 
   const searchBtn=document.querySelector('#chefSearchBtn');
   const searchBox=document.querySelector('#chefSearch');
@@ -526,9 +638,10 @@ async function openChef(uid){
     openChefRecipes=[];
     cloud.unsubChefRecipes=cloud.api.observeChefRecipes(uid,items=>{
       openChefRecipes=items;
-      if(currentTab==='community')render();
+      if(shouldRenderCommunity())render();
     },err=>safetyStatus(err?.message||'That chef\'s recipes could not be loaded.'));
     render();
+    pushViewState();
   }catch(e){safetyStatus(e?.message||'That chef profile could not be loaded.');}
 }
 function closeChefProfile(){
@@ -594,11 +707,44 @@ async function unblockChef(targetUid){
 }
 function openCommunityRecipe(id){
   const r=cloud.recipes.find(x=>x.id===id);if(!r)return;
+  openCommunityRecipeId=id;
   try{cloud.unsubComments?.();}catch{}
-  const mediaHtml=(r.media||[]).map(m=>m.type==='VIDEO'?`<video class="detail-media" controls src="${escapeHtml(m.url)}"></video>`:`<img class="detail-media" src="${escapeHtml(m.url)}" alt="Recipe media">`).join('');
+  const liked=cloud.liked.has(r.id),bookmarked=cloud.bookmarks.has(r.id);
+  const mediaHtml=(r.media||[]).map(m=>m.type==='VIDEO'?`<video class="detail-media" controls src="${escapeHtml(m.url)}"></video>`:`<div class="thumb-wrap"><img class="detail-media" data-dbl-like="${r.id}" src="${escapeHtml(m.url)}" alt="Recipe media"></div>`).join('');
   const voiceHtml=(r.voiceClips||[]).map(v=>`<audio class="audio-player" controls src="${escapeHtml(v.url)}"></audio>`).join('');
-  main.innerHTML=`<button id="backCommunity" class="ghost">← Community</button><section class="card"><h1>${escapeHtml(r.title)}</h1><p class="status">by ${escapeHtml(r.authorName)} · serves ${r.servings}</p><p>${escapeHtml(r.description||'')}</p></section>${mediaHtml?`<section class="card"><div class="detail-media-grid">${mediaHtml}</div></section>`:''}<div class="section-title"><h2>Ingredients</h2></div>${r.ingredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${r.steps.map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}${voiceHtml?`<section class="card"><h2>Chef voice</h2><p class="hint">Original cooking-session audio published by the chef.</p>${voiceHtml}</section>`:''}<div class="section-title"><h2>Comments</h2></div><div id="safetyStatus" class="hint"></div><div id="comments"><div class="empty card">Loading comments…</div></div>${cloud.user?`<section class="card"><div id="replyBanner" class="hint"></div><textarea id="commentText" maxlength="800" placeholder="Add a comment"></textarea><button id="postComment" class="primary wide">Post comment</button><div id="commentStatus" class="hint"></div></section>`:'<div class="notice">Sign in to comment.</div>'}`;
-  document.querySelector('#backCommunity').onclick=()=>{try{cloud.unsubComments?.();}catch{}cloud.unsubComments=null;render();};
+  main.innerHTML=`<button id="backCommunity" class="ghost">← Community</button><section class="card"><h1>${escapeHtml(r.title)}</h1><p class="status">by ${escapeHtml(r.authorName)} · serves ${r.servings} · ${relativeTime(r.createdAt)}</p><p>${escapeHtml(r.description||'')}</p><div class="action-row"><button class="action-btn${liked?' active':''}" id="detailLike" aria-label="Like">${liked?'♥':'♡'} ${formatCount(r.likes||0)}</button><button class="action-btn" id="detailShare" aria-label="Share">📤</button><button class="action-btn action-spacer${bookmarked?' saved':''}" id="detailSave" aria-label="${bookmarked?'Saved':'Save'}">${bookmarked?'★':'☆'}</button></div></section>${mediaHtml?`<section class="card"><div class="detail-media-grid">${mediaHtml}</div></section>`:''}<div class="section-title"><h2>Ingredients</h2></div>${r.ingredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${r.steps.map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}${voiceHtml?`<section class="card"><h2>Chef voice</h2><p class="hint">Original cooking-session audio published by the chef.</p>${voiceHtml}</section>`:''}<div class="section-title"><h2>Comments</h2></div><div id="safetyStatus" class="hint"></div><div id="comments"><div class="empty card">Loading comments…</div></div>${cloud.user?`<section class="card"><div id="replyBanner" class="hint"></div><textarea id="commentText" maxlength="800" placeholder="Add a comment"></textarea><button id="postComment" class="primary wide">Post comment</button><div id="commentStatus" class="hint"></div></section>`:'<div class="notice">Sign in to comment.</div>'}`;
+  document.querySelector('#backCommunity').onclick=()=>{try{cloud.unsubComments?.();}catch{}cloud.unsubComments=null;openCommunityRecipeId=null;render();};
+
+  // Like/save patch their own button in place instead of going through
+  // render(): openCommunityRecipeId exists precisely to hold this view steady
+  // while the comment thread below stays subscribed, so redrawing the whole
+  // view here would defeat that (and blank the thread until its next change).
+  const likeBtn=document.querySelector('#detailLike');
+  if(likeBtn)likeBtn.onclick=async()=>{
+    if(!requireCommunitySignIn())return;
+    likeBtn.disabled=true;
+    try{
+      const nowLiked=await cloud.api.toggleLike(r.id);
+      likeBtn.classList.toggle('active',nowLiked);
+      likeBtn.textContent=`${nowLiked?'♥':'♡'} ${formatCount((r.likes||0)+(nowLiked?1:-1))}`;
+    }catch(e){alert(e?.message||'Could not update like.');}
+    finally{likeBtn.disabled=false;}
+  };
+  const saveBtn=document.querySelector('#detailSave');
+  if(saveBtn)saveBtn.onclick=async()=>{
+    if(!requireCommunitySignIn())return;
+    saveBtn.disabled=true;
+    try{
+      const nowSaved=await cloud.api.toggleBookmark(r.id);
+      saveBtn.classList.toggle('saved',nowSaved);
+      saveBtn.textContent=nowSaved?'★':'☆';
+      saveBtn.setAttribute('aria-label',nowSaved?'Saved':'Save');
+    }catch(e){alert(e?.message||'Could not update bookmark.');}
+    finally{saveBtn.disabled=false;}
+  };
+  document.querySelector('#detailShare')?.addEventListener('click',()=>shareRecipe(r));
+  main.querySelectorAll('[data-dbl-like]').forEach(img=>img.ondblclick=()=>likeFromPhoto(r.id,img.closest('.thumb-wrap')));
+
   cloud.unsubComments=cloud.api.observeComments(r.id,comments=>{
     const el=document.querySelector('#comments');
     if(!el)return;
@@ -784,7 +930,7 @@ function bindInbox(){
   });
 
   const back=document.querySelector('#backInbox');
-  if(back)back.onclick=()=>{closeConversationView();render();};
+  if(back)back.onclick=()=>{history.back();};
   main.querySelectorAll('[data-report-user]').forEach(b=>b.onclick=()=>reportTarget({targetType:'user',targetId:b.dataset.reportUser,targetUid:b.dataset.reportUser,contextId:openConversation?.id||''}));
   main.querySelectorAll('[data-toggle-block]').forEach(b=>b.onclick=async()=>{
     const uid=b.dataset.toggleBlock;
@@ -820,6 +966,7 @@ function openConversationView(conversationId){
     if(currentTab==='inbox')render();
   },err=>safetyStatus(err?.message||'Conversation could not be loaded.'));
   render();
+  pushViewState();
 }
 function closeConversationView(){
   try{cloud.unsubThread?.();}catch{}
@@ -845,6 +992,24 @@ async function messageChef(targetUid){
   }catch(e){safetyStatus(e?.message||'Could not open messages with this chef.');}
 }
 
+/**
+ * Unlike like/save/follow, sharing changes nothing server-side, so it is never
+ * sign-in gated -- anyone who can already see a public recipe can pass its link
+ * on. The link opens straight into that recipe (see pendingSharedRecipeId
+ * above) rather than dropping a chef on the bare feed.
+ */
+async function shareRecipe(recipe){
+  const url=`${location.origin}/?tab=community&recipe=${encodeURIComponent(recipe.id)}`;
+  const shareData={title:recipe.title||'A ChefVoice recipe',text:`${recipe.title||'A recipe'} on ChefVoice, by ${recipe.authorName||'a ChefVoice chef'}`,url};
+  if(navigator.share){
+    try{await navigator.share(shareData);}
+    catch(e){if(e?.name!=='AbortError')safetyStatus('Could not open the share sheet.');}
+    return;
+  }
+  try{await navigator.clipboard.writeText(url);safetyStatus('Recipe link copied to clipboard.');}
+  catch{safetyStatus(url);}
+}
+
 function liveTemplate(){return `<section class="hero" style="--hero:url('../assets/live-hero.webp')"><div class="eyebrow">Live kitchen</div><h1>Cook together, in real time.</h1><p>Community is now writable across Android and iPhone. WebRTC Live stays behind a separate device-test gate so it cannot interfere with the protected microphone/ingredient workflow.</p></section><div class="card"><strong>Live remains intentionally gated</strong><p class="status">The next Live milestone is Android ↔ iPhone signaling, camera, microphone and reconnection testing on real devices.</p></div>`;}
 
 function render(){
@@ -860,4 +1025,13 @@ function render(){
 
 if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
 window.addEventListener('beforeunload',()=>{capture.close();for(const key of ['unsubAuth','unsubFeed','unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubComments','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread','unsubChefRecipes'])try{cloud[key]?.();}catch{}});
+window.addEventListener('popstate',e=>{restoreViewState(e.state);});
+// Closes any open chef "more options" menu on an outside click. A single
+// document-level listener, rather than one per card, since render() throws the
+// whole card list away and rebuilds it on every like/follow/etc.
+document.addEventListener('click',()=>{document.querySelectorAll('.card-menu').forEach(m=>m.hidden=true);});
+// The very first paint bypasses nav(), so the tab bar's active class (otherwise
+// only kept in sync by nav()) is set here to match a tab requested via ?tab=.
+tabs.forEach(b=>b.classList.toggle('active',b.dataset.tab===currentTab));
 render();
+history.replaceState(currentViewState(),'',location.pathname);
