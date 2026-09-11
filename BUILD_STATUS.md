@@ -13,20 +13,25 @@
   `chefvoice-billing-verifier@...` (as asked), but `processChefVoiceRtdn`
   impersonates that service account per-call instead of running as it,
   because giving a 2nd-gen Pub/Sub/EventArc trigger a custom runtime
-  service account hits a currently-open firebase-tools bug. Needs one
-  manual IAM grant before it will work — see the doc.
+  service account hits a currently-open firebase-tools bug.
 - Both new functions log their own runtime identity on every invocation
-  specifically so that IAM setup can be verified against Cloud Logging
-  after a real deploy, rather than trusted on paper.
+  specifically so that IAM setup can be verified against Cloud Logging,
+  rather than trusted on paper.
 - `gradlew.bat :app:testDebugUnitTest` — BUILD SUCCESSFUL, same 3
   pre-existing warnings, confirms the Billing Library 9.1.0 API surface
   used here is real. `node --check` + the full `billing/` and
   `notifications/` gates (91 tests) pass with no regressions. Installed on
   a physical device (launches); the live paywall screen itself has not
   yet been walked through by hand.
-- **Nothing is deployed, and no product exists in Play Console yet** — see
-  "Not done" in the writeup for the exact remaining steps, several of
-  which only the project's Play Console/GCP admin can do.
+- **Deployed via `DEPLOY_BILLING.cmd`.** Along the way, found and deleted a
+  stale `onChefVoicePlayNotification` function left live in the project by
+  a separate, never-merged attempt at this same feature
+  (`claude/android-publisher-adc-auth-fe9407`) — one RTDN code path now,
+  not two. The one-time IAM grant (`Service Account Token Creator` for
+  `processChefVoiceRtdn`'s default identity on `chefvoice-billing-verifier`)
+  is also done. **Still unverified against a real purchase or RTDN event**
+  — no product exists in Play Console yet, so nothing has actually
+  exercised either function for real. See "Not done" in the writeup.
 - `firestore.rules`, `storage.rules`, `chefvoice-notifications`, the PWA,
   and the existing launch-access logic are all untouched. Version
   0.10.8/60 → 0.11.1/61 (jumping to the 0.11.x line already used for the

@@ -142,14 +142,18 @@ logging below exists to catch quickly instead of in production.
 
 Both functions call `logRuntimeIdentity()` on every invocation, which
 hits `http://metadata.google.internal/.../service-accounts/default/email`
-and logs the result. After the first real deploy, trigger each function
-once (a real test purchase for `verifyChefVoicePurchase`; Play Console's
-"Send test notification" for `processChefVoiceRtdn`) and check Cloud
-Logging for that line — `verifyChefVoicePurchase` should show
+and logs the result. `verifyChefVoicePurchase` should show
 `chefvoice-billing-verifier@...` directly; `processChefVoiceRtdn` should
-show whatever its own default identity is (impersonation happens
-per-API-call, not at the runtime-identity level, so this log line will
-*not* show `chefvoice-billing-verifier` — that's expected).
+show its own default identity (`569377936753-compute@developer.gserviceaccount.com`
+in this project) — impersonation happens per-API-call, not at the
+runtime-identity level, so that log line will *not* show
+`chefvoice-billing-verifier` even when everything is working correctly.
+
+Play Console's "Send test notification" button does **not** exercise this
+— it does not deliver a real notification through the actual Pub/Sub
+topic, so it cannot be used to confirm the impersonation call works. The
+only real tests are a License Testing purchase or a genuine RTDN event;
+see "Not done" below.
 
 ## Verified so far
 
@@ -163,30 +167,33 @@ billing/functions/index.js` and the full `billing/launch-access.test.js` +
 on a physical device — app launches; the actual paywall screen with live
 (loading) prices has not yet been walked through by hand on-device.
 
+**Deployed** via `DEPLOY_BILLING.cmd` (`chefvoice-billing:verifyChefVoicePurchase`
+updated, `processChefVoiceRtdn` newly created, the three existing
+launch-access functions updated unchanged). Before this deploy, a stale
+`onChefVoicePlayNotification` function — from the earlier, separate
+`claude/android-publisher-adc-auth-fe9407` attempt at this same feature,
+never merged here — was found live in the project and deleted
+(`firebase functions:delete onChefVoicePlayNotification --region
+us-central1`), so there is exactly one RTDN code path now, not two.
+
+**The one-time IAM grant is also done**:
+`569377936753-compute@developer.gserviceaccount.com` (confirmed as
+`processChefVoiceRtdn`'s actual default runtime identity) now holds
+Service Account Token Creator on `chefvoice-billing-verifier@...`, granted
+directly (no inheritance) rather than project-wide.
+
 ## Not done
 
-- **Nothing is deployed.** `DEPLOY_BILLING.cmd` has never been run, on this
-  change or any earlier one.
 - **No product exists in Play Console yet.** Until `chefvoice_pro` (with
   both base plans) and `chefvoice_pro_lifetime` are created, `queryOffers()`
   will return nothing and the paywall's buttons will sit disabled on
   "loading price…" — that's the correct degraded behavior, not a bug.
-- **The IAM grant above** — required before `processChefVoiceRtdn` can do
-  anything useful, and only doable by whoever administers the project.
-- **A real end-to-end purchase test**, which needs License Testing set up
-  in Play Console first (so a real purchase doesn't actually charge
-  anyone) — not something this session can do without Play Console access.
-- **A stale `onChefVoicePlayNotification` function may exist in the live
-  project**, deployed by an earlier, separate attempt at this same feature
-  (a sibling worktree, branch `claude/android-publisher-adc-auth-fe9407`,
-  never merged here) that modeled the product differently (two separate
-  subscription products instead of one with two base plans, no lifetime
-  product handling at all) and set a custom `serviceAccount` directly on
-  its Pub/Sub trigger — exactly the firebase-tools #6814 failure mode this
-  file's `VERIFIER_SERVICE_ACCOUNT` comment describes and this codebase
-  avoids via impersonation instead. Worth checking the Firebase console
-  after this deploys and deleting it if still present, so there isn't a
-  second, differently-broken code path receiving the same notifications.
+- **A real end-to-end purchase test.** Nothing has exercised
+  `verifyChefVoicePurchase` or `processChefVoiceRtdn` yet — both are
+  deployed and their IAM is in place, but unverified against a real
+  purchase or a genuine RTDN event. Needs License Testing set up in Play
+  Console first (so a real purchase doesn't actually charge anyone), which
+  needs Play Console access this session doesn't have.
 
 ## What did not change
 
