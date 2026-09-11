@@ -1,3 +1,31 @@
+# ChefVoice — Create Recipe flow simplification (0.10.8)
+
+- `CreateRecipeScreen` was one long scrolling flow covering capture,
+  details, ingredients, method, chef voice and media all at once —
+  flagged in `UI_BRANDING_AUDIT.md` and again in
+  `MONETIZATION_REVIEW_2026-09.md`'s sequencing as the thing standing
+  between a new user and their first successful recipe.
+- Split into five steps matching the audit's proposal exactly: Capture →
+  Recipe Details → Ingredients/Method → Media → Review, with a step
+  progress header and Back/Next navigation. No capture, parsing,
+  validation or save logic changed — same fields, same buttons, same
+  save-enabled condition, just spread across steps instead of one scroll.
+- Added a Review step that didn't exist before: a summary of the recipe
+  (name, description, times, tags, every ingredient and method step,
+  media/voice counts) shown right before Save.
+- `gradlew.bat :app:testDebugUnitTest` — BUILD SUCCESSFUL, same 3
+  pre-existing unrelated warnings. Built, installed and walked through
+  end to end on a real device (all five steps, Back navigation, Review,
+  Save) — confirmed working.
+- The deterministic voice pipeline (`CookingSessionCapture.kt`,
+  `CookingSessionParser.kt`, `IngredientParser.kt`), Firestore/Storage
+  rules, Cloud Functions, and the PWA are all untouched — this is an
+  Android-only presentation change. Version 0.10.7/59 → 0.10.8/60.
+
+See `CREATE_RECIPE_FLOW_SIMPLIFICATION_0.10.8.md`.
+
+---
+
 # ChefVoice — Firestore rules deploy gate hardening (0.10.7 line)
 
 - `DEPLOY_COMMUNITY_PROFILE_RULES.cmd` now runs `RUN_RULES_GATES.cmd` (the
