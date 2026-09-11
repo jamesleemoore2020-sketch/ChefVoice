@@ -116,6 +116,10 @@ export function observeUserRecipeIds(uid,kind,onChange,onError=()=>{}){
   return onSnapshot(collection(db,'users',uid,kind),snap=>onChange(new Set(snap.docs.map(d=>d.id))),onError);
 }
 
+// Mirrors Android's MAX_PUBLISHED_MEDIA_SLOTS -- storage.rules only accepts
+// public_media filenames matching slot-00 through slot-23 (24 slots).
+const MAX_PUBLIC_MEDIA_SLOTS=24;
+
 export async function publishRecipe(recipe,displayName,{mediaAssets=[],voiceBlob=null}={}){
   assertWrites();
   const user=requireUser('Sign in before publishing to Community.');
@@ -126,15 +130,25 @@ export async function publishRecipe(recipe,displayName,{mediaAssets=[],voiceBlob
   const stage={...recipe,isPublic:recipe.isPublic===true,authorId:user.uid,authorName:String(displayName||'Chef').trim()||'Chef',media:stageMedia,voiceClips:recipe.voiceClips||[],updatedAt:Date.now(),likes:Number(recipe.likes||0),commentCount:Number(recipe.commentCount||0)};
   await setDoc(doc(db,'recipes',recipe.id),toCloudMap(stage));
 
+  // Public media lives at deterministic recipes/{uid}/{id}/publicMedia/slot-NN
+  // objects, each gated by a server-issued permit (storage.rules: uploadPermit()).
+  // The old recipes/{uid}/{id}/media/{uuid}.ext path is now closed to new writes
+  // (allow create, update: if false) -- writing there 403s instead of publishing.
+  const cappedAssets=mediaAssets.slice(0,MAX_PUBLIC_MEDIA_SLOTS);
+  if(mediaAssets.length>MAX_PUBLIC_MEDIA_SLOTS)warnings.push(`Community recipes can publish up to ${MAX_PUBLIC_MEDIA_SLOTS} photo/video items. Extra local media was not uploaded.`);
   const uploadedMedia=[];
-  for(const item of mediaAssets){
+  for(let index=0;index<cappedAssets.length;index++){
+    const item=cappedAssets[index];
     if(item.remoteUrl){uploadedMedia.push({id:item.id,type:item.cloudType||cloudMediaType(item.type),url:item.remoteUrl});continue;}
     if(!item.blob){warnings.push(`Media ${item.name||item.id} stayed local because its file was unavailable.`);continue;}
     try{
-      const ext=extensionFor(item.blob.type,item.name);
-      const target=storageRef(storage,`recipes/${user.uid}/${recipe.id}/media/${item.id}.${ext}`);
-      await uploadBytes(target,item.blob,{contentType:item.blob.type||undefined});
-      uploadedMedia.push({id:item.id,type:item.cloudType||cloudMediaType(item.blob.type),url:await getDownloadURL(target)});
+      const contentType=item.blob.type||item.type||(item.cloudType==='VIDEO'?'video/mp4':'image/jpeg');
+      const fileName=`slot-${String(index).padStart(2,'0')}`;
+      const permit=await callFunction('authorizeChefVoiceStorageUpload',{kind:'public_media',recipeId:recipe.id,fileName,bytes:item.blob.size,contentType});
+      if(!permit?.permitId||!permit?.token)throw new Error('Media upload was not authorized.');
+      const target=storageRef(storage,`recipes/${user.uid}/${recipe.id}/publicMedia/${fileName}`);
+      await uploadBytes(target,item.blob,{contentType,customMetadata:{chefvoicePermitId:permit.permitId,chefvoiceUploadToken:permit.token}});
+      uploadedMedia.push({id:item.id,type:item.cloudType||cloudMediaType(contentType),url:await getDownloadURL(target)});
     }catch(e){warnings.push(`One photo/video stayed local (${friendlyError(e)}).`);}
   }
 
@@ -651,7 +665,8 @@ function toCloudMap(recipe){
     media:(recipe.media||[]).filter(i=>i?.url).map(i=>({id:String(i.id||crypto.randomUUID()),type:i.type==='VIDEO'?'VIDEO':'IMAGE',url:String(i.url)})),
     voiceClips:(recipe.voiceClips||[]).filter(i=>i?.url).map(i=>({id:String(i.id||crypto.randomUUID()),label:String(i.label||'Chef voice'),createdAt:Number(i.createdAt||Date.now()),url:String(i.url)})),
     isPublic:recipe.isPublic===true,authorId:String(recipe.authorId||''),authorName:String(recipe.authorName||'Chef'),
-    createdAt:Number(recipe.createdAt||Date.now()),updatedAt:Number(recipe.updatedAt||Date.now()),likes:Math.max(0,Number(recipe.likes||0)),commentCount:Math.max(0,Number(recipe.commentCount||0))
+    createdAt:Number(recipe.createdAt||Date.now()),updatedAt:Number(recipe.updatedAt||Date.now()),likes:Math.max(0,Number(recipe.likes||0)),commentCount:Math.max(0,Number(recipe.commentCount||0)),
+    tags:Array.isArray(recipe.tags)?recipe.tags.map(String).slice(0,8):[]
   };
 }
 
@@ -661,7 +676,8 @@ function normalizeCloudRecipe(id,data={}){
     ingredients:Array.isArray(data.ingredients)?data.ingredients.map(item=>({id:String(item?.id||crypto.randomUUID()),quantity:String(item?.quantity||''),unit:String(item?.unit||''),name:String(item?.name||'')})):[],
     steps:Array.isArray(data.steps)?data.steps.map(String):[],
     media:Array.isArray(data.media)?data.media:[],voiceClips:Array.isArray(data.voiceClips)?data.voiceClips:[],
-    isPublic:data.isPublic===true,authorId:String(data.authorId||''),authorName:String(data.authorName||'Chef'),createdAt:Number(data.createdAt||0),updatedAt:Number(data.updatedAt||0),likes:Math.max(0,Number(data.likes||0)),commentCount:Math.max(0,Number(data.commentCount||0))
+    isPublic:data.isPublic===true,authorId:String(data.authorId||''),authorName:String(data.authorName||'Chef'),createdAt:Number(data.createdAt||0),updatedAt:Number(data.updatedAt||0),likes:Math.max(0,Number(data.likes||0)),commentCount:Math.max(0,Number(data.commentCount||0)),
+    tags:Array.isArray(data.tags)?data.tags.map(String):[]
   };
 }
 function normalizeProfile(uid,data={}){

@@ -4,6 +4,7 @@
 .between{justify-content:space-between}.community-card h3{margin:0 0 4px}.community-card p{line-height:1.45}.community-card .status{font-size:.82rem}
 .detail-media-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.detail-media{width:100%;max-height:360px;object-fit:cover;border-radius:15px;border:1px solid var(--line);background:#f6eee9}.community-thumb{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:16px;border:1px solid var(--line);display:block}
 .thumb-wrap{position:relative;margin-bottom:12px}
+.media-remove{position:absolute;top:8px;right:8px;width:28px;height:28px;border-radius:50%;border:none;background:rgba(0,0,0,.58);color:#fff;font-size:16px;line-height:1;cursor:pointer}
 .heart-burst{position:absolute;top:50%;left:50%;font-size:5rem;line-height:1;transform:translate(-50%,-50%) scale(0);opacity:0;pointer-events:none;filter:drop-shadow(0 6px 16px rgba(0,0,0,.25));animation:heartBurst .75s ease forwards}
 @keyframes heartBurst{
   0%{transform:translate(-50%,-50%) scale(0);opacity:0}

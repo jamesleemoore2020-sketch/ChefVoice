@@ -18,6 +18,7 @@ import {
   conversationUnread as isConversationUnread, otherParticipant, otherParticipantName,
   threadComments, unreadCounts as computeUnreadCounts, withoutBlocked
 } from './inbox.js';
+import { parseTagsInput, tagMatchesQuery } from './tag-utils.js';
 
 const main=document.querySelector('#main');
 const tabs=[...document.querySelectorAll('[data-tab]')];
@@ -33,7 +34,7 @@ let recipes=loadRecipes();
 let ingredients=[];let steps=[];let transcript=[];let livePartial='';
 let captureStatus='Talk naturally while you cook. ChefVoice will turn the session into an editable recipe draft.';
 let audioBlob=null;let audioUrl='';let capturing=false;let media=[];
-const form={title:'',description:'',servings:'2'};
+const form={title:'',description:'',servings:'2',tags:''};
 const cloud={
   state:'connecting',message:'Connecting to ChefVoice Community…',api:null,user:null,profile:null,recipes:[],feedError:'',
   liked:new Set(),bookmarks:new Set(),following:new Set(),entitlement:{...FREE_ENTITLEMENT},blocked:new Set(),
@@ -63,7 +64,7 @@ function clearUserObservers(){
   cloud.conversations=[];cloud.messageReads={};cloud.notifications=[];
   openConversation=null;threadMessages=[];
   // Chef search is sign-in gated, so signing out has to clear its results too.
-  chefSearchTerm='';chefSearchResults=[];chefSearchStatus='';
+  chefSearchTerm='';chefSearchResults=[];chefSearchStatus='';communitySearchOpen=false;
   closeChefProfile();
 }
 // See openCommunityRecipeId's declaration below for why the community tab's
@@ -215,6 +216,7 @@ function captureForm(){
   const title=document.querySelector('#title');if(title)form.title=title.value;
   const desc=document.querySelector('#description');if(desc)form.description=desc.value;
   const servings=document.querySelector('#servings');if(servings)form.servings=servings.value;
+  const tags=document.querySelector('#tags');if(tags)form.tags=tags.value;
 }
 
 // Browser/PWA back-button support. Every tab switch and the two multi-screen
@@ -276,6 +278,7 @@ function cookTemplate(){
     <div class="field"><label for="title">Recipe name</label><input id="title" value="${escapeHtml(form.title)}" placeholder="Sunday tomato pasta"></div>
     <div class="field"><label for="description">Description / chef note</label><textarea id="description" placeholder="What makes this recipe yours?">${escapeHtml(form.description)}</textarea></div>
     <div class="field"><label for="servings">Servings</label><input id="servings" inputmode="numeric" value="${escapeHtml(form.servings)}"></div>
+    <div class="field"><label for="tags">Tags</label><input id="tags" value="${escapeHtml(form.tags)}" placeholder="#bbq, camping, weeknight"></div>
   </section>
   <div class="section-title"><h2>Ingredients</h2><span class="count" id="ingredientCount"></span></div><div id="ingredientList"></div>
   <div class="card"><div class="row"><input id="manualIngredient" class="grow" placeholder="e.g. two tablespoons olive oil"><button id="addIngredient" class="secondary">Add</button></div></div>
@@ -307,7 +310,17 @@ function renderSteps(){
   el.querySelectorAll('[data-step]').forEach(t=>t.addEventListener('change',e=>steps[Number(e.target.dataset.step)]=e.target.value));
   el.querySelectorAll('[data-step-remove]').forEach(b=>b.addEventListener('click',()=>{steps.splice(Number(b.dataset.stepRemove),1);renderSteps();}));
 }
-function renderMedia(){const el=document.querySelector('#mediaPreview');if(el)el.innerHTML=media.map(m=>m.type.startsWith('video')?`<video src="${m.url}" controls></video>`:`<img src="${m.url}" alt="Recipe media">`).join('');}
+function renderMedia(){
+  const el=document.querySelector('#mediaPreview');if(!el)return;
+  el.innerHTML=media.map(m=>`<div class="thumb-wrap">${m.type.startsWith('video')?`<video src="${m.url}" controls></video>`:`<img src="${m.url}" alt="Recipe media">`}<button class="media-remove" data-media-remove="${m.id}" aria-label="Remove this photo/video">×</button></div>`).join('');
+  el.querySelectorAll('[data-media-remove]').forEach(b=>b.onclick=()=>{
+    const id=b.dataset.mediaRemove;
+    const item=media.find(x=>x.id===id);
+    if(item)try{URL.revokeObjectURL(item.url)}catch{}
+    media=media.filter(x=>x.id!==id);
+    renderMedia();
+  });
+}
 function renderCookDynamic(){renderCapture();renderIngredients();renderSteps();renderMedia();}
 
 async function toggleCapture(){
@@ -355,20 +368,20 @@ function bindCook(){
   });
   document.querySelector('#saveRecipe').addEventListener('click',async()=>{
     captureForm();const recipeId=crypto.randomUUID();
-    const recipe={id:recipeId,title:form.title.trim()||'Untitled recipe',description:form.description.trim(),servings:Number(form.servings)||2,ingredients:structuredClone(ingredients),steps:[...steps],transcript:structuredClone(transcript),createdAt:Date.now(),updatedAt:Date.now(),isPublic:false,media:[]};
+    const recipe={id:recipeId,title:form.title.trim()||'Untitled recipe',description:form.description.trim(),servings:Number(form.servings)||2,ingredients:structuredClone(ingredients),steps:[...steps],transcript:structuredClone(transcript),createdAt:Date.now(),updatedAt:Date.now(),isPublic:false,media:[],tags:parseTagsInput(form.tags)};
     if(audioBlob?.size){try{recipe.sessionAudio=await saveAudioBlob(recipe.id,audioBlob);}catch(e){recipe.audioWarning=e.message;}}
     for(const item of media){try{await saveMediaBlob(recipe.id,item.id,item.file);recipe.media.push({id:item.id,name:item.name,type:item.type,size:item.file.size,stored:true});}catch(e){recipe.mediaWarning=e.message;}}
     for(const item of media)try{URL.revokeObjectURL(item.url)}catch{}
     recipes.unshift(recipe);saveRecipes(recipes);
     // Only a brand-new recipe is a completion. Edits and publishes are not.
     ChefAnalytics.recipeCompleted();
-    captureStatus='Recipe saved on this device.';form.title='';form.description='';form.servings='2';ingredients=[];steps=[];transcript=[];audioBlob=null;audioUrl='';media=[];nav('recipes');
+    captureStatus='Recipe saved on this device.';form.title='';form.description='';form.servings='2';form.tags='';ingredients=[];steps=[];transcript=[];audioBlob=null;audioUrl='';media=[];nav('recipes');
   });
 }
 
 function recipesTemplate(){
   const cloudNote=cloud.user?`<div class="quality">Signed in as ${escapeHtml(cloud.user.email||'ChefVoice member')}. Publishing now uses the verified ChefVoice Firebase project.</div>`:`<div class="notice">Local recipes stay private on this device. Sign in from Profile to publish to Community.</div>`;
-  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${recipes.length?recipes.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps · serves ${r.servings||2}</p><div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">Delete local</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>'}`;
+  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${recipes.length?recipes.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps · serves ${r.servings||2}</p>${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">Delete local</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>'}`;
 }
 async function publishLocalRecipe(id,button){
   const r=recipes.find(x=>x.id===id);if(!r||!cloud.api||!cloud.user)return;
@@ -515,15 +528,26 @@ async function runSecondPass(recipe){
 function openRecipe(id){
   const r=recipes.find(x=>x.id===id);if(!r)return;
   const remoteMedia=(r.remoteMedia||[]).map(m=>m.type==='VIDEO'?`<video class="detail-media" controls src="${escapeHtml(m.url)}"></video>`:`<img class="detail-media" src="${escapeHtml(m.url)}" alt="Recipe media">`).join('');
-  main.innerHTML=`<button id="backRecipes" class="ghost">← Recipes</button><section class="card"><div class="row between"><h1>${escapeHtml(r.title)}</h1>${r.isPublic?'<span class="pill">Community</span>':'<span class="pill">Private</span>'}</div><p class="status">${escapeHtml(r.description||'')}</p><span class="pill">Serves ${r.servings||2}</span></section>${remoteMedia?`<section class="card"><h2>Recipe media</h2><div class="detail-media-grid">${remoteMedia}</div></section>`:''}${r.sessionAudio?.stored?'<section class="card"><h2>Original chef voice</h2><p class="hint">The full microphone recording is stored separately from the transcript.</p><button id="loadChefVoice" class="secondary wide">▶ Load chef voice</button><div id="chefVoicePlayer"></div></section>':''}<div id="paywall"></div>${secondPassTemplate(r)}<div class="section-title"><h2>Ingredients</h2></div>${(r.ingredients||[]).map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${(r.steps||[]).map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}<div class="section-title"><h2>Cooking transcript</h2></div><div class="card transcript">${(r.transcript||[]).map(s=>`<div class="transcript-line">${escapeHtml(s.text)}</div>`).join('')||'No transcript saved.'}</div>`;
+  main.innerHTML=`<button id="backRecipes" class="ghost">← Recipes</button><section class="card"><div class="row between"><h1>${escapeHtml(r.title)}</h1>${r.isPublic?'<span class="pill">Community</span>':'<span class="pill">Private</span>'}</div><p class="status">${escapeHtml(r.description||'')}</p><span class="pill">Serves ${r.servings||2}</span>${(r.tags||[]).map(t=>`<span class="pill">#${escapeHtml(t)}</span>`).join('')}</section>${remoteMedia?`<section class="card"><h2>Recipe media</h2><div class="detail-media-grid">${remoteMedia}</div></section>`:''}${r.sessionAudio?.stored?'<section class="card"><h2>Original chef voice</h2><p class="hint">The full microphone recording is stored separately from the transcript.</p><button id="loadChefVoice" class="secondary wide">▶ Load chef voice</button><div id="chefVoicePlayer"></div></section>':''}<div id="paywall"></div>${secondPassTemplate(r)}<div class="section-title"><h2>Ingredients</h2></div>${(r.ingredients||[]).map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${(r.steps||[]).length?'<button id="readAloudBtn" class="secondary wide">🔊 Read steps aloud</button>':''}${(r.steps||[]).map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}<div class="section-title"><h2>Cooking transcript</h2></div><div class="card transcript">${(r.transcript||[]).map(s=>`<div class="transcript-line">${escapeHtml(s.text)}</div>`).join('')||'No transcript saved.'}</div>`;
   document.querySelector('#backRecipes').onclick=()=>{secondPass={recipeId:'',busy:false,message:'',result:null};render();};
   bindSecondPass(r);
   renderPaywall();
   const load=document.querySelector('#loadChefVoice');if(load)load.onclick=async()=>{load.disabled=true;load.textContent='Loading…';const blob=await loadAudioBlob(r.id);const target=document.querySelector('#chefVoicePlayer');if(blob){const url=URL.createObjectURL(blob);target.innerHTML=`<audio class="audio-player" controls src="${url}"></audio>${isIOS?'<p class="hint">ChefVoice will refresh the voice engine before your next capture after audio playback if iOS requires it.</p>':''}`;}else target.innerHTML='<p class="status">The stored recording could not be found.</p>';load.remove();};
+  const readBtn=document.querySelector('#readAloudBtn');
+  if(readBtn)readBtn.onclick=()=>{
+    if(!('speechSynthesis' in window)){readBtn.textContent='Speech is not supported on this device.';return;}
+    if(speechSynthesis.speaking){speechSynthesis.cancel();readBtn.textContent='🔊 Read steps aloud';return;}
+    const utterance=new SpeechSynthesisUtterance([r.title,...(r.steps||[])].join('. '));
+    utterance.onend=()=>{readBtn.textContent='🔊 Read steps aloud';};
+    utterance.onerror=()=>{readBtn.textContent='🔊 Read steps aloud';};
+    readBtn.textContent='⏸ Stop reading';
+    speechSynthesis.speak(utterance);
+  };
 }
 
 // Chef discovery state. Search needs sign-in because listing the users collection
 // does; a signed-out chef still gets the public feed.
+let communitySearchOpen=false;
 let chefSearchTerm='';
 let chefSearchResults=[];
 let chefSearchStatus='';
@@ -560,22 +584,29 @@ function communityTemplate(){
   // a blocked pair; this is the read half.
   const visible=withoutBlocked(cloud.recipes,cloud.blocked);
   const hiddenCount=cloud.recipes.length-visible.length;
-  const feed=visible.length?visible.map(r=>{
+  const dishTerm=chefSearchTerm.trim().toLowerCase();
+  const searched=dishTerm?visible.filter(r=>{
+    if((r.tags||[]).some(t=>tagMatchesQuery(t,dishTerm)))return true;
+    const haystack=[r.title,r.description,r.authorName,...(r.ingredients||[]).map(i=>i.name)].join(' ').toLowerCase();
+    return haystack.includes(dishTerm);
+  }):visible;
+  const feed=searched.length?searched.map(r=>{
     const liked=cloud.liked.has(r.id),bookmarked=cloud.bookmarks.has(r.id),following=cloud.following.has(r.authorId),self=cloud.user?.uid===r.authorId;
     const hero=r.media?.find(m=>m.type!=='VIDEO')?.url;
     const initial=(r.authorName||'C').trim().charAt(0).toUpperCase();
     const canModerate=cloud.user&&!self;
     const menu=canModerate?`<button class="kebab" data-menu-toggle="${escapeHtml(r.id)}" aria-label="More options">⋯</button><div class="card-menu" id="menu-${escapeHtml(r.id)}" hidden><button class="menu-item" data-message="${escapeHtml(r.authorId)}" data-message-name="${escapeHtml(r.authorName||'')}">✉ Message chef</button><button class="menu-item danger" data-report="${escapeHtml(r.id)}" data-report-uid="${escapeHtml(r.authorId)}">⚑ Report</button><button class="menu-item danger" data-block="${escapeHtml(r.authorId)}">🚫 Block chef</button></div>`:'';
-    return `<article class="card community-card"><div class="social-head"><span class="avatar-circle">${escapeHtml(initial)}</span><div class="chef-id"><strong>${escapeHtml(r.authorName||'Chef')}</strong><span class="meta">${r.ingredients.length} ingredients · ${r.steps.length} steps · ${relativeTime(r.createdAt)}</span></div>${canModerate?`<button class="follow-btn${following?' following':''}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow'}</button>`:''}${menu}</div>${hero?`<div class="thumb-wrap"><img class="community-thumb" data-dbl-like="${r.id}" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}"></div>`:''}<h3>${escapeHtml(r.title)}</h3>${r.description?`<p class="status">${escapeHtml(r.description)}</p>`:''}<div class="action-row"><button class="action-btn${liked?' active':''}" data-like="${r.id}">${liked?'♥':'♡'} ${formatCount(r.likes||0)}</button><button class="action-btn" data-comments="${r.id}">💬 ${formatCount(r.commentCount||0)}</button><button class="action-btn" data-share="${r.id}" aria-label="Share">📤</button><button class="action-btn action-spacer${bookmarked?' saved':''}" data-bookmark="${r.id}" aria-label="${bookmarked?'Saved':'Save'}">${bookmarked?'★':'☆'}</button></div></article>`;
-  }).join(''):`<div class="empty card">${cloud.feedError?`Community could not load: ${escapeHtml(cloud.feedError)}`:cloud.state==='connecting'?'Connecting to the real ChefVoice Community…':'No public Community recipes were returned.'}</div>`;
+    return `<article class="card community-card"><div class="social-head"><span class="avatar-circle">${escapeHtml(initial)}</span><div class="chef-id"><strong>${escapeHtml(r.authorName||'Chef')}</strong><span class="meta">${r.ingredients.length} ingredients · ${r.steps.length} steps · ${relativeTime(r.createdAt)}</span></div>${canModerate?`<button class="follow-btn${following?' following':''}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow'}</button>`:''}${menu}</div>${hero?`<div class="thumb-wrap"><img class="community-thumb" data-dbl-like="${r.id}" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}"></div>`:''}<h3>${escapeHtml(r.title)}</h3>${r.description?`<p class="status">${escapeHtml(r.description)}</p>`:''}${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="action-row"><button class="action-btn${liked?' active':''}" data-like="${r.id}">${liked?'♥':'♡'} ${formatCount(r.likes||0)}</button><button class="action-btn" data-comments="${r.id}">💬 ${formatCount(r.commentCount||0)}</button><button class="action-btn" data-share="${r.id}" aria-label="Share">📤</button><button class="action-btn action-spacer${bookmarked?' saved':''}" data-bookmark="${r.id}" aria-label="${bookmarked?'Saved':'Save'}">${bookmarked?'★':'☆'}</button></div></article>`;
+  }).join(''):`<div class="empty card">${cloud.feedError?`Community could not load: ${escapeHtml(cloud.feedError)}`:cloud.state==='connecting'?'Connecting to the real ChefVoice Community…':dishTerm?'No dishes matched that search.':'No public Community recipes were returned.'}</div>`;
   const blockedNote=hiddenCount?`<div class="notice">${hiddenCount} recipe${hiddenCount===1?'':'s'} from chefs you blocked ${hiddenCount===1?'is':'are'} hidden. Manage blocked chefs from your Profile.</div>`:'';
   const searchResults=chefSearchResults.length
     ?`<div class="section-title"><h2>Chefs</h2><span class="count">${chefSearchResults.length} found</span></div>${chefSearchResults.map(p=>`<article class="card"><div class="row between"><div><strong>${escapeHtml(p.displayName)}</strong><p class="status">${escapeHtml(p.bio||'ChefVoice member')}</p></div><span class="pill">${p.followerCount} follower${p.followerCount===1?'':'s'}</span></div><button class="secondary" data-open-chef="${escapeHtml(p.uid)}">View chef</button></article>`).join('')}`
     :'';
-  const search=cloud.user
-    ?`<section class="card"><div class="row"><input id="chefSearch" class="grow" placeholder="Search chefs by name, bio or favourites" value="${escapeHtml(chefSearchTerm)}"><button id="chefSearchBtn" class="secondary">Search</button></div>${chefSearchStatus?`<p class="hint">${escapeHtml(chefSearchStatus)}</p>`:''}</section>${searchResults}`
+  const searchToggle=cloud.user?`<div class="row" style="margin:6px 2px 0"><button id="communitySearchToggle" class="secondary">${communitySearchOpen?'✕ Close search':'🔍 Search'}</button></div>`:'';
+  const search=cloud.user&&communitySearchOpen
+    ?`<section class="card"><div class="row"><input id="chefSearch" class="grow" placeholder="Search chefs, dishes or #tags" value="${escapeHtml(chefSearchTerm)}"><button id="chefSearchBtn" class="secondary">Search</button></div>${chefSearchStatus?`<p class="hint">${escapeHtml(chefSearchStatus)}</p>`:''}</section>${searchResults}`
     :'';
-  return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">ChefVoice Community</div><h1>Android and iPhone, one kitchen.</h1><p>Both clients now use the same Firebase Authentication, Firestore and Storage project.</p></section><div class="row between" style="margin:10px 2px"><strong>Community feed</strong>${cloudStatus}</div><div id="safetyStatus" class="hint"></div>${!cloud.user?'<div class="notice">You can browse public recipes now. Sign in from Profile to like, save, follow, comment and search for chefs.</div>':''}${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${search}${blockedNote}${feed}`;
+  return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">ChefVoice Community</div><h1>Android and iPhone, one kitchen.</h1><p>Both clients now use the same Firebase Authentication, Firestore and Storage project.</p></section><div class="row between" style="margin:10px 2px"><strong>Community feed</strong>${cloudStatus}</div><div id="safetyStatus" class="hint"></div>${!cloud.user?'<div class="notice">You can browse public recipes now. Sign in from Profile to like, save, follow, comment and search for chefs.</div>':''}${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${searchToggle}${search}${blockedNote}${feed}`;
 }
 function requireCommunitySignIn(){if(cloud.user)return true;nav('profile');return false;}
 function bindCommunity(){
@@ -612,6 +643,12 @@ function bindCommunity(){
   const back=document.querySelector('#backCommunity');
   if(back&&openChefProfile)back.onclick=()=>{history.back();};
 
+  const searchToggleBtn=document.querySelector('#communitySearchToggle');
+  if(searchToggleBtn)searchToggleBtn.onclick=()=>{
+    if(communitySearchOpen){chefSearchTerm='';chefSearchResults=[];chefSearchStatus='';}
+    communitySearchOpen=!communitySearchOpen;
+    render();
+  };
   const searchBtn=document.querySelector('#chefSearchBtn');
   const searchBox=document.querySelector('#chefSearch');
   const runSearch=async()=>{

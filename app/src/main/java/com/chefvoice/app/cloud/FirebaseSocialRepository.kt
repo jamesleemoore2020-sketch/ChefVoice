@@ -1486,7 +1486,8 @@ private fun Recipe.toCloudMap(): Map<String, Any> = mapOf(
     "createdAt" to createdAt,
     "updatedAt" to updatedAt,
     "likes" to likes,
-    "commentCount" to commentCount
+    "commentCount" to commentCount,
+    "tags" to tags
 )
 
 private fun LiveSession.toCloudMap(): Map<String, Any> = mapOf(
@@ -1563,7 +1564,8 @@ private fun DocumentSnapshot.toCloudRecipe(): Recipe {
         createdAt = data["createdAt"].asLong(),
         updatedAt = data["updatedAt"].asLong(),
         likes = data["likes"].asLong().toInt().coerceAtLeast(0),
-        commentCount = data["commentCount"].asLong().toInt().coerceAtLeast(0)
+        commentCount = data["commentCount"].asLong().toInt().coerceAtLeast(0),
+        tags = data["tags"].asStringList()
     )
 }
 

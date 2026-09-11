@@ -204,7 +204,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'id', 'title', 'description', 'servings', 'prepTimeMinutes', 'cookTimeMinutes',
           'ingredients', 'steps', 'stepIds', 'media', 'voiceClips', 'isPublic',
-          'authorId', 'authorName', 'createdAt', 'updatedAt', 'likes', 'commentCount'
+          'authorId', 'authorName', 'createdAt', 'updatedAt', 'likes', 'commentCount', 'tags'
         ])
         && data.keys().hasAll([
           'title', 'description', 'servings', 'ingredients', 'steps', 'isPublic',
@@ -221,6 +221,7 @@ service cloud.firestore {
         && (!data.keys().hasAny(['stepIds']) || (data.stepIds is list && data.stepIds.size() <= 300))
         && (!data.keys().hasAny(['media']) || (data.media is list && data.media.size() <= 100))
         && (!data.keys().hasAny(['voiceClips']) || (data.voiceClips is list && data.voiceClips.size() <= 50))
+        && (!data.keys().hasAny(['tags']) || (data.tags is list && data.tags.size() <= 8))
         && data.isPublic is bool
         && data.authorId is string && data.authorId.size() > 0 && data.authorId.size() <= 160
         && data.authorName is string && data.authorName.size() > 0 && data.authorName.size() <= 120
@@ -246,7 +247,7 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'title', 'description', 'servings', 'prepTimeMinutes', 'cookTimeMinutes',
           'ingredients', 'steps', 'stepIds', 'media', 'voiceClips', 'isPublic',
-          'authorName', 'updatedAt'
+          'authorName', 'updatedAt', 'tags'
         ]);
     }
 

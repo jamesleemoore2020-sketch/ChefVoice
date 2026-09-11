@@ -91,6 +91,7 @@ import androidx.core.content.FileProvider
 import com.chefvoice.app.analytics.ChefAnalytics
 import com.chefvoice.app.media.AudioPlayer
 import com.chefvoice.app.media.AudioRecorder
+import com.chefvoice.app.media.RecipeSpeaker
 import com.chefvoice.app.media.copyPickedMedia
 import com.chefvoice.app.model.Ingredient
 import com.chefvoice.app.model.ChefNotification
@@ -115,6 +116,8 @@ import com.chefvoice.app.notifications.ChefVoiceForegroundService
 import com.chefvoice.app.model.TranscriptSegment
 import com.chefvoice.app.model.VoiceClip
 import com.chefvoice.app.util.shareRecipe
+import com.chefvoice.app.util.parseTagsInput
+import com.chefvoice.app.util.tagMatchesQuery
 import com.chefvoice.app.voice.CookingSessionCapture
 import com.chefvoice.app.voice.CookingSessionParser
 import com.chefvoice.app.voice.IngredientParser
@@ -335,6 +338,7 @@ fun ChefVoiceApp(
                         onRemoveIngredient = { ingredientId -> appState.removeRecipeIngredient(recipe.id, ingredientId) },
                         onRemoveStep = { stepId -> appState.removeRecipeStep(recipe.id, stepId) },
                         onUpdateTimes = { prep, cook -> appState.updateRecipeTimes(recipe.id, prep, cook) },
+                        onUpdateTags = { tags -> appState.updateRecipeTags(recipe.id, tags) },
                         onCook = { appState.cookingRecipe = recipe },
                         onPlayVoice = appState::playVoice,
                         onLike = { appState.toggleLike(recipe) },
@@ -762,6 +766,7 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
     var servingsText by remember { mutableStateOf("2") }
     var prepTimeText by remember { mutableStateOf("") }
     var cookTimeText by remember { mutableStateOf("") }
+    var tagsText by remember { mutableStateOf("") }
     val ingredients = remember { mutableStateListOf<Ingredient>() }
     val steps = remember { mutableStateListOf<String>() }
     val media = remember { mutableStateListOf<MediaAttachment>() }
@@ -1023,6 +1028,16 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
             )
         }
         item {
+            OutlinedTextField(
+                value = tagsText,
+                onValueChange = { tagsText = it },
+                label = { Text("Tags") },
+                placeholder = { Text("#bbq, camping, weeknight") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+        }
+        item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = prepTimeText,
@@ -1238,7 +1253,8 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
                             media = media.toList(),
                             voiceClips = voiceClips.toList(),
                             transcript = sessionTranscript.toList(),
-                            authorName = authorName
+                            authorName = authorName,
+                            tags = parseTagsInput(tagsText)
                         )
                     )
                     title = ""
@@ -1246,6 +1262,7 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
                     servingsText = "2"
                     prepTimeText = ""
                     cookTimeText = ""
+                    tagsText = ""
                     ingredients.clear()
                     steps.clear()
                     media.clear()
@@ -1391,6 +1408,7 @@ private fun CommunityScreen(
     onProfile: () -> Unit
 ) {
     var communityMode by remember { mutableStateOf("discover") }
+    var searchExpanded by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
     var appliedSearch by remember { mutableStateOf("") }
     val term = appliedSearch.trim().lowercase(Locale.getDefault())
@@ -1400,6 +1418,7 @@ private fun CommunityScreen(
     val visibleItems = if (term.isBlank()) modeItems else modeItems.filter { item ->
         val recipe = item.recipe
         val profile = item.authorProfile
+        if (recipe.tags.any { tagMatchesQuery(it, term) }) return@filter true
         val haystack = buildList {
             add(recipe.title); add(recipe.description); add(recipe.authorName)
             add(profile?.displayName.orEmpty()); add(profile?.bio.orEmpty())
@@ -1414,6 +1433,10 @@ private fun CommunityScreen(
                 Text("Community", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text("Finished dishes first. Find chefs worth following.", style = MaterialTheme.typography.bodySmall)
             }
+            TextButton(onClick = {
+                if (searchExpanded) { searchText = ""; appliedSearch = ""; onSearchChefs("") }
+                searchExpanded = !searchExpanded
+            }) { Text(if (searchExpanded) "✕" else "🔍") }
             TextButton(onClick = onMessages) { Text(if (unreadMessageCount > 0) "✉ $unreadMessageCount" else "✉") }
             TextButton(onClick = onNotifications) { Text(if (unreadNotificationCount > 0) "🔔 $unreadNotificationCount" else "🔔") }
         }
@@ -1424,19 +1447,21 @@ private fun CommunityScreen(
             if (communityMode == "discover") Button(onClick = { communityMode = "discover" }, modifier = Modifier.weight(1f)) { Text("Discover") }
             else OutlinedButton(onClick = { communityMode = "discover" }, modifier = Modifier.weight(1f)) { Text("Discover") }
         }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = searchText,
-                onValueChange = { searchText = it },
-                label = { Text("Search chefs or dishes") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-            Button(onClick = { appliedSearch = searchText.trim(); onSearchChefs(appliedSearch) }, enabled = searchText.trim().length >= 2) { Text("Search") }
-        }
-        if (appliedSearch.isNotBlank()) {
-            TextButton(onClick = { searchText = ""; appliedSearch = ""; onSearchChefs("") }) { Text("Clear search") }
+        if (searchExpanded) {
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = searchText,
+                    onValueChange = { searchText = it },
+                    label = { Text("Search chefs, dishes or #tags") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(onClick = { appliedSearch = searchText.trim(); onSearchChefs(appliedSearch) }, enabled = searchText.trim().length >= 2) { Text("Search") }
+            }
+            if (appliedSearch.isNotBlank()) {
+                TextButton(onClick = { searchText = ""; appliedSearch = ""; onSearchChefs("") }) { Text("Clear search") }
+            }
         }
         if (!cloudConfigured) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
@@ -1557,6 +1582,9 @@ private fun CommunityScreen(
                             Column(modifier = Modifier.align(Alignment.BottomStart).padding(14.dp).background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(16.dp)).padding(10.dp)) {
                                 Text(recipe.title, color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 Text("${recipe.ingredients.size} ingredients · 💬 ${formatCount(recipe.commentCount)} · ${relativeTime(recipe.createdAt)}", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                                if (recipe.tags.isNotEmpty()) {
+                                    Text(recipe.tags.take(3).joinToString(" ") { "#$it" }, color = Color.White, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
                             }
                             Column(modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp)), horizontalAlignment = Alignment.CenterHorizontally) {
                                 TextButton(onClick = { onLike(recipe) }) { Text(if (isLiked(recipe.id)) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}", color = Color.White) }
@@ -2158,6 +2186,7 @@ private fun RecipeDetailScreen(
     onRemoveIngredient: (String) -> Unit,
     onRemoveStep: (String) -> Unit,
     onUpdateTimes: (Int, Int) -> Unit,
+    onUpdateTags: (List<String>) -> Unit,
     onCook: () -> Unit,
     onPlayVoice: (String) -> Unit,
     onLike: () -> Unit,
@@ -2182,6 +2211,7 @@ private fun RecipeDetailScreen(
     var mediaEditMode by remember(recipe.id) { mutableStateOf(false) }
     var prepTimeText by remember(recipe.id) { mutableStateOf(recipe.prepTimeMinutes.takeIf { it > 0 }?.toString().orEmpty()) }
     var cookTimeText by remember(recipe.id) { mutableStateOf(recipe.cookTimeMinutes.takeIf { it > 0 }?.toString().orEmpty()) }
+    var tagsText by remember(recipe.id) { mutableStateOf(recipe.tags.joinToString(", ") { "#$it" }) }
     var pendingMediaStepId by remember(recipe.id) { mutableStateOf("") }
     val context = LocalContext.current
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -2206,7 +2236,10 @@ private fun RecipeDetailScreen(
             navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
             actions = {
                 if (isOwned) TextButton(onClick = {
-                    if (mediaEditMode) onUpdateTimes(prepTimeText.toIntOrNull() ?: 0, cookTimeText.toIntOrNull() ?: 0)
+                    if (mediaEditMode) {
+                        onUpdateTimes(prepTimeText.toIntOrNull() ?: 0, cookTimeText.toIntOrNull() ?: 0)
+                        onUpdateTags(parseTagsInput(tagsText))
+                    }
                     mediaEditMode = !mediaEditMode
                 }) {
                     Text(if (mediaEditMode) "Done" else "Edit recipe")
@@ -2252,8 +2285,21 @@ private fun RecipeDetailScreen(
                                 OutlinedTextField(value = cookTimeText, onValueChange = { cookTimeText = it.filter { ch -> ch.isDigit() }.take(4) }, label = { Text("Cook min") }, modifier = Modifier.weight(1f), singleLine = true)
                             }
                             Text("Leave blank if unknown. Total time is shown automatically when both are set.", style = MaterialTheme.typography.bodySmall)
+                            OutlinedTextField(
+                                value = tagsText,
+                                onValueChange = { tagsText = it },
+                                label = { Text("Tags") },
+                                placeholder = { Text("#bbq, camping, weeknight") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
                         }
                     }
+                }
+            }
+            if (recipe.tags.isNotEmpty() && !mediaEditMode) {
+                item {
+                    Text(recipe.tags.joinToString("   ") { "#$it" }, style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -2623,6 +2669,13 @@ private fun RecipeDetailScreen(
 private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (String) -> Unit) {
     var stepIndex by remember(recipe.id) { mutableIntStateOf(0) }
     val step = recipe.steps.getOrNull(stepIndex)
+    val speakerContext = LocalContext.current
+    val speaker = remember { RecipeSpeaker(speakerContext) }
+    var readAloud by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) { onDispose { speaker.shutdown() } }
+    LaunchedEffect(stepIndex, readAloud) {
+        if (readAloud) speaker.speak(step.orEmpty()) else speaker.stop()
+    }
 
     Scaffold(topBar = {
         TopAppBar(
@@ -2658,6 +2711,10 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
                         onClick = { stepIndex++ },
                         modifier = Modifier.weight(1f)
                     ) { Text("Next") }
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = { readAloud = !readAloud }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (readAloud) "🔊 Reading aloud — tap to stop" else "🔊 Read steps aloud")
                 }
                 if (recipe.voiceClips.isNotEmpty()) {
                     Spacer(Modifier.height(18.dp))

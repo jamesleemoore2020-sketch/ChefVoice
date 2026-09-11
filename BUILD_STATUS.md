@@ -1,3 +1,37 @@
+# ChefVoice — Recipe #tags, collapsible search, read-aloud, Storage rules fix (0.10.7)
+
+- All four next-release asks from the 2026-09-10 handoff, done: collapsible
+  Community search (both platforms), freeform alias-aware `#tags` replacing
+  the fixed-enum idea (both platforms + `firestore.rules`), TTS read-aloud
+  (Android `CookingScreen` step-by-step; PWA reads the whole method in one
+  pass), and three complete seed recipes published to Community with photos.
+- **Found and fixed a real production bug while seeding**: PWA recipe photo
+  uploads were completely broken for every user — `storage.rules`' `publicMedia`
+  create/update chained three cross-service Firestore reads, one over
+  Firebase's hard limit of two per rule evaluation. Fixed by dropping the
+  redundant restriction recheck (already enforced before permit issuance);
+  confirmed against Firebase's own docs before deploying. Deployed via
+  `firebase deploy --only storage` — no wrapper script existed for Storage
+  rules before now.
+- Also fixed live: the PWA's Cook screen had no way to remove an
+  accidentally-added photo before saving (Android already had this). Small
+  `×` overlay added to each media thumbnail.
+- Deliberately **not** fixed: the PWA's voice-clip upload path uses the same
+  closed legacy Storage path, but also sends the chef's private full-session
+  recording toward a *public* path (unlike Android, which keeps it private
+  with no public URL). Fixing the permit call without first correcting which
+  path it targets risked actually publishing previously-private audio, so
+  it's left broken (same as before) pending a dedicated fix.
+- `npm test` 86/86 (81 + 5 new tag-utils cases). Android `:app:testDebugUnitTest`
+  BUILD SUCCESSFUL, including new `TagUtilsTest.kt`; same 3 pre-existing
+  unrelated warnings as the last handoff. Verified end-to-end against live
+  production, signed in: tag alias search, search collapse, read-aloud, the
+  new remove button, and all three seed recipes' photos rendering in Community.
+
+See `RECIPE_TAGS_SEARCH_READ_ALOUD_0.10.7.md`.
+
+---
+
 # ChefVoice PWA — Feature Parity with Android (0.11.0)
 
 - Completes the PWA catch-up: direct messages, in-app activity notifications,

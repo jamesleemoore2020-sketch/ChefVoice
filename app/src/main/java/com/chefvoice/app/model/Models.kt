@@ -99,7 +99,8 @@ data class Recipe(
     val updatedAt: Long = System.currentTimeMillis(),
     val likes: Int = 0,
     val commentCount: Int = 0,
-    val communityUpdatePending: Boolean = false
+    val communityUpdatePending: Boolean = false,
+    val tags: List<String> = emptyList()
 )
 
 fun Recipe.stableStepIds(): List<String> = steps.indices.map { index ->

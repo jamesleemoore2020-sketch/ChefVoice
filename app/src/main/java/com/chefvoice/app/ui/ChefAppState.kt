@@ -940,6 +940,21 @@ class ChefAppState(context: Context) {
         else "Prep/cook times saved to this recipe."
     }
 
+    fun updateRecipeTags(recipeId: String, tags: List<String>) {
+        val current = recipes.firstOrNull { it.id == recipeId } ?: selectedRecipe?.takeIf { it.id == recipeId } ?: return
+        if (current.tags == tags) return
+        val updated = current.copy(
+            tags = tags,
+            communityUpdatePending = current.isPublic || current.communityUpdatePending,
+            updatedAt = System.currentTimeMillis()
+        )
+        saveRecipe(updated)
+        if (selectedRecipe?.id == recipeId) selectedRecipe = updated.copy(stepIds = updated.stableStepIds())
+        cloudMessage = if (current.isPublic)
+            "Tags saved on this phone. Tap Update Community when you want members to see them."
+        else "Tags saved to this recipe."
+    }
+
     fun addRecipeMedia(recipeId: String, attachment: MediaAttachment) {
         val current = recipes.firstOrNull { it.id == recipeId } ?: selectedRecipe?.takeIf { it.id == recipeId } ?: return
         val updated = current.copy(

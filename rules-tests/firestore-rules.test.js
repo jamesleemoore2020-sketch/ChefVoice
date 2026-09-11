@@ -219,6 +219,34 @@ test("an owner cannot inflate their own like or comment counts", async () => {
   await assertFails(updateDoc(doc(db, "recipes", "recipe-8"), { likes: 5000, updatedAt: now() }));
 });
 
+test("a recipe can be published with freeform tags", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(
+    setDoc(doc(db, "recipes", "recipe-9"), recipe(ALICE, "Alice", { tags: ["bbq", "camping"] }))
+  );
+});
+
+test("a recipe rejects more than 8 tags", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  const tooMany = Array.from({ length: 9 }, (_, i) => `tag${i}`);
+  await assertFails(setDoc(doc(db, "recipes", "recipe-10"), recipe(ALICE, "Alice", { tags: tooMany })));
+});
+
+test("a recipe rejects tags that are not a list", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(setDoc(doc(db, "recipes", "recipe-11"), recipe(ALICE, "Alice", { tags: "bbq" })));
+});
+
+test("an owner can update their recipe's tags", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "recipes", "recipe-12"), recipe(ALICE, "Alice", { tags: ["bbq"] }));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(
+    updateDoc(doc(db, "recipes", "recipe-12"), { tags: ["bbq", "camping"], updatedAt: now() })
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Live signaling
 // ---------------------------------------------------------------------------
