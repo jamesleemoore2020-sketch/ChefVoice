@@ -160,7 +160,11 @@ then run BUILD_AND_INSTALL.cmd again.
 
     Push-Location $ProjectRoot
     try {
-        & $gradlew --no-daemon clean assembleDebug
+        # No --no-daemon/clean here: this is the fast iterative dev loop, so let
+        # Gradle keep its daemon (and the Kotlin compiler daemon it manages) warm
+        # across runs and rebuild incrementally. If a build ever looks stale,
+        # run `gradlew.bat clean` once by hand.
+        & $gradlew assembleDebug
         $buildExit = $LASTEXITCODE
     }
     finally {
