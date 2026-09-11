@@ -1630,8 +1630,6 @@ private fun CommunityScreen(
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text(if (communityMode == "following") "Following" else "Finished dishes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(6.dp))
         if (visibleItems.isEmpty()) {
             val message = when {
                 communityMode == "following" && !isSignedIn -> "Sign in to see finished dishes from chefs you follow."

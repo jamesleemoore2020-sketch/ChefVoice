@@ -549,6 +549,8 @@ function openRecipe(id){
 // does; a signed-out chef still gets the public feed.
 let communitySearchOpen=false;
 let chefSearchTerm='';
+// Mirrors Android's Following/Discover split (CommunityScreen in ChefVoiceApp.kt).
+let communityMode='discover';
 let chefSearchResults=[];
 let chefSearchStatus='';
 let openChefProfile=null;
@@ -582,14 +584,21 @@ function communityTemplate(){
   // Blocking has to actually hide the blocked chef's cooking, or the button is a
   // broken promise. Firestore rules already stop writes in both directions between
   // a blocked pair; this is the read half.
-  const visible=withoutBlocked(cloud.recipes,cloud.blocked);
-  const hiddenCount=cloud.recipes.length-visible.length;
+  const unblocked=withoutBlocked(cloud.recipes,cloud.blocked);
+  const visible=communityMode==='following'?(cloud.user?unblocked.filter(r=>cloud.following.has(r.authorId)):[]):unblocked;
+  const hiddenCount=cloud.recipes.length-unblocked.length;
   const dishTerm=chefSearchTerm.trim().toLowerCase();
   const searched=dishTerm?visible.filter(r=>{
     if((r.tags||[]).some(t=>tagMatchesQuery(t,dishTerm)))return true;
     const haystack=[r.title,r.description,r.authorName,...(r.ingredients||[]).map(i=>i.name)].join(' ').toLowerCase();
     return haystack.includes(dishTerm);
   }):visible;
+  const emptyMessage=communityMode==='following'
+    ?(!cloud.user?'Sign in to see finished dishes from chefs you follow.':'Follow chefs from Discover to build your Following feed.')
+    :cloud.feedError?`Community could not load: ${escapeHtml(cloud.feedError)}`
+    :cloud.state==='connecting'?'Connecting to the real ChefVoice Community…'
+    :dishTerm?'No dishes matched that search.'
+    :'No public Community recipes were returned.';
   const feed=searched.length?searched.map(r=>{
     const liked=cloud.liked.has(r.id),bookmarked=cloud.bookmarks.has(r.id),following=cloud.following.has(r.authorId),self=cloud.user?.uid===r.authorId;
     const hero=r.media?.find(m=>m.type!=='VIDEO')?.url;
@@ -597,7 +606,7 @@ function communityTemplate(){
     const canModerate=cloud.user&&!self;
     const menu=canModerate?`<button class="kebab" data-menu-toggle="${escapeHtml(r.id)}" aria-label="More options">⋯</button><div class="card-menu" id="menu-${escapeHtml(r.id)}" hidden><button class="menu-item" data-message="${escapeHtml(r.authorId)}" data-message-name="${escapeHtml(r.authorName||'')}">✉ Message chef</button><button class="menu-item danger" data-report="${escapeHtml(r.id)}" data-report-uid="${escapeHtml(r.authorId)}">⚑ Report</button><button class="menu-item danger" data-block="${escapeHtml(r.authorId)}">🚫 Block chef</button></div>`:'';
     return `<article class="card community-card"><div class="social-head"><span class="avatar-circle">${escapeHtml(initial)}</span><div class="chef-id"><strong>${escapeHtml(r.authorName||'Chef')}</strong><span class="meta">${r.ingredients.length} ingredients · ${r.steps.length} steps · ${relativeTime(r.createdAt)}</span></div>${canModerate?`<button class="follow-btn${following?' following':''}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow'}</button>`:''}${menu}</div>${hero?`<div class="thumb-wrap"><img class="community-thumb" data-dbl-like="${r.id}" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}"></div>`:''}<h3>${escapeHtml(r.title)}</h3>${r.description?`<p class="status">${escapeHtml(r.description)}</p>`:''}${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="action-row"><button class="action-btn${liked?' active':''}" data-like="${r.id}">${liked?'♥':'♡'} ${formatCount(r.likes||0)}</button><button class="action-btn" data-comments="${r.id}">💬 ${formatCount(r.commentCount||0)}</button><button class="action-btn" data-share="${r.id}" aria-label="Share">📤</button><button class="action-btn action-spacer${bookmarked?' saved':''}" data-bookmark="${r.id}" aria-label="${bookmarked?'Saved':'Save'}">${bookmarked?'★':'☆'}</button></div></article>`;
-  }).join(''):`<div class="empty card">${cloud.feedError?`Community could not load: ${escapeHtml(cloud.feedError)}`:cloud.state==='connecting'?'Connecting to the real ChefVoice Community…':dishTerm?'No dishes matched that search.':'No public Community recipes were returned.'}</div>`;
+  }).join(''):`<div class="empty card">${emptyMessage}</div>`;
   const blockedNote=hiddenCount?`<div class="notice">${hiddenCount} recipe${hiddenCount===1?'':'s'} from chefs you blocked ${hiddenCount===1?'is':'are'} hidden. Manage blocked chefs from your Profile.</div>`:'';
   const searchResults=chefSearchResults.length
     ?`<div class="section-title"><h2>Chefs</h2><span class="count">${chefSearchResults.length} found</span></div>${chefSearchResults.map(p=>`<article class="card"><div class="row between"><div><strong>${escapeHtml(p.displayName)}</strong><p class="status">${escapeHtml(p.bio||'ChefVoice member')}</p></div><span class="pill">${p.followerCount} follower${p.followerCount===1?'':'s'}</span></div><button class="secondary" data-open-chef="${escapeHtml(p.uid)}">View chef</button></article>`).join('')}`
@@ -606,10 +615,15 @@ function communityTemplate(){
   const search=cloud.user&&communitySearchOpen
     ?`<section class="card"><div class="row"><input id="chefSearch" class="grow" placeholder="Search chefs, dishes or #tags" value="${escapeHtml(chefSearchTerm)}"><button id="chefSearchBtn" class="secondary">Search</button></div>${chefSearchStatus?`<p class="hint">${escapeHtml(chefSearchStatus)}</p>`:''}</section>${searchResults}`
     :'';
-  return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">ChefVoice Community</div><h1>Android and iPhone, one kitchen.</h1><p>Both clients now use the same Firebase Authentication, Firestore and Storage project.</p></section><div class="row between" style="margin:10px 2px"><strong>Community feed</strong>${cloudStatus}</div><div id="safetyStatus" class="hint"></div>${!cloud.user?'<div class="notice">You can browse public recipes now. Sign in from Profile to like, save, follow, comment and search for chefs.</div>':''}${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${searchToggle}${search}${blockedNote}${feed}`;
+  const modeToggle=`<div class="row" style="margin:10px 2px 0"><button class="${communityMode==='following'?'primary':'secondary'} grow" data-community-mode="following">Following</button><button class="${communityMode==='discover'?'primary':'secondary'} grow" data-community-mode="discover">Discover</button></div>`;
+  return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">ChefVoice Community</div><h1>Community</h1></section><div class="row between" style="margin:10px 2px"><strong>Community feed</strong>${cloudStatus}</div><div id="safetyStatus" class="hint"></div>${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${modeToggle}${searchToggle}${search}${blockedNote}${feed}`;
 }
 function requireCommunitySignIn(){if(cloud.user)return true;nav('profile');return false;}
 function bindCommunity(){
+  main.querySelectorAll('[data-community-mode]').forEach(b=>b.onclick=()=>{
+    if(communityMode===b.dataset.communityMode)return;
+    communityMode=b.dataset.communityMode;render();
+  });
   main.querySelectorAll('[data-like]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.toggleLike(b.dataset.like);}catch(e){alert(e?.message||'Could not update like.');b.disabled=false;}});
   main.querySelectorAll('[data-bookmark]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.toggleBookmark(b.dataset.bookmark);}catch(e){alert(e?.message||'Could not update bookmark.');b.disabled=false;}});
   main.querySelectorAll('[data-follow]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.toggleFollow(b.dataset.follow);}catch(e){alert(e?.message||'Could not update follow.');b.disabled=false;}});
