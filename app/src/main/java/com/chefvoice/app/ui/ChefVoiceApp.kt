@@ -466,8 +466,7 @@ fun ChefVoiceApp(
                                 unreadMessageCount = appState.unreadConversationCount,
                                 unreadNotificationCount = appState.unreadNotificationCount,
                                 onMessages = { navigateTab(Tab.MESSAGES) },
-                                onNotifications = { navigateTab(Tab.NOTIFICATIONS) },
-                                onProfile = { navigateTab(Tab.PROFILE) }
+                                onNotifications = { navigateTab(Tab.NOTIFICATIONS) }
                             )
                             Tab.MESSAGES -> MessagesScreen(
                                 conversations = appState.conversations,
@@ -1404,8 +1403,7 @@ private fun CommunityScreen(
     unreadMessageCount: Int,
     unreadNotificationCount: Int,
     onMessages: () -> Unit,
-    onNotifications: () -> Unit,
-    onProfile: () -> Unit
+    onNotifications: () -> Unit
 ) {
     var communityMode by remember { mutableStateOf("discover") }
     var searchExpanded by remember { mutableStateOf(false) }
@@ -1431,13 +1429,12 @@ private fun CommunityScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Community", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("Finished dishes first. Find chefs worth following.", style = MaterialTheme.typography.bodySmall)
             }
             TextButton(onClick = {
                 if (searchExpanded) { searchText = ""; appliedSearch = ""; onSearchChefs("") }
                 searchExpanded = !searchExpanded
             }) { Text(if (searchExpanded) "✕" else "🔍") }
-            TextButton(onClick = onMessages) { Text(if (unreadMessageCount > 0) "✉ $unreadMessageCount" else "✉") }
+            TextButton(onClick = onMessages) { Text(if (unreadMessageCount > 0) "✉ $unreadMessageCount" else "✉", style = MaterialTheme.typography.headlineSmall) }
             TextButton(onClick = onNotifications) { Text(if (unreadNotificationCount > 0) "🔔 $unreadNotificationCount" else "🔔") }
         }
         Spacer(Modifier.height(8.dp))
@@ -1466,13 +1463,6 @@ private fun CommunityScreen(
         if (!cloudConfigured) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                 Text("Demo mode · Connect Firebase for the real member feed.", Modifier.padding(12.dp))
-            }
-        } else if (!isSignedIn) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Browse Discover freely. Sign in to follow chefs and unlock your Following feed.", Modifier.weight(1f))
-                    TextButton(onClick = onProfile) { Text("Sign in") }
-                }
             }
         }
         if (cloudMessage.isNotBlank()) Text(cloudMessage, style = MaterialTheme.typography.bodySmall)
