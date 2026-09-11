@@ -1,3 +1,28 @@
+# ChefVoice PWA — Private cooking-session upload hotfix (0.10.7 line)
+
+- Fixes the item this handoff's prior entry deliberately left broken: the
+  PWA's `publishRecipe()` was uploading the chef's full-session recording
+  to a closed legacy Storage path with no upload permit, so it silently
+  failed on every publish. Now uploads to `privateVoice/{uid}/{recipeId}/session`
+  with a `private_session` permit, never a public URL, and never listed
+  in the recipe's public `voiceClips` — matching Android's `uploadVoice()`
+  exactly, so a recipe published from the PWA can be re-reviewed with
+  ChefVoice Review from any device.
+- PWA-only: `storage.rules`, `firestore.rules`, Cloud Functions and Android
+  app code are all untouched. `app/build.gradle.kts` stays at 0.10.7 / 59.
+- `npm test` 86/86, unchanged. Not verified end-to-end against the live
+  Firebase project (would need a signed-in, verified-email account
+  publishing a real recipe with recorded audio); not yet deployed.
+- While running the full `notifications/` gate to check for regressions,
+  found 5 pre-existing failures unrelated to this fix — stale hardcoded
+  `versionCode`/`versionName` and a search-placeholder string assertion
+  left behind by the *previous* entry's own version bump and collapsible-search
+  change. Flagged separately rather than fixed here.
+
+See `PWA_PRIVATE_SESSION_UPLOAD_HOTFIX_0.10.7.md`.
+
+---
+
 # ChefVoice — Recipe #tags, collapsible search, read-aloud, Storage rules fix (0.10.7)
 
 - All four next-release asks from the 2026-09-10 handoff, done: collapsible

@@ -156,11 +156,17 @@ export async function publishRecipe(recipe,displayName,{mediaAssets=[],voiceBlob
   for(const oldClip of recipe.voiceClips||[]){if(oldClip?.url)uploadedVoice.push(oldClip);}
   if(voiceBlob?.size){
     try{
-      const clipId=`session-${recipe.id}`;
-      const ext=extensionFor(voiceBlob.type,'chef-voice');
-      const target=storageRef(storage,`recipes/${user.uid}/${recipe.id}/voice/${clipId}.${ext}`);
-      await uploadBytes(target,voiceBlob,{contentType:voiceBlob.type||undefined});
-      uploadedVoice.push({id:clipId,label:'Full cooking session',createdAt:Date.now(),url:await getDownloadURL(target)});
+      const contentType=audioContentType(voiceBlob);
+      const durationMs=await audioDurationMs(voiceBlob);
+      if(durationMs<=0||durationMs>SECOND_PASS_MAX_DURATION_MS)throw new Error('the cooking audio duration could not be verified within the 90-minute cloud limit');
+      const permit=await callFunction('authorizeChefVoiceStorageUpload',{kind:'private_session',recipeId:recipe.id,fileName:'session',bytes:voiceBlob.size,contentType});
+      if(!permit?.permitId||!permit?.token)throw new Error('the private cooking audio upload was not authorized');
+      // Raw cooking-session audio stays private for ChefVoice Review: uploaded to
+      // privateVoice/ with no public download URL, and never added to uploadedVoice
+      // below (mirrors Android's toCloudMap, which drops any clip labeled "Full
+      // cooking session" from the published recipe doc).
+      const target=storageRef(storage,`privateVoice/${user.uid}/${recipe.id}/session`);
+      await uploadBytes(target,voiceBlob,{contentType,customMetadata:{chefvoiceDurationMs:String(durationMs),chefvoicePermitId:permit.permitId,chefvoiceUploadToken:permit.token}});
     }catch(e){warnings.push(`Chef voice stayed local (${friendlyError(e)}).`);}
   }
 
@@ -710,9 +716,4 @@ export function otherParticipant(conversation,uid){return (conversation?.partici
 function requireUser(message){if(!auth.currentUser)throw new Error(message);return auth.currentUser;}
 function assertWrites(){if(!CLOUD_WRITES_ENABLED)throw new Error('ChefVoice cloud writes are disabled.');}
 function cloudMediaType(mime=''){return String(mime).startsWith('video/')?'VIDEO':'IMAGE';}
-function extensionFor(mime='',name=''){
-  const byMime={'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/heic':'heic','image/heif':'heif','video/mp4':'mp4','video/quicktime':'mov','video/webm':'webm','audio/mp4':'m4a','audio/mpeg':'mp3','audio/webm':'webm','audio/ogg':'ogg','audio/wav':'wav'};
-  if(byMime[mime])return byMime[mime];
-  const ext=String(name).split('.').pop()?.toLowerCase();return ext&&/^[a-z0-9]{2,5}$/.test(ext)?ext:'bin';
-}
 function friendlyError(e){return String(e?.message||e||'Storage unavailable').replace(/^Firebase:\s*/,'');}
