@@ -1,3 +1,28 @@
+# ChefVoice — Firestore rules deploy gate hardening (0.10.7 line)
+
+- `DEPLOY_COMMUNITY_PROFILE_RULES.cmd` now runs `RUN_RULES_GATES.cmd` (the
+  Firestore emulator suite — the only gate that actually evaluates a rule,
+  not just its source text) before deploying, and refuses to deploy on
+  failure. Closes a real gap: the prior `firestore.rules` deploy (adding
+  `tags`) shipped without that gate having been run.
+- Verified both the refusal path (deliberately broke a test, confirmed the
+  script refuses and never reaches `firebase deploy`, then reverted the
+  test cleanly) and the pass path (33/33 rules-tests green) without ever
+  triggering a live deploy — `firestore.rules` itself is unchanged, so
+  there was nothing to ship.
+- Also folded in two other items from the same backlog: a
+  `DEPLOY_STORAGE_RULES.cmd` wrapper (Storage was the one deploy surface
+  without a scoped script) and `BuildAndInstall.ps1` no longer forcing
+  `--no-daemon clean` on every debug build — that was turning ~10-second
+  incremental installs into 2-11 minute full rebuilds for no benefit on
+  this fast dev-loop script.
+- Android/PWA app code, Cloud Functions, and Storage/Firestore rules
+  content are all untouched. `app/build.gradle.kts` stays at 0.10.7 / 59.
+
+See `RULES_DEPLOY_GATE_HARDENING_0.10.7.md`.
+
+---
+
 # ChefVoice PWA — Private cooking-session upload hotfix (0.10.7 line)
 
 - Fixes the item this handoff's prior entry deliberately left broken: the
