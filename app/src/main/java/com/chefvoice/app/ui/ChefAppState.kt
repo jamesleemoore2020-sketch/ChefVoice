@@ -1,5 +1,6 @@
 package com.chefvoice.app.ui
 
+import android.app.Activity
 import android.content.Context
 import android.net.Uri
 import android.os.Handler
@@ -11,6 +12,8 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.chefvoice.app.analytics.ChefAnalytics
+import com.chefvoice.app.billing.ChefVoiceOffer
+import com.chefvoice.app.billing.PlayBillingManager
 import com.chefvoice.app.cloud.FirebaseSocialRepository
 import com.chefvoice.app.data.RecipeRepository
 import com.chefvoice.app.media.AudioPlayer
@@ -53,6 +56,7 @@ class ChefAppState(context: Context) {
     private val repository = RecipeRepository(context)
     private val audioPlayer = AudioPlayer()
     private val cloud = FirebaseSocialRepository(context)
+    private val playBilling = PlayBillingManager(context)
 
     val recipes = mutableStateListOf<Recipe>()
     val cloudRecipes = mutableStateListOf<Recipe>()
@@ -126,6 +130,21 @@ class ChefAppState(context: Context) {
 
     /** Non-empty while a paywall should be shown; the value is the PaywallTrigger. */
     var paywallTrigger by mutableStateOf("")
+
+    // Play-formatted prices for display only. What a purchase actually grants is
+    // decided by verifyChefVoicePurchase against the live Play Developer API, never
+    // by anything read from BillingClient on-device.
+    private var monthlyOffer: ChefVoiceOffer.Subscription? = null
+    private var annualOffer: ChefVoiceOffer.Subscription? = null
+    private var lifetimeOffer: ChefVoiceOffer.Lifetime? = null
+    var proMonthlyPriceLabel by mutableStateOf("")
+        private set
+    var proAnnualPriceLabel by mutableStateOf("")
+        private set
+    var proLifetimePriceLabel by mutableStateOf("")
+        private set
+    var checkoutError by mutableStateOf("")
+        private set
 
     /** Second Pass reviews used in the current calendar month, on this device. */
     var secondPassUsedThisMonth by mutableStateOf(0)
@@ -230,6 +249,7 @@ class ChefAppState(context: Context) {
 
     init {
         loadSecondPassUsage()
+        loadProOffers()
         recipes.addAll(repository.loadRecipes())
         localLikedIds.addAll(repository.loadLikedIds())
         // Reclaim media and cooking audio from abandoned sessions and deleted
@@ -320,6 +340,10 @@ class ChefAppState(context: Context) {
         entitlementListener = cloud.listenProEntitlement(uid) { entitlement ->
             proEntitlement = entitlement
         }
+        // Not only for a fresh install: this is what surfaces a purchase made on
+        // another device, and what finishes verifying/acknowledging a purchase
+        // whose first attempt was interrupted (app killed mid-flow, network drop).
+        playBilling.restorePurchases()
                 profileListener = cloud.listenProfile(uid) { profile ->
             if (profile == null) {
                 // No profile document exists for this account yet, so this is the one
@@ -1095,6 +1119,45 @@ class ChefAppState(context: Context) {
         ChefAnalytics.paywallDismissed(trigger)
     }
 
+    /** Fetches current Play-formatted prices. Cheap and idempotent; called at startup and safe to call again. */
+    fun loadProOffers() {
+        playBilling.queryOffers { monthly, annual, lifetime ->
+            monthlyOffer = monthly
+            annualOffer = annual
+            lifetimeOffer = lifetime
+            proMonthlyPriceLabel = monthly?.formattedPrice.orEmpty()
+            proAnnualPriceLabel = annual?.formattedPrice.orEmpty()
+            proLifetimePriceLabel = lifetime?.formattedPrice.orEmpty()
+        }
+    }
+
+    /**
+     * Launches Play's checkout UI for one of ProEntitlement's PRODUCT_* constants.
+     * Nothing is granted here or in PlayBillingManager -- entitlement only ever
+     * arrives back through the proEntitlement listener once verifyChefVoicePurchase
+     * has confirmed the purchase and the backend has written it.
+     */
+    fun startCheckout(productChoice: String, activity: Activity) {
+        if (!isSignedIn) { checkoutError = "Sign in to upgrade to ChefVoice Pro."; return }
+        val offer = when (productChoice) {
+            ProEntitlement.PRODUCT_MONTHLY -> monthlyOffer
+            ProEntitlement.PRODUCT_ANNUAL -> annualOffer
+            ProEntitlement.PRODUCT_LIFETIME -> lifetimeOffer
+            else -> null
+        }
+        if (offer == null) { checkoutError = "ChefVoice Pro pricing is still loading. Try again in a moment."; return }
+        checkoutError = ""
+        // launchBillingFlow only reports whether Play's checkout UI could be shown,
+        // not whether a purchase followed -- that arrives later through
+        // PurchasesUpdatedListener (verified before anything is granted) and then
+        // through the proEntitlement listener once the backend has written it.
+        playBilling.launchPurchase(activity, offer, signedInUserId) { error -> checkoutError = error }
+    }
+
+    fun dismissCheckoutError() {
+        checkoutError = ""
+    }
+
     fun runSecondPass(recipe: Recipe) {
         if (secondPassBusyRecipeId.isNotBlank()) return
         if (!cloudConfigured) {
@@ -1645,6 +1708,7 @@ class ChefAppState(context: Context) {
     fun close() {
         stopLiveHeartbeat()
         audioPlayer.stop()
+        playBilling.close()
         commentsListener?.remove()
         directMessagesListener?.remove()
         conversationsListener?.remove()

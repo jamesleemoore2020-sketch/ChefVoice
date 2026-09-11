@@ -272,6 +272,7 @@ data class ProEntitlement(
         }
 
     val isAnnual: Boolean get() = productId == PRODUCT_ANNUAL
+    val isLifetime: Boolean get() = productId == PRODUCT_LIFETIME
 
     /** Granted a founding seat: 2 free years, never revoked by the promo kill switch. */
     val isFounding: Boolean get() = source == SOURCE_FOUNDING
@@ -303,6 +304,7 @@ data class ProEntitlement(
 
         const val PRODUCT_MONTHLY = "chefvoice_pro_monthly"
         const val PRODUCT_ANNUAL = "chefvoice_pro_annual"
+        const val PRODUCT_LIFETIME = "chefvoice_pro_lifetime"
 
         /** A verified Google Play purchase. */
         const val SOURCE_PLAY = "play"

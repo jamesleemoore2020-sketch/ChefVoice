@@ -1,3 +1,42 @@
+# ChefVoice — Play Billing integration (0.11.1)
+
+- Real Google Play purchases, client and backend. Android:
+  `PlayBillingManager.kt` wraps Billing Library 9.1.0 (added to
+  `app/build.gradle.kts` — not actually present despite being described as
+  already there), wired into `ChefAppState`/`ProPaywallDialog` following
+  the existing callback-based repository pattern. Backend:
+  `verifyChefVoicePurchase` (callable) and `processChefVoiceRtdn`
+  (Pub/Sub-triggered) added to `billing/functions/index.js`, the same file
+  the founding-seat/promo launch access already lives in.
+- One deliberate deviation from spec, documented in full in the writeup
+  below: `verifyChefVoicePurchase` runs *as*
+  `chefvoice-billing-verifier@...` (as asked), but `processChefVoiceRtdn`
+  impersonates that service account per-call instead of running as it,
+  because giving a 2nd-gen Pub/Sub/EventArc trigger a custom runtime
+  service account hits a currently-open firebase-tools bug. Needs one
+  manual IAM grant before it will work — see the doc.
+- Both new functions log their own runtime identity on every invocation
+  specifically so that IAM setup can be verified against Cloud Logging
+  after a real deploy, rather than trusted on paper.
+- `gradlew.bat :app:testDebugUnitTest` — BUILD SUCCESSFUL, same 3
+  pre-existing warnings, confirms the Billing Library 9.1.0 API surface
+  used here is real. `node --check` + the full `billing/` and
+  `notifications/` gates (91 tests) pass with no regressions. Installed on
+  a physical device (launches); the live paywall screen itself has not
+  yet been walked through by hand.
+- **Nothing is deployed, and no product exists in Play Console yet** — see
+  "Not done" in the writeup for the exact remaining steps, several of
+  which only the project's Play Console/GCP admin can do.
+- `firestore.rules`, `storage.rules`, `chefvoice-notifications`, the PWA,
+  and the existing launch-access logic are all untouched. Version
+  0.10.8/60 → 0.11.1/61 (jumping to the 0.11.x line already used for the
+  rest of the monetization work, not continuing 0.10.x's parser/UI-fix
+  sequence).
+
+See `PLAY_BILLING_INTEGRATION_0.11.1.md`.
+
+---
+
 # ChefVoice — Create Recipe flow simplification (0.10.8)
 
 - `CreateRecipeScreen` was one long scrolling flow covering capture,

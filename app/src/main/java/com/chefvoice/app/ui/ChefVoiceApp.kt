@@ -1,6 +1,7 @@
 package com.chefvoice.app.ui
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.util.Log
 import android.content.pm.PackageManager
@@ -577,12 +578,25 @@ fun ChefVoiceApp(
         if (appState.paywallTrigger.isNotBlank()) {
             ProPaywallDialog(
                 trigger = appState.paywallTrigger,
+                monthlyPrice = appState.proMonthlyPriceLabel,
+                annualPrice = appState.proAnnualPriceLabel,
+                lifetimePrice = appState.proLifetimePriceLabel,
                 onDismiss = { appState.dismissPaywall() },
-                onStartCheckout = {
-                    // Play Billing is not wired yet. Deliberately a no-op rather than a
-                    // faked purchase - entitlement only ever comes from the backend.
+                onStartCheckout = { productChoice ->
+                    // Dismiss immediately: Play's own checkout sheet covers the screen
+                    // next, and entitlement only ever arrives back through the
+                    // proEntitlement listener once the backend verifies the purchase.
                     appState.dismissPaywall()
+                    (context as? Activity)?.let { appState.startCheckout(productChoice, it) }
                 }
+            )
+        }
+        if (appState.checkoutError.isNotBlank()) {
+            AlertDialog(
+                onDismissRequest = { appState.dismissCheckoutError() },
+                title = { Text("Checkout") },
+                text = { Text(appState.checkoutError) },
+                confirmButton = { TextButton(onClick = { appState.dismissCheckoutError() }) { Text("OK") } }
             )
         }
         if (showHostExitDialog) {
@@ -3380,8 +3394,6 @@ private fun EmptyState(title: String, body: String) {
  * exactly one place to delete when that lands.
  */
 private object DemoPricing {
-    const val MONTHLY = "$6.99/month"
-    const val ANNUAL = "$39.99/year"
     const val ANNUAL_NOTE = "Save about 52% versus monthly"
 }
 
@@ -3476,6 +3488,10 @@ private fun ProMembershipCard(
                     "Your subscription is paused. Resume it in Google Play to get Pro back.",
                     style = MaterialTheme.typography.bodySmall
                 )
+                isPro && entitlement.isLifetime -> Text(
+                    "You bought ChefVoice Pro for life — nothing to renew, ever.",
+                    style = MaterialTheme.typography.bodySmall
+                )
                 isPro -> Text(
                     "Unlimited cloud recipes, video, and ${ProTierLimits.SECOND_PASS_PER_MONTH} Second Pass reviews a month.",
                     style = MaterialTheme.typography.bodySmall
@@ -3517,6 +3533,9 @@ private fun ProMembershipCard(
 @Composable
 private fun ProPaywallDialog(
     trigger: String,
+    monthlyPrice: String,
+    annualPrice: String,
+    lifetimePrice: String,
     onDismiss: () -> Unit,
     onStartCheckout: (String) -> Unit
 ) {
@@ -3554,16 +3573,23 @@ private fun ProPaywallDialog(
             }
         },
         confirmButton = {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(
                     onClick = { onStartCheckout(ProEntitlement.PRODUCT_ANNUAL) },
+                    enabled = annualPrice.isNotBlank(),
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(DemoPricing.ANNUAL) }
+                ) { Text(annualPrice.ifBlank { "Annual — loading price…" } + "/year") }
                 Text(DemoPricing.ANNUAL_NOTE, style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(
                     onClick = { onStartCheckout(ProEntitlement.PRODUCT_MONTHLY) },
+                    enabled = monthlyPrice.isNotBlank(),
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(DemoPricing.MONTHLY) }
+                ) { Text(monthlyPrice.ifBlank { "Monthly — loading price…" } + "/month") }
+                OutlinedButton(
+                    onClick = { onStartCheckout(ProEntitlement.PRODUCT_LIFETIME) },
+                    enabled = lifetimePrice.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text((lifetimePrice.ifBlank { "Lifetime — loading price…" }) + " once, forever") }
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } }

@@ -9,7 +9,7 @@ const repo=fs.readFileSync(path.join(root,'app/src/main/java/com/chefvoice/app/c
 const state=fs.readFileSync(path.join(root,'app/src/main/java/com/chefvoice/app/ui/ChefAppState.kt'),'utf8');
 
 test('Android v0.10.7 carries a heartbeat field and lease constants',()=>{
-  assert.match(gradle,/versionCode = 60/);assert.match(gradle,/versionName = "0\.10\.8"/);
+  assert.match(gradle,/versionCode = 61/);assert.match(gradle,/versionName = "0\.11\.1"/);
   assert.match(models,/val heartbeatAt: Long/);
   assert.match(repo,/LIVE_HEARTBEAT_INTERVAL_MS = 10_000L/);
   assert.match(repo,/LIVE_LEASE_TIMEOUT_MS = 35_000L/);

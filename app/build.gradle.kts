@@ -30,8 +30,8 @@ android {
         applicationId = "com.chefvoice.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 60
-        versionName = "0.10.8"
+        versionCode = 61
+        versionName = "0.11.1"
     }
 
     buildFeatures {
@@ -131,6 +131,11 @@ dependencies {
     // firebase-analytics also logs first_open automatically, which is the
     // install event -- ChefVoice does not emit a duplicate of its own.
     implementation("com.google.firebase:firebase-analytics")
+
+    // ChefVoice Pro subscriptions and the lifetime unlock. Greenfield -- there was no
+    // billing dependency before this, so no migration from an older Billing Library
+    // major version was needed.
+    implementation("com.android.billingclient:billing-ktx:9.1.0")
 
     // App Check is staged in monitoring mode. Debug builds use Firebase's debug
     // provider so sideloaded real-device validation remains possible; release builds
