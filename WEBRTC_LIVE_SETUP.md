@@ -60,6 +60,16 @@ For a public livestream with many viewers, do not keep the host-per-viewer mesh 
 
 ## PWA iPhone viewer
 
+> **Correction (PWA_LIVE_VIEWER_0.4.0.md, 2026-09-12):** the two sections below
+> describe a PWA build that was never actually committed to this repository --
+> `web/js/` had no WebRTC code of any kind until PWA_LIVE_VIEWER_0.4.0.md. The
+> rest of this document (Android's own WebRTC setup, above this line) is
+> accurate and unaffected. See PWA_LIVE_VIEWER_0.4.0.md for what the PWA
+> actually implements: viewer-only, matching the shape described just below
+> but built from scratch against the real `WebRtcViewerController` code rather
+> than against this description of it. The "PWA two-way Live extension"
+> (iPhone hosting) further down does not exist.
+
 Starting with PWA v0.5, the iPhone/web client mirrors `WebRtcViewerController`.
 
 The browser creates:

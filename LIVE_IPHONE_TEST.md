@@ -1,3 +1,13 @@
+> **Correction (PWA_LIVE_VIEWER_0.4.0.md, 2026-09-12):** this document describes a
+> PWA build that was never actually committed to this repository. `git log -- web/`
+> has no Live/WebRTC-related PWA commit before 0.4.0, and `web/js/` had zero
+> `RTCPeerConnection`/`liveSessions`/`getUserMedia` code until then — the PWA's
+> Live tab was a static "remains intentionally gated" placeholder the whole time.
+> Treat the "✅ real-device confirmed" claims and status-progression steps below
+> as aspirational, not historical fact. See `PWA_LIVE_VIEWER_0.4.0.md` for what
+> actually shipped (viewer-only; the two-way/host-from-iPhone step this doc
+> describes still does not exist).
+
 # ChefVoice PWA v0.5 — Android Host → iPhone Viewer Test
 
 ## What this build enables

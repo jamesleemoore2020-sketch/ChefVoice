@@ -19,6 +19,7 @@ import {
   threadComments, unreadCounts as computeUnreadCounts, withoutBlocked
 } from './inbox.js';
 import { parseTagsInput, tagMatchesQuery } from './tag-utils.js';
+import { LiveViewerController } from './webrtc-live-viewer.js';
 
 const main=document.querySelector('#main');
 const tabs=[...document.querySelectorAll('[data-tab]')];
@@ -41,7 +42,8 @@ const cloud={
   profileLoaded:false,profileError:'',
   conversations:[],messageReads:{},notifications:[],
   unsubAuth:null,unsubFeed:null,unsubProfile:null,unsubLiked:null,unsubBookmarks:null,unsubFollowing:null,unsubComments:null,unsubEntitlement:null,unsubBlocked:null,
-  unsubConversations:null,unsubMessageReads:null,unsubNotifications:null,unsubThread:null,unsubChefRecipes:null
+  unsubConversations:null,unsubMessageReads:null,unsubNotifications:null,unsubThread:null,unsubChefRecipes:null,
+  unsubLiveSessions:null,unsubLiveSessionDoc:null,unsubLiveComments:null
 };
 
 // Inbox view state: which conversation is open, if any.
@@ -70,6 +72,11 @@ function clearUserObservers(){
 // See openCommunityRecipeId's declaration below for why the community tab's
 // listener-driven re-renders all gate on this instead of just the tab name.
 const shouldRenderCommunity=()=>currentTab==='community'&&!openCommunityRecipeId;
+// Same reasoning as shouldRenderCommunity: while a Live room is open, its own
+// targeted listeners patch the DOM directly (see openLiveRoom) instead of going
+// through render(), which would tear down and recreate the <video> element and
+// its RTCPeerConnection on every unrelated discovery-list update.
+const shouldRenderLiveList=()=>currentTab==='live'&&!openLiveSession;
 function startUserObservers(user){
   clearUserObservers();
   if(!user||!cloud.api)return;
@@ -109,6 +116,12 @@ async function initCloud(){
       }
       if(shouldRenderCommunity())render();
     },err=>{cloud.feedError=err?.message||'Community feed could not be loaded.';if(shouldRenderCommunity())render();});
+    // Live sessions are world-readable, so this starts unconditionally like the
+    // feed above rather than waiting on sign-in -- browsing Live works signed out.
+    cloud.unsubLiveSessions=api.observeLiveSessions(items=>{
+      liveSessions=items;liveSessionsError='';
+      if(shouldRenderLiveList())render();
+    },err=>{liveSessionsError=err?.message||'Live sessions could not be loaded.';if(shouldRenderLiveList())render();});
   }catch(e){
     cloud.state='offline';cloud.message='Firebase is unavailable right now. Local cooking capture still works.';cloud.feedError=e?.message||String(e);
     if(currentTab==='profile'||shouldRenderCommunity())render();
@@ -230,14 +243,15 @@ function currentViewState(){
   return {
     tab:currentTab,
     conversationId:currentTab==='inbox'?(openConversation?.id||null):null,
-    chefUid:currentTab==='community'?(openChefProfile?.uid||null):null
+    chefUid:currentTab==='community'?(openChefProfile?.uid||null):null,
+    liveSessionId:currentTab==='live'?(openLiveSession?.id||null):null
   };
 }
 function pushViewState(){
   if(restoringHistory)return;
   const state=currentViewState();
   const prev=history.state;
-  if(prev&&prev.tab===state.tab&&(prev.conversationId||null)===state.conversationId&&(prev.chefUid||null)===state.chefUid)return;
+  if(prev&&prev.tab===state.tab&&(prev.conversationId||null)===state.conversationId&&(prev.chefUid||null)===state.chefUid&&(prev.liveSessionId||null)===state.liveSessionId)return;
   history.pushState(state,'');
 }
 async function restoreViewState(state){
@@ -247,6 +261,13 @@ async function restoreViewState(state){
     nav(state.tab||'cook');
     if(state.tab==='inbox'&&state.conversationId)openConversationView(state.conversationId);
     if(state.tab==='community'&&state.chefUid)await openChef(state.chefUid);
+    // If the list has not loaded this session id yet (or it is no longer live),
+    // this is a no-op and the chef just sees the discovery list -- same fallback
+    // ChefVoice already uses for a shared-recipe link that no longer resolves.
+    if(state.tab==='live'&&state.liveSessionId){
+      const session=liveSessions.find(s=>s.id===state.liveSessionId);
+      if(session)openLiveRoom(session);
+    }
   }finally{
     restoringHistory=false;
   }
@@ -261,6 +282,12 @@ function nav(tab){
   // re-establishes it when a conversation is opened again.
   if(tab!=='inbox')closeConversationView();
   if(tab!=='community')closeChefProfile();
+  // Unconditional (unlike the two guards above): re-entering the Live tab should
+  // always start from the discovery list, and restoreViewState() re-opens a
+  // specific room afterward when history says one was open. Tearing down the
+  // RTCPeerConnection here every time nav() runs, rather than only when leaving
+  // the tab, is deliberate -- see closeLiveRoom().
+  closeLiveRoom();
   currentTab=tab;
   tabs.forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   render();
@@ -1061,21 +1088,169 @@ async function shareRecipe(recipe){
   catch{safetyStatus(url);}
 }
 
-function liveTemplate(){return `<section class="hero" style="--hero:url('../assets/live-hero.webp')"><div class="eyebrow">Live kitchen</div><h1>Cook together, in real time.</h1><p>Community is now writable across Android and iPhone. WebRTC Live stays behind a separate device-test gate so it cannot interfere with the protected microphone/ingredient workflow.</p></section><div class="card"><strong>Live remains intentionally gated</strong><p class="status">The next Live milestone is Android ↔ iPhone signaling, camera, microphone and reconnection testing on real devices.</p></div>`;}
+// ---- Live: viewing an Android host's broadcast -------------------------------
+// v1 is viewer-only -- PWA chefs watch an Android host, matching the milestone
+// the old placeholder copy already promised. Going Live from an iPhone is a
+// separate, not-yet-built step (it would need getUserMedia + a camera/mic
+// permission flow this tab does not have). The signaling itself is not new
+// protocol: it is the existing liveSessions/{id}/peers/{peerId} contract
+// Android's WebRtcLiveTransport.kt already implements, driven from the browser
+// by webrtc-live-viewer.js. firestore.rules needed no changes for this --
+// peerId is already required to equal request.auth.uid, so a signed-in PWA
+// viewer is already a first-class participant in the existing rules.
+let liveSessions=[];
+let liveSessionsError='';
+let liveSearchTerm='';
+let openLiveSession=null;
+let liveViewerStatus='';
+let liveViewerController=null;
+let liveComments=[];
+let liveReactionBusy=false;
+
+function liveCardTemplate(session){
+  const initial=(session.hostName||'C').trim().charAt(0).toUpperCase();
+  const tags=session.tags.length?`<p class="hint">${session.tags.slice(0,3).map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:'';
+  return `<article class="card"><div class="social-head"><span class="avatar-circle">${escapeHtml(initial)}</span><div class="chef-id"><strong>${escapeHtml(session.hostName)}</strong><span class="meta">🔴 LIVE</span></div></div><h3>${escapeHtml(session.title)}</h3>${tags}<p class="status">♥ ${formatCount(session.heartCount)} · 🔥 ${formatCount(session.fireCount)} · 👏 ${formatCount(session.clapCount)}</p><button class="primary wide" data-watch-live="${escapeHtml(session.id)}">Watch Live</button></article>`;
+}
+
+function liveTemplate(){
+  const term=liveSearchTerm.trim().toLowerCase();
+  const filtered=term?liveSessions.filter(s=>s.tags.some(t=>tagMatchesQuery(t,term))||`${s.title} ${s.hostName}`.toLowerCase().includes(term)):liveSessions;
+  const searchBox=liveSessions.length?`<div class="card"><div class="row"><input id="liveSearch" class="grow" placeholder="Search chefs, dishes or #tags" value="${escapeHtml(liveSearchTerm)}"><button id="liveSearchBtn" class="secondary">Search</button></div></div>`:'';
+  const list=filtered.length
+    ?filtered.map(liveCardTemplate).join('')
+    :liveSessionsError?`<div class="notice">${escapeHtml(liveSessionsError)}</div>`
+    :liveSessions.length?'<div class="empty card">No matching Lives. Try a different chef name or tag.</div>'
+    :'<div class="empty card">Nobody is live yet. When an Android chef starts cooking Live, it appears here.</div>';
+  const signInNote=cloud.user?'':'<div class="notice">Browse active Lives now. Sign in from Profile to watch, chat and react.</div>';
+  return `<section class="hero" style="--hero:url('../assets/live-hero.webp')"><div class="eyebrow">Live kitchen</div><h1>Watch chefs cook, live.</h1><p>Watching an Android host works today. Going Live from an iPhone is next.</p></section>${signInNote}${searchBox}${list}`;
+}
+
+function bindLive(){
+  const runSearch=()=>{liveSearchTerm=document.querySelector('#liveSearch').value;render();};
+  document.querySelector('#liveSearchBtn')?.addEventListener('click',runSearch);
+  document.querySelector('#liveSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();runSearch();}});
+  main.querySelectorAll('[data-watch-live]').forEach(b=>b.onclick=()=>{
+    if(!requireCommunitySignIn())return;
+    const session=liveSessions.find(s=>s.id===b.dataset.watchLive);
+    if(session)openLiveRoom(session);
+  });
+}
+
+function liveRoomTemplate(session){
+  const ended=session.status==='ENDED';
+  const initial=(session.hostName||'C').trim().charAt(0).toUpperCase();
+  const video=ended
+    ?'<div class="live-video-placeholder">This Live has ended</div>'
+    :'<video id="liveVideo" class="live-video" playsinline autoplay muted></video>';
+  const reactions=ended?'':`<div class="row wrap" style="margin-top:10px"><button class="secondary" data-live-react="heart">♥ <span id="liveHeartCount">${session.heartCount}</span></button><button class="secondary" data-live-react="fire">🔥 <span id="liveFireCount">${session.fireCount}</span></button><button class="secondary" data-live-react="clap">👏 <span id="liveClapCount">${session.clapCount}</span></button></div><div id="liveReactionStatus" class="hint"></div>`;
+  const composer=cloud.user&&!ended
+    ?`<section class="card"><textarea id="liveCommentText" maxlength="500" placeholder="Say something"></textarea><button id="postLiveComment" class="primary wide">Send</button><div id="liveCommentStatus" class="hint"></div></section>`
+    :ended?'':'<div class="notice">Sign in to chat and react.</div>';
+  return `<button id="backLive" class="ghost">← Live</button><section class="card"><div class="live-video-wrap">${video}<div class="live-host-chip"><span class="avatar-circle">${escapeHtml(initial)}</span><div><strong>${escapeHtml(session.hostName)}</strong><br><small>${ended?'ENDED':'🔴 LIVE'}</small></div></div>${ended?'':'<button id="liveAudioToggle" class="live-audio-btn">🔇 Enable audio</button>'}</div><p id="liveViewerStatus" class="status">${escapeHtml(ended?'':liveViewerStatus)}</p>${reactions}</section><div class="section-title"><h2>Live chat</h2></div><div id="liveComments"><div class="empty card">Loading…</div></div>${composer}`;
+}
+
+function renderLiveComments(){
+  const el=document.querySelector('#liveComments');
+  if(!el)return;
+  el.innerHTML=liveComments.length
+    ?liveComments.map(c=>`<div class="card"><div class="row between"><strong>${escapeHtml(c.authorName)}</strong><small>${relativeTime(c.createdAt)}</small></div><p class="status">${escapeHtml(c.text)}</p></div>`).join('')
+    :'<div class="empty card">No comments yet. Say hello.</div>';
+}
+
+async function sendLiveReactionTap(sessionId,reaction,button){
+  if(!requireCommunitySignIn())return;
+  if(liveReactionBusy)return;
+  liveReactionBusy=true;button.disabled=true;
+  try{await cloud.api.sendLiveReaction(sessionId,reaction);}
+  catch(e){const status=document.querySelector('#liveReactionStatus');if(status)status.textContent=e?.message||'Could not send that reaction.';}
+  setTimeout(()=>{liveReactionBusy=false;button.disabled=false;},1600);
+}
+
+function bindLiveRoomChrome(session){
+  document.querySelector('#backLive').onclick=()=>{history.back();};
+  main.querySelectorAll('[data-live-react]').forEach(b=>b.onclick=()=>sendLiveReactionTap(session.id,b.dataset.liveReact,b));
+  document.querySelector('#liveAudioToggle')?.addEventListener('click',()=>{
+    const video=document.querySelector('#liveVideo');
+    if(video){video.muted=false;video.play().catch(()=>{});}
+  });
+  const post=document.querySelector('#postLiveComment');
+  if(post)post.onclick=async()=>{
+    const box=document.querySelector('#liveCommentText');
+    const status=document.querySelector('#liveCommentStatus');
+    post.disabled=true;if(status)status.textContent='Sending…';
+    try{
+      await cloud.api.addLiveComment(session.id,box.value,requireProfileName());
+      box.value='';if(status)status.textContent='';
+    }catch(e){if(status)status.textContent=e?.message||'Could not send that.';}
+    finally{post.disabled=false;}
+  };
+}
+
+function startLiveViewer(session){
+  if(!cloud.user){liveViewerStatus='Sign in to watch Live.';const el=document.querySelector('#liveViewerStatus');if(el)el.textContent=liveViewerStatus;return;}
+  liveViewerController=new LiveViewerController({
+    sessionId:session.id,
+    viewerUid:cloud.user.uid,
+    onStatus:message=>{liveViewerStatus=message;const el=document.querySelector('#liveViewerStatus');if(el)el.textContent=message;},
+    onTrack:stream=>{const video=document.querySelector('#liveVideo');if(video){video.srcObject=stream;video.play().catch(()=>{});}}
+  });
+  liveViewerController.start();
+}
+
+function openLiveRoom(session){
+  closeLiveRoom();
+  openLiveSession=session;
+  liveViewerStatus='Joining live video…';
+  main.innerHTML=liveRoomTemplate(session);
+  bindLiveRoomChrome(session);
+  startLiveViewer(session);
+
+  // Patches the room in place instead of calling render(): this is the same
+  // "drill-in" treatment openCommunityRecipe() gives comments, and for the same
+  // reason -- a full re-render here would tear down and recreate the <video>
+  // element (and with it, its srcObject) every time the host's heartbeat ticks.
+  cloud.unsubLiveSessionDoc=cloud.api.observeLiveSession(session.id,updated=>{
+    if(!updated||!openLiveSession)return;
+    const justEnded=openLiveSession.status!=='ENDED'&&updated.status==='ENDED';
+    openLiveSession=updated;
+    document.querySelector('#liveHeartCount')?.replaceChildren(document.createTextNode(String(updated.heartCount)));
+    document.querySelector('#liveFireCount')?.replaceChildren(document.createTextNode(String(updated.fireCount)));
+    document.querySelector('#liveClapCount')?.replaceChildren(document.createTextNode(String(updated.clapCount)));
+    if(justEnded){
+      liveViewerController?.stop();liveViewerController=null;
+      main.innerHTML=liveRoomTemplate(updated);
+      bindLiveRoomChrome(updated);
+      renderLiveComments();
+    }
+  },()=>{});
+
+  cloud.unsubLiveComments=cloud.api.observeLiveComments(session.id,items=>{liveComments=items;renderLiveComments();});
+  pushViewState();
+}
+
+function closeLiveRoom(){
+  try{liveViewerController?.stop();}catch{}
+  liveViewerController=null;
+  try{cloud.unsubLiveSessionDoc?.();}catch{}
+  try{cloud.unsubLiveComments?.();}catch{}
+  cloud.unsubLiveSessionDoc=null;cloud.unsubLiveComments=null;
+  openLiveSession=null;liveComments=[];liveViewerStatus='';
+}
 
 function render(){
   if(currentTab==='cook'){main.innerHTML=cookTemplate();bindCook();}
   if(currentTab==='recipes'){main.innerHTML=recipesTemplate();bindRecipes();}
   if(currentTab==='community'){main.innerHTML=communityTemplate();bindCommunity();}
   if(currentTab==='inbox'){main.innerHTML=inboxTemplate();bindInbox();}
-  if(currentTab==='live')main.innerHTML=liveTemplate();
+  if(shouldRenderLiveList()){main.innerHTML=liveTemplate();bindLive();}
   if(currentTab==='profile'){main.innerHTML=profileTemplate();bindProfile();}
   renderPaywall();
   updateInboxBadge();
 }
 
 if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
-window.addEventListener('beforeunload',()=>{capture.close();for(const key of ['unsubAuth','unsubFeed','unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubComments','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread','unsubChefRecipes'])try{cloud[key]?.();}catch{}});
+window.addEventListener('beforeunload',()=>{capture.close();try{liveViewerController?.stop();}catch{}for(const key of ['unsubAuth','unsubFeed','unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubComments','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread','unsubChefRecipes','unsubLiveSessions','unsubLiveSessionDoc','unsubLiveComments'])try{cloud[key]?.();}catch{}});
 window.addEventListener('popstate',e=>{restoreViewState(e.state);});
 // Closes any open chef "more options" menu on an outside click. A single
 // document-level listener, rather than one per card, since render() throws the

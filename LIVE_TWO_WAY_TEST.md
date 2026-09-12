@@ -1,3 +1,11 @@
+> **Correction (PWA_LIVE_VIEWER_0.4.0.md, 2026-09-12):** this document describes a
+> PWA build that was never actually committed to this repository -- there is no
+> "iPhone host" code anywhere in `web/js/` and no evidence one was ever built.
+> Treat everything below as aspirational, not historical fact. As of
+> PWA_LIVE_VIEWER_0.4.0.md the PWA can watch an Android host (viewer-only);
+> hosting a Live from an iPhone, which is this entire document's subject, does
+> not exist yet.
+
 # ChefVoice PWA v0.6 — iPhone Host → Android Viewer Test
 
 ## What changed

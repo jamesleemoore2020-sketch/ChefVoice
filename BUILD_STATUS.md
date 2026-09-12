@@ -1,3 +1,33 @@
+# ChefVoice PWA — Live viewer (0.4.0)
+
+- The PWA's Live tab was a static "remains intentionally gated" placeholder;
+  three root docs (`WEBRTC_LIVE_SETUP.md`'s PWA sections, `LIVE_IPHONE_TEST.md`,
+  `LIVE_TWO_WAY_TEST.md`) described a working PWA viewer/host that had never
+  actually been committed to `web/` -- confirmed via `git log` and a source
+  grep finding zero WebRTC code there before this change. Those three docs now
+  carry correction banners.
+- Added a real, viewer-only Live experience: an iPhone/PWA chef can watch an
+  Android host's video + audio, chat, and react (♥/🔥/👏), all against the
+  *existing* `liveSessions/{id}/peers/{peerId}` signaling contract
+  `WebRtcLiveTransport.kt` already implements. `firestore.rules` needed no
+  changes -- `peerId == request.auth.uid` was already generic, not
+  Android-specific.
+- New `web/js/webrtc-signaling.js` (pure helpers, unit-tested) and
+  `web/js/webrtc-live-viewer.js` (`RTCPeerConnection` + Firestore
+  orchestration, mirroring `WebRtcViewerController`); `firebase-client.js`
+  gained matching discovery/comments/reactions functions.
+- `npm test`: 95/95 (86 pre-existing + 9 new). Live-browser check against the
+  real Firebase project: loads clean, correct empty state, no leaked
+  listeners across tab navigation. Not verified: an actual two-device video
+  call (no Android device available this session) -- the contract was instead
+  cross-checked line-by-line against the real Kotlin and rules source.
+- Going Live *from* an iPhone, the Android app, `firestore.rules`,
+  notifications and billing are all untouched. PWA version 0.3.0 → 0.4.0.
+
+See `PWA_LIVE_VIEWER_0.4.0.md`.
+
+---
+
 # ChefVoice — Live discovery search and tags (0.11.4)
 
 - The "Live now" list was already global (no follow-scoping, `firestore.rules`

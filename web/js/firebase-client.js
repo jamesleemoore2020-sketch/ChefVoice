@@ -1,6 +1,7 @@
 import { firebaseConfig, messagingVapidKey } from './firebase-config.js';
 import { normalizeEntitlement, FREE_ENTITLEMENT } from './entitlement.js';
 import * as ChefAnalytics from './chef-analytics.js';
+import { LIVE_LEASE_REFRESH_MS, isFreshLiveSession } from './webrtc-signaling.js';
 
 // Firebase is loaded as browser modules so a CDN/Firebase outage cannot prevent
 // local ChefVoice cooking capture from starting.
@@ -15,7 +16,7 @@ const [appSdk,authSdk,firestoreSdk,storageSdk]=await Promise.all([
 const {initializeApp}=appSdk;
 const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut}=authSdk;
 const {
-  getFirestore,collection,doc,limit,onSnapshot,query,setDoc,where,orderBy,
+  getFirestore,collection,doc,increment,limit,onSnapshot,query,setDoc,where,orderBy,
   getDoc,getDocs,deleteDoc,updateDoc,runTransaction,writeBatch,documentId,startAfter
 }=firestoreSdk;
 const {getStorage,ref:storageRef,uploadBytes,getDownloadURL}=storageSdk;
@@ -24,6 +25,12 @@ const app=initializeApp(firebaseConfig);
 const auth=getAuth(app);
 const db=getFirestore(app);
 const storage=getStorage(app);
+
+// Re-exported so webrtc-live-viewer.js can address Firestore documents/listeners
+// directly (a raw RTCPeerConnection has no natural home in this file's
+// promise-returning-CRUD style) without loading a second copy of the Firebase SDK
+// at a second pinned version.
+export {db,collection,doc,onSnapshot,setDoc,updateDoc,deleteDoc,getDocs,writeBatch};
 
 // Authentication, Firestore and Storage rules were verified in Firebase Console
 // on 2026-08-12. Live/WebRTC remains a separate device-test gate.
@@ -615,6 +622,99 @@ export async function deleteNotification(notificationId){
   assertWrites();
   const user=requireUser('Sign in to update notifications.');
   await deleteDoc(doc(db,'users',user.uid,'notifications',notificationId));
+}
+
+// ---- Live: discovery, chat & reactions --------------------------------------
+// The WebRTC signaling itself (peers/{peerId}, ICE candidates) lives in
+// webrtc-live-viewer.js, which owns an RTCPeerConnection and does not fit this
+// file's promise-returning-CRUD shape. Everything else about Live -- the
+// liveSessions document, comments and heart/fire/clap reactions -- is plain
+// Firestore reads/writes and belongs here with the rest of the app's data
+// access, mirroring FirebaseSocialRepository's listenLiveSessions/
+// listenLiveComments/addLiveComment/sendLiveReaction field-for-field so a PWA
+// viewer and an Android viewer read and write byte-compatible documents.
+
+function normalizeLiveSession(id,data={}){
+  return {
+    id,
+    hostId:String(data.hostId||''),
+    hostName:String(data.hostName||'Chef'),
+    title:String(data.title||'Live cooking'),
+    status:String(data.status||'ENDED'),
+    startedAt:Number(data.startedAt||0),
+    heartbeatAt:Number(data.heartbeatAt||0),
+    endedAt:Number(data.endedAt||0),
+    heartCount:Math.max(0,Number(data.heartCount||0)),
+    fireCount:Math.max(0,Number(data.fireCount||0)),
+    clapCount:Math.max(0,Number(data.clapCount||0)),
+    tags:Array.isArray(data.tags)?data.tags.map(String):[]
+  };
+}
+
+/**
+ * Live sessions are world-readable (firestore.rules: `allow read: if true` on
+ * liveSessions) so browsing works signed out, same as Android. A host that stops
+ * renewing heartbeatAt (backgrounded/killed) produces no new Firestore event, so
+ * a plain snapshot listener alone would leave a dead session on screen forever --
+ * the periodic re-filter is what actually ages it out, mirroring Android's own
+ * LIVE_LEASE_REFRESH_MS timer in listenLiveSessions().
+ */
+export function observeLiveSessions(onChange,onError=()=>{}){
+  const q=query(collection(db,'liveSessions'),where('status','==','LIVE'),limit(50));
+  let latest=[];
+  const emit=()=>onChange(latest.filter(s=>isFreshLiveSession(s)).sort((a,b)=>b.startedAt-a.startedAt));
+  const unsubSnapshot=onSnapshot(q,snap=>{latest=snap.docs.map(d=>normalizeLiveSession(d.id,d.data()));emit();},onError);
+  const interval=setInterval(emit,LIVE_LEASE_REFRESH_MS);
+  return ()=>{clearInterval(interval);unsubSnapshot();};
+}
+
+/** A single Live's own document, so an open viewer can notice status flip to ENDED or reaction counts change without re-querying the whole list. */
+export function observeLiveSession(sessionId,onChange,onError=()=>{}){
+  return onSnapshot(doc(db,'liveSessions',sessionId),snap=>onChange(snap.exists()?normalizeLiveSession(snap.id,snap.data()):null),onError);
+}
+
+export function observeLiveComments(sessionId,onChange,onError=()=>{}){
+  const q=query(collection(db,'liveSessions',sessionId,'comments'),orderBy('createdAt'),limit(150));
+  return onSnapshot(q,snap=>onChange(snap.docs.map(d=>({
+    id:d.id,
+    authorId:String(d.data().authorId||''),
+    authorName:String(d.data().authorName||'Chef'),
+    text:String(d.data().text||''),
+    createdAt:Number(d.data().createdAt||0)
+  }))),onError);
+}
+
+/** authorName must be the caller's live profile displayName -- the rule checks it with profileNameMatches, same as recipe comments. */
+export async function addLiveComment(sessionId,text,authorName){
+  assertWrites();
+  const user=requireUser('Sign in to join live chat.');
+  const clean=String(text||'').trim().slice(0,500);
+  if(!clean)throw new Error('Write a live comment first.');
+  const name=String(authorName||'').trim();
+  if(!name)throw new Error('Your chef profile is still loading. Try again in a moment.');
+  await setDoc(doc(collection(db,'liveSessions',sessionId,'comments')),{
+    authorId:user.uid,authorName:name,text:clean,createdAt:Date.now()
+  });
+}
+
+const LIVE_REACTION_FIELDS={heart:'heartCount',fire:'fireCount',clap:'clapCount'};
+
+/**
+ * The rule (validLiveReactionStateUpdate) also requires at least 1.5s between a
+ * given viewer's reactions -- a rapid second tap fails permission-denied rather
+ * than double-counting, which the caller can treat as "ignore and re-enable".
+ */
+export async function sendLiveReaction(sessionId,reaction){
+  assertWrites();
+  const user=requireUser('Sign in to react to a live.');
+  const field=LIVE_REACTION_FIELDS[reaction];
+  if(!field)throw new Error('Unknown live reaction.');
+  const liveRef=doc(db,'liveSessions',sessionId);
+  const stateRef=doc(db,'liveSessions',sessionId,'reactionState',user.uid);
+  const batch=writeBatch(db);
+  batch.update(liveRef,field,increment(1));
+  batch.set(stateRef,{reaction,updatedAt:Date.now()});
+  await batch.commit();
 }
 
 // ---- Safety: blocking and reporting ----------------------------------------
