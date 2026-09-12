@@ -76,36 +76,44 @@ class PlayBillingManager(context: Context) {
         })
     }
 
-    /** Fetches current Play-formatted prices for the subscription's two base plans and the lifetime product. */
+    /**
+     * Fetches current Play-formatted prices for the subscription's two base plans and the
+     * lifetime product. Issued as two separate `queryProductDetailsAsync` calls, one per
+     * product type -- Play's billing service throws `IllegalArgumentException("All products
+     * should be of the same product type")` if a SUBS product and an INAPP product are put in
+     * the same query, which previously took down the whole call before it could return any
+     * `BillingResult` at all (paywall buttons stuck on "loading price..." forever, no error
+     * logged anywhere in this class).
+     */
     fun queryOffers(
         onReady: (monthly: ChefVoiceOffer.Subscription?, annual: ChefVoiceOffer.Subscription?, lifetime: ChefVoiceOffer.Lifetime?) -> Unit
     ) {
         ensureConnected {
-            val params = QueryProductDetailsParams.newBuilder()
+            var monthly: ChefVoiceOffer.Subscription? = null
+            var annual: ChefVoiceOffer.Subscription? = null
+            var lifetime: ChefVoiceOffer.Lifetime? = null
+            var pending = 2
+            fun onOneQueryDone() {
+                pending -= 1
+                if (pending == 0) onReady(monthly, annual, lifetime)
+            }
+
+            val subsParams = QueryProductDetailsParams.newBuilder()
                 .setProductList(
                     listOf(
                         QueryProductDetailsParams.Product.newBuilder()
                             .setProductId(SUBSCRIPTION_PRODUCT_ID)
                             .setProductType(BillingClient.ProductType.SUBS)
-                            .build(),
-                        QueryProductDetailsParams.Product.newBuilder()
-                            .setProductId(LIFETIME_PRODUCT_ID)
-                            .setProductType(BillingClient.ProductType.INAPP)
                             .build()
                     )
                 )
                 .build()
-            billingClient.queryProductDetailsAsync(params) { result, productDetailsResult ->
+            billingClient.queryProductDetailsAsync(subsParams) { result, productDetailsResult ->
                 if (result.responseCode != BillingClient.BillingResponseCode.OK) {
-                    Log.w(TAG, "queryProductDetailsAsync failed: ${result.debugMessage}")
-                    return@queryProductDetailsAsync onReady(null, null, null)
-                }
-                var monthly: ChefVoiceOffer.Subscription? = null
-                var annual: ChefVoiceOffer.Subscription? = null
-                var lifetime: ChefVoiceOffer.Lifetime? = null
-                productDetailsResult.productDetailsList.forEach { details ->
-                    when (details.productType) {
-                        BillingClient.ProductType.SUBS -> details.subscriptionOfferDetails?.forEach { offer ->
+                    Log.w(TAG, "queryProductDetailsAsync (subscription) failed: ${result.debugMessage}")
+                } else {
+                    productDetailsResult.productDetailsList.firstOrNull()?.let { details ->
+                        details.subscriptionOfferDetails?.forEach { offer ->
                             val price = offer.pricingPhases.pricingPhaseList.firstOrNull()?.formattedPrice.orEmpty()
                             val resolved = ChefVoiceOffer.Subscription(details, offer.offerToken, price)
                             when (offer.basePlanId) {
@@ -113,13 +121,31 @@ class PlayBillingManager(context: Context) {
                                 BASE_PLAN_ANNUAL -> annual = resolved
                             }
                         }
-                        BillingClient.ProductType.INAPP -> {
-                            val price = details.oneTimePurchaseOfferDetailsList?.firstOrNull()?.formattedPrice.orEmpty()
-                            lifetime = ChefVoiceOffer.Lifetime(details, price)
-                        }
                     }
                 }
-                onReady(monthly, annual, lifetime)
+                onOneQueryDone()
+            }
+
+            val lifetimeParams = QueryProductDetailsParams.newBuilder()
+                .setProductList(
+                    listOf(
+                        QueryProductDetailsParams.Product.newBuilder()
+                            .setProductId(LIFETIME_PRODUCT_ID)
+                            .setProductType(BillingClient.ProductType.INAPP)
+                            .build()
+                    )
+                )
+                .build()
+            billingClient.queryProductDetailsAsync(lifetimeParams) { result, productDetailsResult ->
+                if (result.responseCode != BillingClient.BillingResponseCode.OK) {
+                    Log.w(TAG, "queryProductDetailsAsync (lifetime) failed: ${result.debugMessage}")
+                } else {
+                    productDetailsResult.productDetailsList.firstOrNull()?.let { details ->
+                        val price = details.oneTimePurchaseOfferDetailsList?.firstOrNull()?.formattedPrice.orEmpty()
+                        lifetime = ChefVoiceOffer.Lifetime(details, price)
+                    }
+                }
+                onOneQueryDone()
             }
         }
     }

@@ -1,3 +1,34 @@
+# ChefVoice — Play Billing query fix (0.11.2)
+
+- Once `chefvoice_pro` (base plans `monthly`/`annual`) and
+  `chefvoice_pro_lifetime` were actually created and activated in Play
+  Console, the paywall still never resolved real prices — confirmed via
+  `adb logcat` that `queryOffers()` in `PlayBillingManager.kt` was mixing
+  a `SUBS` product and an `INAPP` product in one `queryProductDetailsAsync`
+  call, which Play's billing service rejects outright
+  (`IllegalArgumentException: All products should be of the same product
+  type`), thrown before any `BillingResult` ever reached the app's
+  callback. Not a catalog-propagation delay — a deterministic client bug.
+- Fixed by splitting into two separate `queryProductDetailsAsync` calls
+  (one per product type) and merging results before calling `onReady`,
+  matching Google's own documented pattern.
+- Also fixed, found during on-device verification: `ProPaywallDialog`'s
+  "Not now" button was passed as `AlertDialog`'s separate `dismissButton`,
+  which Material3 lays out beside the full-width `confirmButton` column
+  rather than below it. Moved into the same column as the last item.
+- `:app:testDebugUnitTest` BUILD SUCCESSFUL (5 suites / 37 tests, 0
+  failures) both before and after the layout fix. Verified visually on a
+  real device: paywall now shows `$39.99/year`, `$6.99/month`, `$79.99
+  once, forever`, and "Not now" sits correctly below the three buttons.
+- `billing/functions/index.js`, both Firestore/Storage rules files,
+  `chefvoice-notifications`, and the PWA are untouched — Android-client-only.
+  Nothing (re-)deployed or (re-)uploaded to Play Console yet. Version
+  0.11.1/61 → 0.11.2/62.
+
+See `PLAY_BILLING_QUERY_FIX_0.11.2.md`.
+
+---
+
 # ChefVoice — Play Billing integration (0.11.1)
 
 - Real Google Play purchases, client and backend. Android:

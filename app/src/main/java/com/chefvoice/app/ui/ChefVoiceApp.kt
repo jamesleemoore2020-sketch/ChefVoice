@@ -3588,9 +3588,9 @@ private fun ProPaywallDialog(
                     enabled = lifetimePrice.isNotBlank(),
                     modifier = Modifier.fillMaxWidth()
                 ) { Text((lifetimePrice.ifBlank { "Lifetime — loading price…" }) + " once, forever") }
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Not now") }
             }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } }
+        }
     )
 }
 
