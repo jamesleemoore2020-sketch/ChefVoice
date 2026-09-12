@@ -1,3 +1,28 @@
+# ChefVoice — Live discovery search and tags (0.11.4)
+
+- The "Live now" list was already global (no follow-scoping, `firestore.rules`
+  already had `allow read: if true` on `liveSessions`) — the actual gap James
+  hit was that a session could only be found by scrolling and recognizing a
+  title/host name, with nothing to categorize or search by.
+- Added `LiveSession.tags` (freeform strings, same convention as
+  `Recipe.tags`), a tags field on the "Start a Live" form, and a search field
+  on the "Live now" list that filters by chef name, title, or tag — reusing
+  the existing `TagUtils`/`CommunityScreen` search pattern rather than adding
+  a new system.
+- `firestore.rules`: `tags` is optional (max 8, must be a list) at creation
+  and immutable afterward, matching `hostId`/`hostName`/`startedAt`'s
+  treatment. No new Firestore index needed — same as recipe tag search, this
+  filters an already-loaded, already-open client-side list.
+- `rules-tests/firestore-rules.test.js` gained 4 tests for the new
+  validation; full suite 37/37 against the emulator. Notification gates
+  74/74. `testDebugUnitTest` BUILD SUCCESSFUL.
+- Play Billing, WebRTC signaling/heartbeat logic, and the PWA are untouched.
+  Version 0.11.3/63 → 0.11.4/64.
+
+See `LIVE_DISCOVERY_TAGS_0.11.4.md`.
+
+---
+
 # ChefVoice — Live/WebRTC native crash fixed (0.11.3)
 
 - Tapping "Go Live" was fatally crashing every time on the Samsung Galaxy S25

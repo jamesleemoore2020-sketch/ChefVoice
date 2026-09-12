@@ -1223,7 +1223,7 @@ class FirebaseSocialRepository(private val context: Context) {
         return startedAt > 0L && (now - startedAt).coerceAtLeast(0L) <= LIVE_LEGACY_GRACE_MS
     }
 
-    fun startLiveSession(title: String, hostName: String, callback: (LiveSession?, String?) -> Unit) {
+    fun startLiveSession(title: String, hostName: String, tags: List<String> = emptyList(), callback: (LiveSession?, String?) -> Unit) {
         val user = currentUser ?: return callback(null, "Sign in before going live.")
         val db = dbOrNull() ?: return callback(null, "Firestore is not available.")
         val ref = db.collection("liveSessions").document()
@@ -1234,7 +1234,8 @@ class FirebaseSocialRepository(private val context: Context) {
             title = title.trim().ifBlank { "Live cooking" },
             status = "STARTING",
             startedAt = System.currentTimeMillis(),
-            heartbeatAt = System.currentTimeMillis()
+            heartbeatAt = System.currentTimeMillis(),
+            tags = tags
         )
         ref.set(session.toCloudMap())
             .addOnSuccessListener { callback(session, null) }
@@ -1500,7 +1501,8 @@ private fun LiveSession.toCloudMap(): Map<String, Any> = mapOf(
     "endedAt" to endedAt,
     "heartCount" to heartCount,
     "fireCount" to fireCount,
-    "clapCount" to clapCount
+    "clapCount" to clapCount,
+    "tags" to tags
 )
 
 private fun DocumentSnapshot.toChefProfile(): ChefProfile {
@@ -1632,7 +1634,8 @@ private fun DocumentSnapshot.toLiveSession(): LiveSession {
         endedAt = data["endedAt"].asLong(),
         heartCount = data["heartCount"].asLong().toInt().coerceAtLeast(0),
         fireCount = data["fireCount"].asLong().toInt().coerceAtLeast(0),
-        clapCount = data["clapCount"].asLong().toInt().coerceAtLeast(0)
+        clapCount = data["clapCount"].asLong().toInt().coerceAtLeast(0),
+        tags = data["tags"].asStringList()
     )
 }
 

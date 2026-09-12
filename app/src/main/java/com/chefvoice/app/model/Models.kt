@@ -226,7 +226,8 @@ data class LiveSession(
     val endedAt: Long = 0L,
     val heartCount: Int = 0,
     val fireCount: Int = 0,
-    val clapCount: Int = 0
+    val clapCount: Int = 0,
+    val tags: List<String> = emptyList()
 )
 
 data class LiveComment(

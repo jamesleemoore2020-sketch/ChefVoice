@@ -248,6 +248,54 @@ test("an owner can update their recipe's tags", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Live sessions
+// ---------------------------------------------------------------------------
+
+function liveSession(hostId, hostName, overrides = {}) {
+  return {
+    hostId,
+    hostName,
+    title: "Test live",
+    status: "LIVE",
+    startedAt: now(),
+    heartbeatAt: now(),
+    endedAt: 0,
+    heartCount: 0,
+    fireCount: 0,
+    clapCount: 0,
+    ...overrides,
+  };
+}
+
+test("a live session can be started with tags", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(
+    setDoc(doc(db, "liveSessions", "live-tags-1"), liveSession(ALICE, "Alice", { tags: ["italian", "baking"] }))
+  );
+});
+
+test("a live session rejects more than 8 tags", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  const tooMany = Array.from({ length: 9 }, (_, i) => `tag${i}`);
+  await assertFails(setDoc(doc(db, "liveSessions", "live-tags-2"), liveSession(ALICE, "Alice", { tags: tooMany })));
+});
+
+test("a live session rejects tags that are not a list", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(setDoc(doc(db, "liveSessions", "live-tags-3"), liveSession(ALICE, "Alice", { tags: "italian" })));
+});
+
+test("a host cannot change tags after going live", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "liveSessions", "live-tags-4"), liveSession(ALICE, "Alice", { tags: ["italian"] }));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    updateDoc(doc(db, "liveSessions", "live-tags-4"), { tags: ["italian", "baking"], heartbeatAt: now() })
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Live signaling
 // ---------------------------------------------------------------------------
 

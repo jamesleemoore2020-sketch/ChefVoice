@@ -2107,13 +2107,20 @@ private fun LiveHubScreen(
     signedInUserId: String,
     isFollowing: (String) -> Boolean,
     profileForUid: (String) -> ChefProfile?,
-    onStartLive: (String) -> Unit,
+    onStartLive: (String, List<String>) -> Unit,
     onOpenLive: (LiveSession) -> Unit,
     onChefProfile: (String) -> Unit,
     onProfile: () -> Unit
 ) {
     var title by remember { mutableStateOf("") }
+    var tagsText by remember { mutableStateOf("") }
+    var searchText by remember { mutableStateOf("") }
     val orderedSessions = sessions.sortedWith(compareByDescending<LiveSession> { isFollowing(it.hostId) }.thenByDescending { it.startedAt })
+    val searchTerm = searchText.trim().lowercase(Locale.getDefault())
+    val visibleSessions = if (searchTerm.isBlank()) orderedSessions else orderedSessions.filter { session ->
+        if (session.tags.any { tagMatchesQuery(it, searchTerm) }) return@filter true
+        listOf(session.title, session.hostName).joinToString(" ").lowercase(Locale.getDefault()).contains(searchTerm)
+    }
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("ChefVoice Live", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text("Chefs you follow are shown first. Follow once and ChefVoice can alert you when they go Live.")
@@ -2132,7 +2139,8 @@ private fun LiveHubScreen(
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Start a Live", fontWeight = FontWeight.Bold)
                     OutlinedTextField(value = title, onValueChange = { title = it.take(80) }, label = { Text("What are you cooking?") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    Button(enabled = !liveBusy, onClick = { onStartLive(title) }, modifier = Modifier.fillMaxWidth()) { Text(if (liveBusy) "Starting…" else "🔴 Go Live") }
+                    OutlinedTextField(value = tagsText, onValueChange = { tagsText = it }, label = { Text("Tags, e.g. italian, baking") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    Button(enabled = !liveBusy, onClick = { onStartLive(title, parseTagsInput(tagsText)) }, modifier = Modifier.fillMaxWidth()) { Text(if (liveBusy) "Starting…" else "🔴 Go Live") }
                 }
             }
         }
@@ -2140,11 +2148,17 @@ private fun LiveHubScreen(
         Spacer(Modifier.height(14.dp))
         Text("Live now", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
+        if (orderedSessions.isNotEmpty()) {
+            OutlinedTextField(value = searchText, onValueChange = { searchText = it }, label = { Text("Search chefs, dishes or #tags") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Spacer(Modifier.height(8.dp))
+        }
         if (orderedSessions.isEmpty()) {
             EmptyState("Nobody is live yet", "When a chef starts cooking Live, the session appears here.")
+        } else if (visibleSessions.isEmpty()) {
+            EmptyState("No matching Lives", "Try a different chef name or tag.")
         } else {
             LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(orderedSessions, key = { it.id }) { session ->
+                items(visibleSessions, key = { it.id }) { session ->
                     val profile = profileForUid(session.hostId)
                     Card(Modifier.fillMaxWidth().clickable { onOpenLive(session) }) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2157,6 +2171,9 @@ private fun LiveHubScreen(
                                 }
                             }
                             Text(session.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            if (session.tags.isNotEmpty()) {
+                                Text(session.tags.take(3).joinToString(" ") { "#$it" }, style = MaterialTheme.typography.bodySmall)
+                            }
                             Text("♥ ${session.heartCount} · 🔥 ${session.fireCount} · 👏 ${session.clapCount}")
                             Button(onClick = { onOpenLive(session) }, modifier = Modifier.fillMaxWidth()) { Text("Watch Live") }
                         }

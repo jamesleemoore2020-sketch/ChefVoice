@@ -857,7 +857,7 @@ class ChefAppState(context: Context) {
         liveCommentsListener = null
     }
 
-    fun startLive(title: String) {
+    fun startLive(title: String, tags: List<String> = emptyList()) {
         if (liveBusy) return
         if (!cloudConfigured) {
             cloudMessage = "Connect Firebase before starting a real member live session."
@@ -869,7 +869,7 @@ class ChefAppState(context: Context) {
         }
         liveBusy = true
         cloudMessage = "Starting live session…"
-        cloud.startLiveSession(title, displayName) { session, error ->
+        cloud.startLiveSession(title, displayName, tags) { session, error ->
             liveBusy = false
             if (error != null) {
                 cloudMessage = error
