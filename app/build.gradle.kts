@@ -30,8 +30,8 @@ android {
         applicationId = "com.chefvoice.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 62
-        versionName = "0.11.2"
+        versionCode = 63
+        versionName = "0.11.3"
     }
 
     buildFeatures {
@@ -159,7 +159,16 @@ dependencies {
     // logcat that the library now loads cleanly and a Live session reaches LIVE/
     // markLiveSessionReady with no crash. Root cause is presumed to be a bionic
     // linker/toolchain mismatch between the M144 build's NDK and this OS version.
-    implementation("io.github.webrtc-sdk:android:150.7871.01")
+    //
+    // 150.7871.01 later regressed on this same device/OS: a different fatal signature
+    // (SIGABRT / "JNI DETECTED ERROR IN APPLICATION: java_class == null" in
+    // GetStaticMethodID, same JNI_OnLoad call site, BuildId 8939406b3b9fa259) started
+    // occurring -- see LIVE_WEBRTC_NATIVE_CRASH_FINDINGS_0.11.2.md. 150.7871.01 is the
+    // latest tagged release, so there is no newer version to bump to the way the first
+    // fix did. Trying 144.7559.15 instead: a patch within the M144 line published later
+    // than the 144.7559.09/.14 attempts above, in case it carries a compatibility fix
+    // neither of those had.
+    implementation("io.github.webrtc-sdk:android:144.7559.15")
 
     // Image loading. Replaces hand-rolled URL.openStream() + BitmapFactory decodes
     // that had no cache and no downsampling. coil-video renders local video frames.

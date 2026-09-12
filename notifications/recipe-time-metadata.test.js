@@ -7,7 +7,7 @@ const state=fs.readFileSync('app/src/main/java/com/chefvoice/app/ui/ChefAppState
 const gradle=fs.readFileSync('app/build.gradle.kts','utf8');
 
 test('Android v0.10.7 stores optional prep and cook time metadata without changing Method steps',()=>{
-  assert.match(gradle,/versionCode = 62/);assert.match(gradle,/versionName = "0.11.2"/);
+  assert.match(gradle,/versionCode = 63/);assert.match(gradle,/versionName = "0.11.3"/);
   assert.match(models,/val prepTimeMinutes: Int = 0/);assert.match(models,/val cookTimeMinutes: Int = 0/);
   assert.match(repo,/put\("prepTimeMinutes", prepTimeMinutes\)/);assert.match(repo,/put\("cookTimeMinutes", cookTimeMinutes\)/);
   assert.match(cloud,/"prepTimeMinutes" to prepTimeMinutes/);assert.match(cloud,/"cookTimeMinutes" to cookTimeMinutes/);

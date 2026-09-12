@@ -1,3 +1,25 @@
+# ChefVoice — Live/WebRTC native crash fixed (0.11.3)
+
+- Tapping "Go Live" was fatally crashing every time on the Samsung Galaxy S25
+  Ultra test device (`SIGABRT` inside `libjingle_peerconnection_so.so`'s own
+  `JNI_OnLoad`) — see `LIVE_WEBRTC_NATIVE_CRASH_FINDINGS_0.11.2.md` for the
+  original diagnosis.
+- Fixed by moving `io.github.webrtc-sdk:android` from `150.7871.01` to
+  `144.7559.15` in `app/build.gradle.kts`. Confirmed on-device via `adb
+  logcat`: the native library now loads cleanly and
+  `ChefVoiceLive: markLiveSessionReady callback: error=null` fires with no
+  crash. Verified interactively on the phone.
+- Root cause of *why* `150.7871.01` regressed (it had previously fixed a
+  different crash on this same device) is still unknown — this is a
+  confirmed-working version pin, not a root-cause fix. See
+  `LIVE_WEBRTC_CRASH_FIXED_0.11.3.md`.
+- Play Billing, Firestore/Storage rules, notifications, and the PWA are
+  untouched. Version 0.11.2/62 → 0.11.3/63.
+
+See `LIVE_WEBRTC_CRASH_FIXED_0.11.3.md`.
+
+---
+
 # ChefVoice — Play Billing query fix (0.11.2)
 
 - Once `chefvoice_pro` (base plans `monthly`/`annual`) and
