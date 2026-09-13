@@ -1,5 +1,6 @@
 package com.chefvoice.app.ui
 
+import android.app.Activity
 import android.content.Context
 import android.net.Uri
 import android.os.Handler
@@ -10,6 +11,9 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.chefvoice.app.analytics.ChefAnalytics
+import com.chefvoice.app.billing.ChefVoiceOffer
+import com.chefvoice.app.billing.PlayBillingManager
 import com.chefvoice.app.cloud.FirebaseSocialRepository
 import com.chefvoice.app.data.RecipeRepository
 import com.chefvoice.app.media.AudioPlayer
@@ -25,6 +29,9 @@ import com.chefvoice.app.model.LiveComment
 import com.chefvoice.app.model.LiveSession
 import com.chefvoice.app.model.MediaAttachment
 import com.chefvoice.app.model.NotificationPreferences
+import com.chefvoice.app.model.FreeTierLimits
+import com.chefvoice.app.model.ProEntitlement
+import com.chefvoice.app.model.ProTierLimits
 import com.chefvoice.app.model.Recipe
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.stableStepIds
@@ -35,9 +42,21 @@ import java.io.File
 import java.util.UUID
 
 class ChefAppState(context: Context) {
+    // Debug builds only. Gates the Pro preview switch so a release APK has no code
+    // path that can grant entitlement locally - entitlement stays server-authoritative.
+    private val isDebuggableBuild =
+        (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+    // Month-keyed Second Pass usage. This is UX gating, not enforcement: it lives on
+    // the device and a determined user can reset it by clearing app data. Real
+    // enforcement has to be server-side, and cannot be finished until the Second Pass
+    // allowance is checked by the function that actually spends the Chirp 3 budget.
+    private val quotaPrefs = context.getSharedPreferences("chefvoice_quota", Context.MODE_PRIVATE)
+
     private val repository = RecipeRepository(context)
     private val audioPlayer = AudioPlayer()
     private val cloud = FirebaseSocialRepository(context)
+    private val playBilling = PlayBillingManager(context)
 
     val recipes = mutableStateListOf<Recipe>()
     val cloudRecipes = mutableStateListOf<Recipe>()
@@ -94,6 +113,48 @@ class ChefAppState(context: Context) {
     var cloudMessage by mutableStateOf("")
         private set
     var accountBusy by mutableStateOf(false)
+        private set
+
+    /** Mirror of users/{uid}/entitlements/pro. Free until the backend says otherwise. */
+    var proEntitlement by mutableStateOf(ProEntitlement.FREE)
+        private set
+
+    /**
+     * Debug-only override so the paid experience can be demonstrated before Play
+     * Billing products exist. Never consulted in a release build, and never written
+     * to Firestore - it only changes what this device renders.
+     */
+    var proPreviewOverride by mutableStateOf(false)
+
+    val proPreviewAvailable: Boolean get() = isDebuggableBuild
+
+    /** Non-empty while a paywall should be shown; the value is the PaywallTrigger. */
+    var paywallTrigger by mutableStateOf("")
+
+    // Play-formatted prices for display only. What a purchase actually grants is
+    // decided by verifyChefVoicePurchase against the live Play Developer API, never
+    // by anything read from BillingClient on-device.
+    private var monthlyOffer: ChefVoiceOffer.Subscription? = null
+    private var annualOffer: ChefVoiceOffer.Subscription? = null
+    private var lifetimeOffer: ChefVoiceOffer.Lifetime? = null
+    var proMonthlyPriceLabel by mutableStateOf("")
+        private set
+    var proAnnualPriceLabel by mutableStateOf("")
+        private set
+    var proLifetimePriceLabel by mutableStateOf("")
+        private set
+    var checkoutError by mutableStateOf("")
+        private set
+
+    /** Second Pass reviews used in the current calendar month, on this device. */
+    var secondPassUsedThisMonth by mutableStateOf(0)
+        private set
+
+    /** The single value the UI gates on. Fails closed to Free. */
+    val isPro: Boolean
+        get() = proEntitlement.isActive || (isDebuggableBuild && proPreviewOverride)
+
+    var needsReauthForDelete by mutableStateOf(false)
         private set
     var liveBusy by mutableStateOf(false)
     var recipeMutationBusyId by mutableStateOf("")
@@ -167,6 +228,7 @@ class ChefAppState(context: Context) {
     private var feedListener: ListenerRegistration? = null
     private var liveFeedListener: ListenerRegistration? = null
     private var profileListener: ListenerRegistration? = null
+    private var entitlementListener: ListenerRegistration? = null
     private var recipeAuthorProfileListener: ListenerRegistration? = null
     private var selectedChefProfileListener: ListenerRegistration? = null
     private var liveHostProfileListener: ListenerRegistration? = null
@@ -186,6 +248,8 @@ class ChefAppState(context: Context) {
     private var liveHeartbeatRunnable: Runnable? = null
 
     init {
+        loadSecondPassUsage()
+        loadProOffers()
         recipes.addAll(repository.loadRecipes())
         localLikedIds.addAll(repository.loadLikedIds())
         // Reclaim media and cooking audio from abandoned sessions and deleted
@@ -232,6 +296,7 @@ class ChefAppState(context: Context) {
                 signedInUserId = user?.uid.orEmpty()
                 signedInEmail = user?.email.orEmpty()
                 signedInEmailVerified = user?.isEmailVerified == true
+                needsReauthForDelete = false
                 moderatorAccess = false
                 moderationReports.clear()
                 moderationError = ""
@@ -272,7 +337,14 @@ class ChefAppState(context: Context) {
         messageReadError = ""
         notificationsError = ""
         blockStatusError = ""
-        profileListener = cloud.listenProfile(uid) { profile ->
+        entitlementListener = cloud.listenProEntitlement(uid) { entitlement ->
+            proEntitlement = entitlement
+        }
+        // Not only for a fresh install: this is what surfaces a purchase made on
+        // another device, and what finishes verifying/acknowledging a purchase
+        // whose first attempt was interrupted (app killed mid-flow, network drop).
+        playBilling.restorePurchases()
+                profileListener = cloud.listenProfile(uid) { profile ->
             if (profile == null) {
                 // No profile document exists for this account yet, so this is the one
                 // write that is allowed to set createdAt.
@@ -382,6 +454,8 @@ class ChefAppState(context: Context) {
 
     private fun clearUserListeners() {
         profileListener?.remove(); profileListener = null
+        entitlementListener?.remove(); entitlementListener = null
+        proEntitlement = ProEntitlement.FREE
         recipeAuthorProfileListener?.remove(); recipeAuthorProfileListener = null
         recipeAuthorProfile = null
         selectedChefProfileListener?.remove(); selectedChefProfileListener = null
@@ -709,17 +783,23 @@ class ChefAppState(context: Context) {
 
     fun setConversationUserBlocked(blocked: Boolean) {
         val conversation = selectedConversation ?: return
-        val otherUid = conversation.otherUserId(signedInUserId)
-        if (otherUid.isBlank() || messageBusy) return
+        setUserBlocked(conversation.otherUserId(signedInUserId), blocked)
+    }
+
+    /** Community feed cards and chef profiles block by uid directly, with no
+     * open conversation to derive the target from -- setConversationUserBlocked
+     * is now just the conversation-scoped case of this. */
+    fun setUserBlocked(targetUid: String, blocked: Boolean) {
+        if (targetUid.isBlank() || targetUid == signedInUserId || messageBusy) return
         messageBusy = true
-        cloud.setUserBlocked(otherUid, blocked) { error ->
+        cloud.setUserBlocked(targetUid, blocked) { error ->
             messageBusy = false
             if (error == null) {
                 if (blocked) {
-                    if (!blockedUserIds.contains(otherUid)) blockedUserIds.add(otherUid)
-                    cloudMessage = "Chef blocked. Message history stays visible, but new private messages are disabled."
+                    if (!blockedUserIds.contains(targetUid)) blockedUserIds.add(targetUid)
+                    cloudMessage = "Chef blocked. Their recipes stay hidden and neither of you can message the other."
                 } else {
-                    blockedUserIds.remove(otherUid)
+                    blockedUserIds.remove(targetUid)
                     cloudMessage = "Chef unblocked."
                 }
             } else {
@@ -884,6 +964,21 @@ class ChefAppState(context: Context) {
         else "Prep/cook times saved to this recipe."
     }
 
+    fun updateRecipeTags(recipeId: String, tags: List<String>) {
+        val current = recipes.firstOrNull { it.id == recipeId } ?: selectedRecipe?.takeIf { it.id == recipeId } ?: return
+        if (current.tags == tags) return
+        val updated = current.copy(
+            tags = tags,
+            communityUpdatePending = current.isPublic || current.communityUpdatePending,
+            updatedAt = System.currentTimeMillis()
+        )
+        saveRecipe(updated)
+        if (selectedRecipe?.id == recipeId) selectedRecipe = updated.copy(stepIds = updated.stableStepIds())
+        cloudMessage = if (current.isPublic)
+            "Tags saved on this phone. Tap Update Community when you want members to see them."
+        else "Tags saved to this recipe."
+    }
+
     fun addRecipeMedia(recipeId: String, attachment: MediaAttachment) {
         val current = recipes.firstOrNull { it.id == recipeId } ?: selectedRecipe?.takeIf { it.id == recipeId } ?: return
         val updated = current.copy(
@@ -974,6 +1069,95 @@ class ChefAppState(context: Context) {
     fun hasSecondPassAudio(recipe: Recipe): Boolean =
         secondPassAudioPath(recipe) != null
 
+    private fun quotaMonthKey(): String {
+        val now = java.util.Calendar.getInstance()
+        return "%04d-%02d".format(now.get(java.util.Calendar.YEAR), now.get(java.util.Calendar.MONTH) + 1)
+    }
+
+    private fun loadSecondPassUsage() {
+        secondPassUsedThisMonth = quotaPrefs.getInt("secondPass_" + quotaMonthKey(), 0)
+    }
+
+    private fun recordSecondPassUse() {
+        val key = "secondPass_" + quotaMonthKey()
+        val next = quotaPrefs.getInt(key, 0) + 1
+        quotaPrefs.edit().putInt(key, next).apply()
+        secondPassUsedThisMonth = next
+    }
+
+    /** Reviews allowed this month for the current tier. */
+    val secondPassMonthlyLimit: Int
+        get() = if (isPro) ProTierLimits.SECOND_PASS_PER_MONTH else FreeTierLimits.SECOND_PASS_PER_MONTH
+
+    val secondPassRemaining: Int
+        get() = (secondPassMonthlyLimit - secondPassUsedThisMonth).coerceAtLeast(0)
+
+    /** Cloud-synced recipes this account owns, against the Free cap. */
+    val cloudRecipeCount: Int get() = recipes.count { it.isPublic }
+
+    val cloudRecipesRemaining: Int
+        get() = if (isPro) Int.MAX_VALUE
+        else (FreeTierLimits.CLOUD_RECIPES - cloudRecipeCount).coerceAtLeast(0)
+
+    val videoAllowed: Boolean get() = isPro
+
+    /**
+     * The single way a paywall is raised. Every caller goes through here so that
+     * `paywall_shown` cannot be missed by a surface that sets the trigger directly,
+     * and so the trigger recorded in analytics is always the one the chef actually saw.
+     */
+    fun showPaywall(trigger: String) {
+        if (paywallTrigger == trigger) return
+        paywallTrigger = trigger
+        ChefAnalytics.paywallShown(trigger)
+    }
+
+    fun dismissPaywall() {
+        val trigger = paywallTrigger
+        if (trigger.isBlank()) return
+        paywallTrigger = ""
+        ChefAnalytics.paywallDismissed(trigger)
+    }
+
+    /** Fetches current Play-formatted prices. Cheap and idempotent; called at startup and safe to call again. */
+    fun loadProOffers() {
+        playBilling.queryOffers { monthly, annual, lifetime ->
+            monthlyOffer = monthly
+            annualOffer = annual
+            lifetimeOffer = lifetime
+            proMonthlyPriceLabel = monthly?.formattedPrice.orEmpty()
+            proAnnualPriceLabel = annual?.formattedPrice.orEmpty()
+            proLifetimePriceLabel = lifetime?.formattedPrice.orEmpty()
+        }
+    }
+
+    /**
+     * Launches Play's checkout UI for one of ProEntitlement's PRODUCT_* constants.
+     * Nothing is granted here or in PlayBillingManager -- entitlement only ever
+     * arrives back through the proEntitlement listener once verifyChefVoicePurchase
+     * has confirmed the purchase and the backend has written it.
+     */
+    fun startCheckout(productChoice: String, activity: Activity) {
+        if (!isSignedIn) { checkoutError = "Sign in to upgrade to ChefVoice Pro."; return }
+        val offer = when (productChoice) {
+            ProEntitlement.PRODUCT_MONTHLY -> monthlyOffer
+            ProEntitlement.PRODUCT_ANNUAL -> annualOffer
+            ProEntitlement.PRODUCT_LIFETIME -> lifetimeOffer
+            else -> null
+        }
+        if (offer == null) { checkoutError = "ChefVoice Pro pricing is still loading. Try again in a moment."; return }
+        checkoutError = ""
+        // launchBillingFlow only reports whether Play's checkout UI could be shown,
+        // not whether a purchase followed -- that arrives later through
+        // PurchasesUpdatedListener (verified before anything is granted) and then
+        // through the proEntitlement listener once the backend has written it.
+        playBilling.launchPurchase(activity, offer, signedInUserId) { error -> checkoutError = error }
+    }
+
+    fun dismissCheckoutError() {
+        checkoutError = ""
+    }
+
     fun runSecondPass(recipe: Recipe) {
         if (secondPassBusyRecipeId.isNotBlank()) return
         if (!cloudConfigured) {
@@ -984,13 +1168,26 @@ class ChefAppState(context: Context) {
             secondPassMessage = "Sign in on Profile before checking the original audio."
             return
         }
-        val audioPath = secondPassAudioPath(recipe)
+        loadSecondPassUsage()
+        if (secondPassRemaining <= 0) {
+            // The paywall is raised here rather than an error message: this is the
+            // moment the chef already understands what Second Pass does for them.
+            secondPassMessage = "You have used all " + secondPassMonthlyLimit +
+                " Second Pass reviews this month."
+            showPaywall(PaywallTrigger.SECOND_PASS)
+            return
+        }
+                val audioPath = secondPassAudioPath(recipe)
         if (audioPath == null) {
             secondPassMessage = "No original full cooking-session audio is stored locally for this recipe."
             return
         }
 
         secondPassBusyRecipeId = recipe.id
+        // Recorded here rather than at the tap: every gate above is a reason the review
+        // never ran, and counting those as opens would inflate the denominator the
+        // paywall's conversion rate is measured against.
+        ChefAnalytics.secondPassOpened()
         secondPassMessage = "Uploading the private original audio and running Chirp 3. This can take a few minutes."
         cloud.transcribePrivateChefVoice(recipe.id, audioPath) { cloudResult, error ->
             secondPassBusyRecipeId = ""
@@ -1019,7 +1216,8 @@ class ChefAppState(context: Context) {
             )
             saveRecipe(updated)
             if (selectedRecipe?.id == updated.id) selectedRecipe = updated
-            secondPassMessage = secondPassReviewMessage(secondPass)
+            recordSecondPassUse()
+                        secondPassMessage = secondPassReviewMessage(secondPass)
         }
     }
 
@@ -1040,6 +1238,7 @@ class ChefAppState(context: Context) {
         )
         saveRecipe(updated)
         if (selectedRecipe?.id == recipeId) selectedRecipe = updated
+        ChefAnalytics.secondPassAccepted(ChefAnalytics.KIND_INGREDIENT)
         secondPassMessage = secondPassReviewMessage(updatedResult)
     }
 
@@ -1077,6 +1276,7 @@ class ChefAppState(context: Context) {
         )
         saveRecipe(updated)
         if (selectedRecipe?.id == recipeId) selectedRecipe = updated
+        ChefAnalytics.secondPassAccepted(ChefAnalytics.KIND_METHOD)
         secondPassMessage = secondPassReviewMessage(updatedResult)
     }
 
@@ -1171,6 +1371,15 @@ class ChefAppState(context: Context) {
     }
 
     fun publish(recipe: Recipe) {
+        // Gate cloud sync, not recipe count. Local recipes cost nothing and feed the
+        // sharing loop; cloud recipes cost storage. Only block a recipe that is not
+        // already public, so re-publishing an existing cloud recipe never trips the cap.
+        if (!recipe.isPublic && cloudRecipesRemaining <= 0) {
+            cloudMessage = "Free accounts sync " + FreeTierLimits.CLOUD_RECIPES +
+                " recipes to the cloud. This recipe stays saved on this phone."
+            showPaywall(PaywallTrigger.CLOUD_LIMIT)
+            return
+        }
         val localPublished = recipe.copy(
             isPublic = true,
             authorName = displayName.ifBlank { "Chef" },
@@ -1319,13 +1528,41 @@ class ChefAppState(context: Context) {
     fun deleteChefVoiceAccount() {
         if (accountBusy) return
         accountBusy = true
+        needsReauthForDelete = false
         cloudMessage = "Deleting ChefVoice cloud account and owned Community data…"
-        cloud.deleteChefVoiceAccount { error ->
+        cloud.deleteChefVoiceAccount { needsReauth, error ->
             accountBusy = false
-            if (error == null) {
-                cloudMessage = "ChefVoice cloud account deleted. Local cooking recipes remain on this phone."
-            } else cloudMessage = error
+            when {
+                needsReauth -> {
+                    needsReauthForDelete = true
+                    cloudMessage = "For security, enter your password to confirm this is you before we permanently delete your account."
+                }
+                error == null -> cloudMessage = "ChefVoice cloud account deleted. Local cooking recipes remain on this phone."
+                else -> cloudMessage = error
+            }
         }
+    }
+
+    fun confirmAccountDeletionWithPassword(password: String) {
+        if (accountBusy) return
+        accountBusy = true
+        cloudMessage = "Verifying it's you…"
+        cloud.reauthenticateAndDeleteChefVoiceAccount(password) { needsReauth, error ->
+            accountBusy = false
+            when {
+                needsReauth -> cloudMessage = "Re-authentication did not carry through. Sign out, sign back in, then try deleting again."
+                error == null -> {
+                    needsReauthForDelete = false
+                    cloudMessage = "ChefVoice cloud account deleted. Local cooking recipes remain on this phone."
+                }
+                else -> cloudMessage = error
+            }
+        }
+    }
+
+    fun cancelAccountDeletionReauth() {
+        needsReauthForDelete = false
+        cloudMessage = ""
     }
 
     fun moderateReport(reportId: String, status: String, note: String = "", action: String = "") {
@@ -1471,6 +1708,7 @@ class ChefAppState(context: Context) {
     fun close() {
         stopLiveHeartbeat()
         audioPlayer.stop()
+        playBilling.close()
         commentsListener?.remove()
         directMessagesListener?.remove()
         conversationsListener?.remove()

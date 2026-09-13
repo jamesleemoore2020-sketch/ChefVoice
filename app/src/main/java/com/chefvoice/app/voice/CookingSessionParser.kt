@@ -48,8 +48,45 @@ object CookingSessionParser {
     // Unmeasured ingredients need stronger evidence than conversational words like
     // "need" or "take"; otherwise narration such as "what you need to do" becomes
     // a fake ingredient row.
+    //
+    // 0909: "need" is admitted in exactly one shape -- when a determiner follows it,
+    // as in "you're going to need some sour cream". That is a real declaration and it
+    // cost three ingredients (sour cream, hot sauce, jalapenos) on a real device
+    // transcript. "what you need to do" is still excluded, because "to" is not one of
+    // the determiners; the lookahead, not the verb, is what carries the evidence.
+    //
+    // 0909b: "your" joins the determiner set for the same reason -- "you're going to
+    // need your favorite Dorito chips" is a declaration, not narration. "to" still
+    // fails the lookahead, so "what you need to do" stays excluded.
     private val unmeasuredIngredientContext = Regex(
-        "(?i)^\\s*(?:(?:i|you|we)(?:'m|'re|'ll| am| are| will)?\\s+)?(?:(?:am|are)\\s+)?(?:going\\s+to\\s+|gonna\\s+|want\\s+to\\s+|will\\s+)?(?:add|adding|use|using|pour(?:ing)?(?:\\s+in)?|stir(?:ring)?\\s+in|mix(?:ing)?\\s+in|put(?:ting)?\\s+in|throw(?:ing)?\\s+in|drop(?:ping)?\\s+in|fold(?:ing)?\\s+in|season(?:ing)?\\s+with|sprinkle|top(?:ping)?\\s+with|combine)\\b"
+        "(?i)^\\s*(?:(?:then|next|and|now|so|okay|ok|alright|all\\s+right)[, ]+)*(?:(?:i|you|we)(?:'m|'re|'ll| am| are| will)?\\s+)?(?:(?:am|are)\\s+)?(?:going\\s+to\\s+|gonna\\s+|want\\s+to\\s+|will\\s+)?(?:add|adding|use|using|pour(?:ing)?(?:\\s+in)?|stir(?:ring)?\\s+in|mix(?:ing)?\\s+in|put(?:ting)?\\s+in|throw(?:ing)?\\s+in|drop(?:ping)?\\s+in|fold(?:ing)?\\s+in|need(?=\\s+(?:some|an?|your)\\b)|season(?:ing)?\\s+with|sprinkle|top(?:ping)?\\s+with|combine)\\b"
+    )
+
+    // 0909: a yield sentence describes how many people the dish feeds, not what goes
+    // into it. "One pack should feed at least two people, maybe three" was mined for
+    // two phantom ingredients ("Pack should feed at least", "People, maybe"). Bare
+    // "serve" is deliberately absent -- it is a method verb ("ready to serve and eat")
+    // and excluding it here would suppress real closing steps.
+    private val servingYieldContext = Regex(
+        "(?i)\\b(?:feed|feeds|serves|serving|servings)\\b"
+    )
+
+    // 0909: an unmeasured name that opens with a back-reference is pointing at
+    // something already introduced, not naming a new ingredient. "You sprinkle it on
+    // top of your nachos" produced the ingredient "It on top of your nachos".
+    private val backReferenceName = Regex(
+        "(?i)^(?:it|its|them|they|this|that|those|these)\\b"
+    )
+
+    // 0909: a segment that opens a fresh "need some X" declaration is a standalone
+    // ingredient line, never the tail of the previous method step. The
+    // ingredient-continuation branch in collectSegmentAwareSteps exists so that
+    // "season the patties" followed by "with salt and pepper" join into one step; once
+    // "need some X" started yielding ingredients, that branch began swallowing these
+    // declarations into whatever step came before them. Matching the same shape the
+    // declaration is admitted by keeps the two rules in step.
+    private val ingredientDeclarationSegment = Regex(
+        "(?i)^\\s*(?:(?:then|next|and|now|so|okay|ok|alright|all\\s+right)[, ]+)*(?:(?:i|you|we)(?:'m|'re|'ll| am| are| will)?\\s+)?(?:(?:am|are)\\s+)?(?:going\\s+to\\s+|gonna\\s+|want\\s+to\\s+|will\\s+)?need\\s+(?:some|an?|your)\\b"
     )
 
     private val ingredientNoiseName = Regex(
@@ -74,8 +111,12 @@ object CookingSessionParser {
         "(?i)^\\s*(?:and\\s+)?(?:(?:i|you|we)(?:'m|'re| am| are)?\\s+)?(?:going\\s+to\\s+|gonna\\s+)?(?:make|form|shape|split|divide|pat)\\b"
     )
 
+    // 0909: "need" joins this list because a window parse concatenates adjacent
+    // segments without punctuation, and "...some sour cream you're going to need some
+    // hot sauce" was becoming one ingredient name. Splitting before the verb keeps
+    // each declaration separate without guessing at any word.
     private val narratedActionBoundary = Regex(
-        "(?i)\\s+(?=(?:and\\s+)?(?:(?:i|you|we)(?:'m|'re| am| are)?\\s+)?(?:going\\s+to\\s+|gonna\\s+)?(?:add|adding|use|using|take|taking|get|getting|pour|pouring|stir|stirring|mix|mixing|put|putting|throw|throwing|drop|dropping|fold|folding|season|seasoning|sprinkle|combine|bake|cook|simmer|roast|sear|whisk|chop|make|split|divide|shape|form|pat|preheat|serve)\\b)"
+        "(?i)\\s+(?=(?:and\\s+)?(?:(?:i|you|we)(?:'m|'re| am| are)?\\s+)?(?:going\\s+to\\s+|gonna\\s+)?(?:add|adding|use|using|take|taking|get|getting|need|needing|pour|pouring|stir|stirring|mix|mixing|put|putting|throw|throwing|drop|dropping|fold|folding|season|seasoning|sprinkle|combine|bake|cook|simmer|roast|sear|whisk|chop|make|split|divide|shape|form|pat|preheat|serve)\\b)"
     )
 
     private val methodContinuationCue = Regex(
@@ -209,11 +250,15 @@ object CookingSessionParser {
 
     private fun extractIngredients(raw: String, allowUnmeasured: Boolean): List<Ingredient> {
         val normalizedRaw = IngredientParser.normalizeSpeechText(raw)
+        // A yield sentence carries quantities that look exactly like ingredient
+        // quantities ("feed at least two people"), so it has to be rejected before
+        // any extraction runs rather than filtered out of the results afterwards.
+        if (servingYieldContext.containsMatchIn(normalizedRaw)) return emptyList()
         val hasIngredientContext = ingredientContext.containsMatchIn(normalizedRaw)
         val hasStrongUnmeasuredContext = unmeasuredIngredientContext.containsMatchIn(normalizedRaw)
 
         var source = normalizedRaw
-            .replace(Regex("(?i)^(?:(?:okay|ok|so|now|alright|all right)[, ]+)+"), "")
+            .replace(Regex("(?i)^(?:(?:okay|ok|so|now|alright|all right|then|next|and)[, ]+)+"), "")
             .replace(
                 Regex(
                     "(?i)^(?:(?:i|you|we)(?:'m|'re|'ll| am| are| will)?\\s+)?(?:(?:am|are)\\s+)?(?:going\\s+to\\s+|gonna\\s+|want\\s+to\\s+|will\\s+)?(?:add|adding|use|using|pour(?:ing)?(?:\\s+in)?|stir(?:ring)?\\s+in|mix(?:ing)?\\s+in|put(?:ting)?\\s+in|throw(?:ing)?\\s+in|drop(?:ping)?\\s+in|fold(?:ing)?\\s+in|need|take|season(?:ing)?\\s+with|sprinkle|top(?:ping)?\\s+with|combine)\\s+"
@@ -227,6 +272,12 @@ object CookingSessionParser {
         val shared = extractSharedMeasureIngredients(source)
         val result = shared.first.toMutableList()
         source = shared.second
+
+        val (trailingIngredient, sourceAfterTrailing) = extractTrailingQuantityIngredient(source, hasIngredientContext)
+        if (trailingIngredient != null) {
+            result.add(trailingIngredient)
+            source = sourceAfterTrailing
+        }
 
         val matches = quantityPattern.findAll(source).toList()
         if (matches.isEmpty()) {
@@ -308,6 +359,37 @@ object CookingSessionParser {
         return results to remainder.replace(Regex("\\s+"), " ").trim()
     }
 
+    // 0909b: ASR sometimes narrates the quantity after the ingredient name instead of
+    // before it -- "you're going to need your favorite Dorito chips, one bag" trails
+    // the measure behind a comma. The general quantity scan below starts each chunk at
+    // its first quantity match, so without this narrow pass the "Dorito chips" text
+    // before that comma is silently discarded rather than misparsed. It only fires
+    // with real ingredient/action evidence already found in the sentence, and only for
+    // the single "name, quantity unit" shape anchored to the end of the source -- it
+    // never touches the ordinary leading-quantity case, which the ranges below still
+    // parse as they always have.
+    private fun extractTrailingQuantityIngredient(
+        value: String,
+        hasIngredientContext: Boolean
+    ): Pair<Ingredient?, String> {
+        if (!hasIngredientContext) return null to value
+        val quantitySource =
+            "(?:(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\\s+and\\s+(?:a\\s+|one\\s+)?(?:half|quarter)|" +
+            "\\d+\\s+\\d+/\\d+|(?:one|two|three)\\s+(?:halves|thirds|quarters|fourths)|(?:half|quarter)\\s+(?:of\\s+)?a|a\\s+(?:half|quarter)|" +
+            "\\d+/\\d+|\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|half|quarter|couple|dozen|a|an)"
+        val unitSource =
+            "(?:tablespoon(?:ful)?s?|teaspoon(?:ful)?s?|tbsp|tsp|cupfuls?|cups?|chunks?|grams?|kilograms?|milligrams?|ounces?|fluid ounces?|pounds?|lbs?|cloves?|cans?|pinches?|dashes?|handfuls?|slices?|pieces?|sticks?|sprigs?|bunches?|heads?|packages?|packets?|jars?|bottles?|boxes?|bags?)"
+        val regex = Regex("(?i)^(.+?),\\s*($quantitySource)\\s+($unitSource)\\s*$")
+        val match = regex.find(value) ?: return null to value
+
+        val name = cleanIngredientName(match.groupValues[1])
+        if (!isValidIngredientName(name)) return null to value
+
+        val seed = IngredientParser.parse("${match.groupValues[2]} ${match.groupValues[3]} placeholder")
+        val remainder = value.removeRange(match.range).replace(Regex("\\s+"), " ").trim()
+        return seed.copy(name = capitalizeIngredient(name)) to remainder
+    }
+
     private fun extractUnmeasuredIngredients(value: String): List<Ingredient> {
         val cleaned = trimIngredientTail(value)
             .replace(Regex("(?i)^(?:of\\s+)+(?:the\\s+)?"), "")
@@ -325,6 +407,13 @@ object CookingSessionParser {
         var cleaned = value
             .replace(Regex("(?i)^(?:of\\s+)+(?:the\\s+)?"), "")
             .replace(Regex("(?i)^(?:and|then|also)\\s+"), "")
+            // 0909: "need some sour cream" leaves "some sour cream" once the verb is
+            // stripped. Only the bare determiner goes; the ingredient text is never
+            // rewritten. "Some" alone is still caught by ingredientNoiseName.
+            .replace(Regex("(?i)^some\\s+(?=\\S)"), "")
+            // 0909b: same treatment for "need your favorite Dorito chips" -- only the
+            // determiner "your" goes, the descriptive text that follows is kept as-is.
+            .replace(Regex("(?i)^your\\s+(?=\\S)"), "")
             .replace(Regex("(?i)\\s+(?:and|then|also)$"), "")
 
         // ASR sometimes joins the next measured ingredient onto the previous one:
@@ -384,6 +473,7 @@ object CookingSessionParser {
         if (temperatureOnlyName.matches(clean)) return false
         if (ingredientNoiseName.matches(clean)) return false
         if (ingredientArtifactName.matches(clean)) return false
+        if (backReferenceName.containsMatchIn(clean)) return false
         if (narrationNoiseName.containsMatchIn(clean)) return false
         if (looksLikeOnlyCookingInstruction(clean)) return false
         // v8.5: bare prep nouns are method outputs, not ingredients.
@@ -448,7 +538,12 @@ object CookingSessionParser {
             }
 
             val cleaned = cleanStep(segment)
-            if (acceptsIngredientContinuation && segmentIngredients.isNotEmpty() && cleaned.length >= 2 && result.isNotEmpty()) {
+            if (acceptsIngredientContinuation &&
+                segmentIngredients.isNotEmpty() &&
+                !ingredientDeclarationSegment.containsMatchIn(segment) &&
+                cleaned.length >= 2 &&
+                result.isNotEmpty()
+            ) {
                 val continuation = cleaned.replaceFirstChar { if (it.isUpperCase()) it.lowercase() else it.toString() }
                 val previous = result.removeAt(result.lastIndex).trimEnd('.', '!', '?')
                 result.add(sentenceCase("$previous $continuation"))

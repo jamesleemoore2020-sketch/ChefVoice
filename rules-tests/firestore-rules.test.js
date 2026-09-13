@@ -219,6 +219,34 @@ test("an owner cannot inflate their own like or comment counts", async () => {
   await assertFails(updateDoc(doc(db, "recipes", "recipe-8"), { likes: 5000, updatedAt: now() }));
 });
 
+test("a recipe can be published with freeform tags", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(
+    setDoc(doc(db, "recipes", "recipe-9"), recipe(ALICE, "Alice", { tags: ["bbq", "camping"] }))
+  );
+});
+
+test("a recipe rejects more than 8 tags", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  const tooMany = Array.from({ length: 9 }, (_, i) => `tag${i}`);
+  await assertFails(setDoc(doc(db, "recipes", "recipe-10"), recipe(ALICE, "Alice", { tags: tooMany })));
+});
+
+test("a recipe rejects tags that are not a list", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(setDoc(doc(db, "recipes", "recipe-11"), recipe(ALICE, "Alice", { tags: "bbq" })));
+});
+
+test("an owner can update their recipe's tags", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "recipes", "recipe-12"), recipe(ALICE, "Alice", { tags: ["bbq"] }));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(
+    updateDoc(doc(db, "recipes", "recipe-12"), { tags: ["bbq", "camping"], updatedAt: now() })
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Live signaling
 // ---------------------------------------------------------------------------
@@ -275,4 +303,196 @@ test("a chef cannot send a message into a conversation they are not part of", as
   const message = { senderId: CAROL, senderName: "Carol", text: "hello", createdAt: now() };
   const db = env.authenticatedContext(CAROL).firestore();
   await assertFails(setDoc(doc(db, "conversations", conversationId, "messages", "m1"), message));
+});
+
+// Pro entitlement is server-authoritative. These are the tests the monetization
+// design leans on: if a signed-in client can write its own entitlement document,
+// the paywall is decorative and a modified APK unlocks Pro for free.
+test("a signed-in chef can read their own Pro entitlement", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE, "entitlements", "pro"), {
+      status: "active",
+      productId: "chefvoice_pro_monthly",
+      expiresAt: now() + 30 * DAY_MS,
+      autoRenewing: true,
+      source: "play",
+      updatedAt: now(),
+    });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(getDoc(doc(db, "users", ALICE, "entitlements", "pro")));
+});
+
+test("a signed-in chef cannot grant themselves a Pro entitlement", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "users", ALICE, "entitlements", "pro"), {
+      status: "active",
+      productId: "chefvoice_pro_annual",
+      expiresAt: now() + 365 * DAY_MS,
+      autoRenewing: true,
+      source: "play",
+      updatedAt: now(),
+    })
+  );
+});
+
+test("a chef cannot extend or delete an entitlement written by the backend", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE, "entitlements", "pro"), {
+      status: "expired",
+      productId: "chefvoice_pro_monthly",
+      expiresAt: now() - DAY_MS,
+      autoRenewing: false,
+      source: "play",
+      updatedAt: now(),
+    });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    updateDoc(doc(db, "users", ALICE, "entitlements", "pro"), { status: "active" })
+  );
+  await assertFails(deleteDoc(doc(db, "users", ALICE, "entitlements", "pro")));
+});
+
+test("a chef cannot read another chef's entitlement", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", BOB, "entitlements", "pro"), {
+      status: "active",
+      productId: "chefvoice_pro_monthly",
+      expiresAt: now() + 30 * DAY_MS,
+      autoRenewing: true,
+      source: "play",
+      updatedAt: now(),
+    });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(getDoc(doc(db, "users", BOB, "entitlements", "pro")));
+});
+
+test("purchase records holding Play tokens are not client-writable", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "users", ALICE, "purchases", "token-abc"), {
+      purchaseToken: "forged",
+      productId: "chefvoice_pro_annual",
+      acknowledged: true,
+    })
+  );
+});
+
+// Launch access: the first 10 signups get Pro for life and everyone after gets 90
+// free days, both written by the chefvoice-billing Admin SDK. The founding seat
+// counter and the promo kill switch live in config/monetization, which the client
+// must not be able to read or write -- a writable counter mints founding seats, and
+// a readable one leaks how many accounts exist.
+test("a signed-in chef cannot write the launch access config", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "config", "monetization"), {
+      promoEnabled: true,
+      foundingSeats: 10000,
+      foundingSeatsClaimed: 0,
+    })
+  );
+});
+
+test("a signed-in chef cannot read the launch access config", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "config", "monetization"), {
+      promoEnabled: true,
+      foundingSeats: 10,
+      foundingSeatsClaimed: 3,
+      updatedAt: now(),
+    });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(getDoc(doc(db, "config", "monetization")));
+});
+
+test("a chef cannot forge a founding entitlement for themselves", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "users", ALICE, "entitlements", "pro"), {
+      status: "active",
+      productId: "",
+      expiresAt: 0,
+      autoRenewing: false,
+      source: "founding",
+      grantedAt: now(),
+      updatedAt: now(),
+    })
+  );
+});
+
+test("a chef on a 90-day promo cannot extend their own expiry", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE, "entitlements", "pro"), {
+      status: "active",
+      productId: "",
+      expiresAt: now() + 90 * DAY_MS,
+      autoRenewing: false,
+      source: "promo",
+      grantedAt: now(),
+      updatedAt: now(),
+    });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    updateDoc(doc(db, "users", ALICE, "entitlements", "pro"), {
+      expiresAt: now() + 3650 * DAY_MS,
+    })
+  );
+});
+
+// Regression: the PWA's saveUserProfile wrote only displayName, bio, photoUrl and
+// createdAt. validUserProfileShape uses hasAll, so the create was rejected and the
+// account ended up with no profile document -- which then broke every write the
+// rules check with profileNameMatches (comments, replies, publishing, messaging).
+// The chef only ever saw "your chef profile is still loading".
+test("a profile create missing coverPhotoUrl and favoriteThings is rejected", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    await deleteDoc(doc(context.firestore(), "users", ALICE));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "users", ALICE), {
+      displayName: "Alice",
+      bio: "",
+      photoUrl: "",
+      createdAt: now(),
+    })
+  );
+  // The same write with the two missing keys present is accepted, which is the
+  // whole difference between a working account and one with no profile at all.
+  await assertSucceeds(setDoc(doc(db, "users", ALICE), profile("Alice", now())));
+});
+
+test("a profile update may not move createdAt", async () => {
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE), profile("Alice", now() - 90 * DAY_MS));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  // What the client did when the profile had not loaded: a fresh timestamp.
+  await assertFails(setDoc(doc(db, "users", ALICE), profile("Alice Renamed", now()), { merge: true }));
+});
+
+test("a profile update preserving the stored createdAt succeeds", async () => {
+  const createdAt = now() - 90 * DAY_MS;
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE), profile("Alice", createdAt));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(setDoc(doc(db, "users", ALICE), profile("Alice Renamed", createdAt), { merge: true }));
+});
+
+test("a chef cannot raise their own follower count through a profile write", async () => {
+  const createdAt = now() - 90 * DAY_MS;
+  await env.withSecurityRulesDisabled(async (admin) => {
+    await setDoc(doc(admin.firestore(), "users", ALICE), { ...profile("Alice", createdAt), followerCount: 3 });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertFails(
+    setDoc(doc(db, "users", ALICE), { ...profile("Alice", createdAt), followerCount: 9999 }, { merge: true })
+  );
 });

@@ -99,7 +99,8 @@ data class Recipe(
     val updatedAt: Long = System.currentTimeMillis(),
     val likes: Int = 0,
     val commentCount: Int = 0,
-    val communityUpdatePending: Boolean = false
+    val communityUpdatePending: Boolean = false,
+    val tags: List<String> = emptyList()
 )
 
 fun Recipe.stableStepIds(): List<String> = steps.indices.map { index ->
@@ -235,3 +236,119 @@ data class LiveComment(
     val text: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
+
+/**
+ * Server-authoritative Pro entitlement, mirrored from
+ * `users/{uid}/entitlements/pro`. Written only by the Admin SDK after a purchase
+ * token is verified against the Play Developer API, or when a real-time developer
+ * notification reports a renewal, cancellation, refund, grace period or hold.
+ * Firestore rules deny all client writes to this document.
+ *
+ * The UI reads entitlement from here and never from the local Play Billing cache:
+ * local purchases are an input to verification, not a source of truth.
+ */
+data class ProEntitlement(
+    val status: String = STATUS_EXPIRED,
+    val productId: String = "",
+    val expiresAt: Long = 0L,
+    val autoRenewing: Boolean = false,
+    val source: String = "play",
+    val updatedAt: Long = 0L
+) {
+    /**
+     * Whether Pro features should be unlocked right now.
+     *
+     * Grace period keeps access while Play retries a failed payment, which is a
+     * large share of involuntary churn — pulling features immediately turns a
+     * recoverable card failure into a cancellation. Account hold does not: at that
+     * point Play has already suspended the subscription.
+     *
+     * Checks fail closed to Free. An unknown status is not Pro.
+     */
+    val isActive: Boolean
+        get() = when (status) {
+            STATUS_ACTIVE, STATUS_IN_GRACE -> expiresAt == 0L || expiresAt > System.currentTimeMillis()
+            else -> false
+        }
+
+    val isAnnual: Boolean get() = productId == PRODUCT_ANNUAL
+    val isLifetime: Boolean get() = productId == PRODUCT_LIFETIME
+
+    /** Granted a founding seat: 2 free years, never revoked by the promo kill switch. */
+    val isFounding: Boolean get() = source == SOURCE_FOUNDING
+
+    /** Inside the free 90-day launch window rather than paying. */
+    val isPromo: Boolean get() = source == SOURCE_PROMO
+
+    /**
+     * Pro without paying for it. The UI must not describe these chefs as subscribers,
+     * offer them a "manage subscription" link, or warn them about a payment method
+     * they never entered.
+     */
+    val isComplimentary: Boolean get() = isFounding || isPromo
+
+    /** Whole days of a promo window still remaining, floored at zero. */
+    fun daysRemaining(nowMs: Long = System.currentTimeMillis()): Int {
+        if (expiresAt <= 0L) return Int.MAX_VALUE
+        val remaining = expiresAt - nowMs
+        if (remaining <= 0L) return 0
+        return ((remaining + 86_400_000L - 1L) / 86_400_000L).toInt()
+    }
+
+    companion object {
+        const val STATUS_ACTIVE = "active"
+        const val STATUS_IN_GRACE = "in_grace"
+        const val STATUS_ON_HOLD = "on_hold"
+        const val STATUS_PAUSED = "paused"
+        const val STATUS_EXPIRED = "expired"
+
+        const val PRODUCT_MONTHLY = "chefvoice_pro_monthly"
+        const val PRODUCT_ANNUAL = "chefvoice_pro_annual"
+        const val PRODUCT_LIFETIME = "chefvoice_pro_lifetime"
+
+        /** A verified Google Play purchase. */
+        const val SOURCE_PLAY = "play"
+
+        /** One of the first 10 signups. Two free years, written by chefvoice-billing. */
+        const val SOURCE_FOUNDING = "founding"
+
+        /** The free 90-day launch window granted at signup. */
+        const val SOURCE_PROMO = "promo"
+
+        val FREE = ProEntitlement()
+    }
+}
+
+/**
+ * What the Free tier allows. Gating targets what costs money per unit - cloud
+ * storage and Second Pass transcription - and leaves local cooking free, because
+ * local recipes cost nothing and feed the sharing loop.
+ *
+ * Deliberately not "unlimited" anywhere with a per-unit cloud cost.
+ */
+object FreeTierLimits {
+    const val CLOUD_RECIPES = 10
+    const val SECOND_PASS_PER_MONTH = 2
+    const val PHOTOS_PER_RECIPE = 1
+    const val VIDEO_ALLOWED = false
+}
+
+object ProTierLimits {
+    const val SECOND_PASS_PER_MONTH = 30
+    const val VIDEO_ALLOWED = true
+}
+
+/**
+ * Launch access, granted by the `chefvoice-billing` Functions codebase.
+ *
+ * These numbers are display copy only. The backend owns the real decision and writes
+ * the entitlement document; the app never grants itself anything. They are mirrored
+ * here so the membership card can say "one of the first 10", "2 years" and "90 days"
+ * without inventing numbers, and they must be changed in both places together —
+ * `billing/functions/index.js` holds the authoritative set.
+ */
+object FoundingAccess {
+    const val SEATS = 10
+    const val FOUNDING_YEARS = 2
+    const val PROMO_DAYS = 90
+}

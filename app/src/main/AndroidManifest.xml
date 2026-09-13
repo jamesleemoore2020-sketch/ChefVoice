@@ -5,11 +5,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Cooking capture and Live broadcasting keep the mic and camera open while the
-         app is not in the foreground. The typed permissions are required from API 34. -->
+    <!-- Cooking capture keeps the microphone open while the app is not in the
+         foreground. The typed permission is required from API 34. Live broadcasting
+         ends on ON_STOP by design, so no camera foreground service type is declared. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
 
     <!-- WebRTC's NetworkMonitor reads connectivity state and its audio device module
          changes the audio mode when a Live call starts. -->
@@ -42,7 +42,7 @@
         <service
             android:name=".notifications.ChefVoiceForegroundService"
             android:exported="false"
-            android:foregroundServiceType="microphone|camera" />
+            android:foregroundServiceType="microphone" />
 
         <service
             android:name=".notifications.ChefVoiceMessagingService"

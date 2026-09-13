@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="theme-color" content="#f06423">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="ChefVoice">
+  <link rel="apple-touch-icon" href="assets/chefvoice-icon.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="css/styles.css">
+  <title>ChefVoice</title>
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div class="brand"><img src="assets/chefvoice-icon.png" alt=""><div><strong>ChefVoice</strong><small>Cook it. Say it. Save it.</small></div></div>
+      <span id="modeBadge" class="badge">PWA 0.2 · Firebase</span>
+    </header>
+
+    <main id="main" class="main" aria-live="polite"></main>
+
+    <nav class="bottom-nav" aria-label="Primary">
+      <button data-tab="cook" class="active"><span>🎙</span>Cook</button>
+      <button data-tab="recipes"><span>🍳</span>Recipes</button>
+      <button data-tab="community"><span>👥</span>Community</button>
+      <button data-tab="inbox"><span>💬</span>Inbox<span id="inboxBadge" class="nav-badge" hidden></span></button>
+      <button data-tab="live"><span>📡</span>Live</button>
+      <button data-tab="profile"><span>👤</span>Profile</button>
+    </nav>
+  </div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

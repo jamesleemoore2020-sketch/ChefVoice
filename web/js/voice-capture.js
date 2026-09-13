@@ -1,0 +1,84 @@
+import { containsMeasurementEvidence, measurementEvidenceCount, normalizeSpeechText } from './ingredient-parser.js';
+
+export class VoiceCapture {
+  constructor({onSegment=()=>{},onPartial=()=>{},onStatus=()=>{}}={}) {
+    this.onSegment=onSegment; this.onPartial=onPartial; this.onStatus=onStatus;
+    this.stream=null; this.recorder=null; this.chunks=[]; this.recognition=null; this.running=false;
+    this.startedAt=0; this.lastPartial=''; this.lastFinal=''; this.restartTimer=null; this.audioBlob=null;
+  }
+
+  get recognitionSupported(){return !!(window.SpeechRecognition||window.webkitSpeechRecognition);}
+  get recordingSupported(){return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);}
+
+  async start(){
+    if(this.running) return true;
+    if(!this.recordingSupported) throw new Error('This browser cannot record microphone audio.');
+    this.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
+    this.chunks=[]; this.audioBlob=null; this.startedAt=Date.now(); this.running=true; this.lastPartial=''; this.lastFinal='';
+    const preferred=['audio/mp4','audio/webm;codecs=opus','audio/webm'].find(t=>MediaRecorder.isTypeSupported?.(t));
+    this.recorder=new MediaRecorder(this.stream,preferred?{mimeType:preferred}:undefined);
+    this.recorder.ondataavailable=e=>{if(e.data?.size)this.chunks.push(e.data);};
+    this.recorder.start(1000);
+    if(this.recognitionSupported){ this.onStatus('Listening continuously…'); this.#startRecognition(); }
+    else this.onStatus('Recording your chef voice. Live transcription is unavailable in this browser; you can paste/edit the transcript after capture.');
+    return true;
+  }
+
+  async stop(){
+    if(!this.running) return {audioBlob:this.audioBlob,transcript:[]};
+    this.running=false; clearTimeout(this.restartTimer);
+    if(this.lastPartial) this.#commit(this.lastPartial);
+    try{this.recognition?.stop();}catch{}
+    const blobPromise=new Promise(resolve=>{
+      if(!this.recorder||this.recorder.state==='inactive') return resolve(new Blob(this.chunks,{type:this.recorder?.mimeType||'audio/webm'}));
+      this.recorder.addEventListener('stop',()=>resolve(new Blob(this.chunks,{type:this.recorder.mimeType||'audio/webm'})),{once:true});
+      this.recorder.stop();
+    });
+    this.audioBlob=await blobPromise;
+    this.stream?.getTracks().forEach(t=>t.stop()); this.stream=null;
+    this.onPartial(''); this.onStatus('Capture complete. Building the recipe draft…');
+    return {audioBlob:this.audioBlob};
+  }
+
+  #startRecognition(delay=0){
+    clearTimeout(this.restartTimer);
+    this.restartTimer=setTimeout(()=>{
+      if(!this.running) return;
+      const Ctor=window.SpeechRecognition||window.webkitSpeechRecognition;
+      if(!Ctor) return;
+      const r=new Ctor(); this.recognition=r;
+      r.continuous=true; r.interimResults=true; r.maxAlternatives=3; r.lang=document.documentElement.lang||navigator.language||'en-US';
+      r.onresult=e=>{
+        for(let i=e.resultIndex;i<e.results.length;i++){
+          const result=e.results[i]; const best=this.#bestAlternative(result); const text=normalizeSpeechText(best).trim(); if(!text)continue;
+          if(result.isFinal){this.#commit(text);this.lastPartial='';this.onPartial('');}
+          else {
+            if(this.lastPartial && containsMeasurementEvidence(this.lastPartial) && !containsMeasurementEvidence(text)) this.#commit(this.lastPartial);
+            this.lastPartial=text; this.onPartial(text);
+          }
+        }
+      };
+      r.onerror=e=>{
+        if(!this.running)return;
+        if(e.error==='not-allowed'||e.error==='service-not-allowed') this.onStatus('Microphone recording continues, but browser speech recognition was blocked.');
+        else this.onStatus('Voice is still recording. Reconnecting live transcription…');
+      };
+      r.onend=()=>{ if(this.running) this.#startRecognition(250); };
+      try{r.start();}catch{if(this.running)this.#startRecognition(700);}
+    },delay);
+  }
+
+  #bestAlternative(result){
+    const choices=[]; for(let i=0;i<result.length;i++) if(result[i]?.transcript) choices.push(result[i].transcript);
+    if(!choices.length)return '';
+    return choices.sort((a,b)=>measurementEvidenceCount(b)-measurementEvidenceCount(a))[0];
+  }
+
+  #commit(raw){
+    const text=normalizeSpeechText(raw).trim(); if(!text)return;
+    const key=text.toLowerCase().replace(/\s+/g,' '); if(key===this.lastFinal)return;
+    this.lastFinal=key; this.onSegment({id:crypto.randomUUID(),elapsedMs:Math.max(0,Date.now()-this.startedAt),text:text[0].toUpperCase()+text.slice(1)});
+  }
+
+  close(){ clearTimeout(this.restartTimer); this.running=false; try{this.recognition?.abort();}catch{} this.stream?.getTracks().forEach(t=>t.stop()); }
+}

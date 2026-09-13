@@ -1,4 +1,5 @@
 .gradle/
+.kotlin/
 .idea/
 local.properties
 **/build/
@@ -6,3 +7,14 @@ local.properties
 .DS_Store
 node_modules/
 *-debug.log
+.firebase/
+
+# Release build outputs -- signed artifacts and mapping files are large
+# binaries that belong in the Play Console / release storage, not git.
+*.aab
+*.apk
+*.aab.sha256
+*-mapping.txt
+mappings/
+build_install.log
+crash_full.log

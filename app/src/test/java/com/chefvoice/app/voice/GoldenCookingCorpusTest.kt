@@ -58,7 +58,7 @@ class GoldenCookingCorpusTest {
             }
         }
 
-        assertEquals("Golden corpus row count changed unexpectedly", 52, rows.size)
+        assertEquals("Golden corpus row count changed unexpectedly", 56, rows.size)
         assertTrue("Android golden corpus failures:\n${failures.joinToString("\n")}", failures.isEmpty())
     }
 
@@ -221,6 +221,56 @@ class GoldenCookingCorpusTest {
         assertEquals(
             listOf(listOf("1", "lb", "Ground beef")),
             beef.ingredients.map { listOf(it.quantity, it.unit, it.name) }
+        )
+    }
+
+    /**
+     * Real Android capture, 0909. Three ingredients were declared as
+     * "you're going to need some X" and were being lost entirely.
+     *
+     * The second half of this fixture is the regression guard: a declaration segment
+     * must not be swallowed into the preceding method step. "Sprinkle" arms the
+     * ingredient-continuation branch in collectSegmentAwareSteps, which exists so
+     * "season the patties" + "with salt and pepper" join up. A new declaration is not
+     * a continuation of anything, and appending it produced the step
+     * "Sprinkle it on top of your nachos then you're going to need some sour cream
+     * need some hot sauce need some jalapenos."
+     */
+    @Test
+    fun realNachosFixtureKeepsIngredientDeclarationsOutOfMethodSteps() {
+        val segments = listOf(
+            "Okay, today we're going to make some nachos",
+            "One pack should feed at least two people, maybe three",
+            "Then you're going to need 1 lb of ground beef",
+            "Mix in 1 tsp of salt and pepper, 1 tsp of lemon pepper",
+            "Then you take your ground beef and you sprinkle it on top of your nachos",
+            "Then you're going to need some sour cream",
+            "You're going to need some hot sauce",
+            "You're going to need some jalapenos",
+            "And it's ready to serve and eat"
+        ).mapIndexed { index, text -> TranscriptSegment(elapsedMs = index * 3_000L, text = text) }
+
+        val draft = CookingSessionParser.parse(segments)
+
+        assertEquals(
+            listOf(
+                listOf("1", "lb", "Ground beef"),
+                listOf("1", "tsp", "Salt and pepper"),
+                listOf("1", "tsp", "Lemon pepper"),
+                listOf("", "", "Sour cream"),
+                listOf("", "", "Hot sauce"),
+                listOf("", "", "Jalapenos")
+            ),
+            draft.ingredients.map { listOf(it.quantity, it.unit, it.name) }
+        )
+
+        assertTrue(
+            "sprinkle step should stand alone, got: ${draft.steps}",
+            draft.steps.contains("Sprinkle it on top of your nachos.")
+        )
+        assertTrue(
+            "no method step may absorb an ingredient declaration, got: ${draft.steps}",
+            draft.steps.none { it.contains("need some", ignoreCase = true) }
         )
     }
 

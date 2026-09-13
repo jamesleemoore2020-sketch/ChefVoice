@@ -204,7 +204,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'id', 'title', 'description', 'servings', 'prepTimeMinutes', 'cookTimeMinutes',
           'ingredients', 'steps', 'stepIds', 'media', 'voiceClips', 'isPublic',
-          'authorId', 'authorName', 'createdAt', 'updatedAt', 'likes', 'commentCount'
+          'authorId', 'authorName', 'createdAt', 'updatedAt', 'likes', 'commentCount', 'tags'
         ])
         && data.keys().hasAll([
           'title', 'description', 'servings', 'ingredients', 'steps', 'isPublic',
@@ -221,6 +221,7 @@ service cloud.firestore {
         && (!data.keys().hasAny(['stepIds']) || (data.stepIds is list && data.stepIds.size() <= 300))
         && (!data.keys().hasAny(['media']) || (data.media is list && data.media.size() <= 100))
         && (!data.keys().hasAny(['voiceClips']) || (data.voiceClips is list && data.voiceClips.size() <= 50))
+        && (!data.keys().hasAny(['tags']) || (data.tags is list && data.tags.size() <= 8))
         && data.isPublic is bool
         && data.authorId is string && data.authorId.size() > 0 && data.authorId.size() <= 160
         && data.authorName is string && data.authorName.size() > 0 && data.authorName.size() <= 120
@@ -246,7 +247,7 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'title', 'description', 'servings', 'prepTimeMinutes', 'cookTimeMinutes',
           'ingredients', 'steps', 'stepIds', 'media', 'voiceClips', 'isPublic',
-          'authorName', 'updatedAt'
+          'authorName', 'updatedAt', 'tags'
         ]);
     }
 
@@ -458,6 +459,23 @@ service cloud.firestore {
           && request.resource.data.lastReadAt is int
           && request.resource.data.lastReadAt >= resource.data.lastReadAt;
         allow delete: if signedIn() && request.auth.uid == uid;
+      }
+
+      // Pro entitlement is server-authoritative. Only the Admin SDK writes here,
+      // after verifying a purchase token against the Play Developer API or handling
+      // a real-time developer notification. A client-writable entitlement would be
+      // the one security-relevant value in the app the client controls, and it
+      // would be trivially patched in a modified APK.
+      match /entitlements/{entitlementId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
+      }
+
+      // Verified purchase records are likewise backend-owned. They hold Play
+      // purchase tokens, which are payment data.
+      match /purchases/{purchaseId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
       }
 
       match /settings/{settingId} {
@@ -686,6 +704,14 @@ service cloud.firestore {
 
     // Retained so any documents written under the old (unreachable) layout stay closed.
     match /moderation/{document=**} {
+      allow read, write: if false;
+    }
+
+    // Launch-access configuration: the founding-seat counter and the promo kill
+    // switch. Written only by the chefvoice-billing Admin SDK. Closed to clients in
+    // both directions -- a readable seat counter would leak how many accounts exist,
+    // and a writable one would let a modified APK mint itself a founding seat.
+    match /config/{configId} {
       allow read, write: if false;
     }
   }

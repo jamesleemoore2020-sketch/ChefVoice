@@ -1,13 +1,18 @@
 package com.chefvoice.app.ui
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.util.Log
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.speech.RecognizerIntent
 import android.os.Build
+import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,14 +36,19 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.darkColorScheme
@@ -56,6 +66,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +76,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -79,8 +91,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.chefvoice.app.R
 import androidx.core.content.FileProvider
+import com.chefvoice.app.analytics.ChefAnalytics
 import com.chefvoice.app.media.AudioPlayer
 import com.chefvoice.app.media.AudioRecorder
+import com.chefvoice.app.media.RecipeSpeaker
 import com.chefvoice.app.media.copyPickedMedia
 import com.chefvoice.app.model.Ingredient
 import com.chefvoice.app.model.ChefNotification
@@ -94,6 +108,10 @@ import com.chefvoice.app.model.LiveSession
 import com.chefvoice.app.model.MediaAttachment
 import com.chefvoice.app.model.MediaType
 import com.chefvoice.app.model.NotificationPreferences
+import com.chefvoice.app.model.FoundingAccess
+import com.chefvoice.app.model.FreeTierLimits
+import com.chefvoice.app.model.ProEntitlement
+import com.chefvoice.app.model.ProTierLimits
 import com.chefvoice.app.model.Recipe
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.stepIdAt
@@ -101,6 +119,8 @@ import com.chefvoice.app.notifications.ChefVoiceForegroundService
 import com.chefvoice.app.model.TranscriptSegment
 import com.chefvoice.app.model.VoiceClip
 import com.chefvoice.app.util.shareRecipe
+import com.chefvoice.app.util.parseTagsInput
+import com.chefvoice.app.util.tagMatchesQuery
 import com.chefvoice.app.voice.CookingSessionCapture
 import com.chefvoice.app.voice.CookingSessionParser
 import com.chefvoice.app.voice.IngredientParser
@@ -321,6 +341,7 @@ fun ChefVoiceApp(
                         onRemoveIngredient = { ingredientId -> appState.removeRecipeIngredient(recipe.id, ingredientId) },
                         onRemoveStep = { stepId -> appState.removeRecipeStep(recipe.id, stepId) },
                         onUpdateTimes = { prep, cook -> appState.updateRecipeTimes(recipe.id, prep, cook) },
+                        onUpdateTags = { tags -> appState.updateRecipeTags(recipe.id, tags) },
                         onCook = { appState.cookingRecipe = recipe },
                         onPlayVoice = appState::playVoice,
                         onLike = { appState.toggleLike(recipe) },
@@ -349,10 +370,12 @@ fun ChefVoiceApp(
                     isSignedIn = appState.isSignedIn,
                     loading = appState.selectedChefProfileLoading,
                     activeLive = appState.activeLiveFor(appState.selectedChefUid),
+                    isBlocked = appState.isUserBlocked(appState.selectedChefUid),
                     onBack = appState::closeChefProfile,
                     onFollow = { appState.toggleFollowUid(appState.selectedChefUid) },
                     onMessage = { appState.startConversationWithChef(appState.selectedChefUid, appState.selectedChefProfile?.displayName ?: "Chef") },
                     onReport = { appState.reportChef(appState.selectedChefUid) },
+                    onToggleBlock = { appState.setUserBlocked(appState.selectedChefUid, !appState.isUserBlocked(appState.selectedChefUid)) },
                     onWatchLive = { live ->
                         appState.closeChefProfile()
                         if (appState.selectedRecipe != null) appState.closeRecipe()
@@ -410,6 +433,11 @@ fun ChefVoiceApp(
                                 authorName = appState.displayName,
                                 onSaved = {
                                     appState.saveRecipe(it)
+                                    // Recorded here rather than inside saveRecipe, which
+                                    // is also the update path for edits, second-pass
+                                    // accepts and publishing. Only this callback means a
+                                    // chef finished making a new recipe.
+                                    ChefAnalytics.recipeCompleted()
                                     navigateTab(Tab.LIBRARY)
                                 }
                             )
@@ -430,15 +458,18 @@ fun ChefVoiceApp(
                                 onSearchChefs = appState::searchChefs,
                                 isLiked = appState::isLiked,
                                 isBookmarked = appState::isBookmarked,
+                                isUserBlocked = appState::isUserBlocked,
                                 onLike = appState::toggleLike,
                                 onBookmark = appState::toggleBookmark,
                                 onOpen = appState::openRecipe,
                                 onChefProfile = appState::openChefProfile,
+                                onMessageChef = appState::startConversationWithChef,
+                                onReportRecipe = appState::reportRecipe,
+                                onToggleBlock = { uid -> appState.setUserBlocked(uid, !appState.isUserBlocked(uid)) },
                                 unreadMessageCount = appState.unreadConversationCount,
                                 unreadNotificationCount = appState.unreadNotificationCount,
                                 onMessages = { navigateTab(Tab.MESSAGES) },
-                                onNotifications = { navigateTab(Tab.NOTIFICATIONS) },
-                                onProfile = { navigateTab(Tab.PROFILE) }
+                                onNotifications = { navigateTab(Tab.NOTIFICATIONS) }
                             )
                             Tab.MESSAGES -> MessagesScreen(
                                 conversations = appState.conversations,
@@ -504,6 +535,16 @@ fun ChefVoiceApp(
                                 bookmarks = appState.bookmarkedRecipes(),
                                 accountBusy = appState.accountBusy,
                                 cloudMessage = appState.cloudMessage,
+                                needsReauthForDelete = appState.needsReauthForDelete,
+                                isPro = appState.isPro,
+                                proEntitlement = appState.proEntitlement,
+                                proPreviewAvailable = appState.proPreviewAvailable,
+                                proPreviewOverride = appState.proPreviewOverride,
+                                onProPreviewChange = { appState.proPreviewOverride = it },
+                                onSeePro = { appState.showPaywall(PaywallTrigger.PROFILE) },
+                                secondPassUsed = appState.secondPassUsedThisMonth,
+                                secondPassLimit = appState.secondPassMonthlyLimit,
+                                cloudRecipeCount = appState.cloudRecipeCount,
                                 unreadMessageCount = appState.unreadConversationCount,
                                 unreadNotificationCount = appState.unreadNotificationCount,
                                 blackoutMode = blackoutMode,
@@ -521,6 +562,8 @@ fun ChefVoiceApp(
                                 onResetPassword = appState::sendPasswordReset,
                                 onVerifyEmail = appState::sendVerificationEmail,
                                 onDeleteAccount = appState::deleteChefVoiceAccount,
+                                onConfirmDeletePassword = appState::confirmAccountDeletionWithPassword,
+                                onCancelDeleteReauth = appState::cancelAccountDeletionReauth,
                                 onModerateReport = appState::moderateReport,
                                 onSignOut = appState::signOut,
                                 onOpenRecipe = appState::openRecipe
@@ -529,6 +572,32 @@ fun ChefVoiceApp(
                     }
                 }
             } }
+        }
+        // One paywall for the whole app. Second Pass and the cloud-sync cap raise it
+        // from ChefAppState, so it appears wherever the chef happens to be.
+        if (appState.paywallTrigger.isNotBlank()) {
+            ProPaywallDialog(
+                trigger = appState.paywallTrigger,
+                monthlyPrice = appState.proMonthlyPriceLabel,
+                annualPrice = appState.proAnnualPriceLabel,
+                lifetimePrice = appState.proLifetimePriceLabel,
+                onDismiss = { appState.dismissPaywall() },
+                onStartCheckout = { productChoice ->
+                    // Dismiss immediately: Play's own checkout sheet covers the screen
+                    // next, and entitlement only ever arrives back through the
+                    // proEntitlement listener once the backend verifies the purchase.
+                    appState.dismissPaywall()
+                    (context as? Activity)?.let { appState.startCheckout(productChoice, it) }
+                }
+            )
+        }
+        if (appState.checkoutError.isNotBlank()) {
+            AlertDialog(
+                onDismissRequest = { appState.dismissCheckoutError() },
+                title = { Text("Checkout") },
+                text = { Text(appState.checkoutError) },
+                confirmButton = { TextButton(onClick = { appState.dismissCheckoutError() }) { Text("OK") } }
+            )
         }
         if (showHostExitDialog) {
             AlertDialog(
@@ -687,6 +756,78 @@ private fun RecipeMediaBanner(attachment: MediaAttachment, modifier: Modifier = 
     }
 }
 
+/**
+ * The double-tap-to-like heart: pops in, settles, holds, then fades. `trigger`
+ * is a counter rather than a boolean so tapping again while it is still
+ * playing restarts the animation instead of doing nothing.
+ */
+@Composable
+private fun HeartBurstOverlay(trigger: Int, modifier: Modifier = Modifier) {
+    if (trigger == 0) return
+    val alpha = remember(trigger) { Animatable(1f) }
+    LaunchedEffect(trigger) {
+        alpha.snapTo(1f)
+        delay(350)
+        alpha.animateTo(0f, tween(300))
+    }
+    Text("❤", color = Color.White.copy(alpha = alpha.value), style = MaterialTheme.typography.displayLarge, modifier = modifier)
+}
+
+// CreateRecipeScreen was one long scrolling flow covering capture, details,
+// ingredients/method, media and save all at once (UI_BRANDING_AUDIT.md #4).
+// Splitting it into these progressive steps doesn't change any capture,
+// parsing or save logic -- only how much of it is on screen at once.
+private enum class CreateRecipeStep(val label: String) {
+    CAPTURE("Capture"),
+    DETAILS("Recipe Details"),
+    INGREDIENTS_METHOD("Ingredients & Method"),
+    MEDIA("Media"),
+    REVIEW("Review")
+}
+
+private fun CreateRecipeStep.next(): CreateRecipeStep? = CreateRecipeStep.values().getOrNull(ordinal + 1)
+private fun CreateRecipeStep.previous(): CreateRecipeStep? = CreateRecipeStep.values().getOrNull(ordinal - 1)
+
+@Composable
+private fun CreateRecipeStepHeader(step: CreateRecipeStep) {
+    val steps = CreateRecipeStep.values()
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            "Step ${step.ordinal + 1} of ${steps.size} · ${step.label}",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(6.dp))
+        LinearProgressIndicator(
+            progress = { (step.ordinal + 1f) / steps.size },
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun CreateRecipeStepNav(
+    step: CreateRecipeStep,
+    saveEnabled: Boolean,
+    onBack: () -> Unit,
+    onNext: () -> Unit,
+    onSave: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (step.previous() != null) {
+            OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("Back") }
+        }
+        if (step == CreateRecipeStep.REVIEW) {
+            Button(onClick = onSave, enabled = saveEnabled, modifier = Modifier.weight(1f)) { Text("Save recipe") }
+        } else {
+            Button(onClick = onNext, modifier = Modifier.weight(1f)) { Text("Next") }
+        }
+    }
+}
+
 @Composable
 private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
     val context = LocalContext.current
@@ -695,6 +836,7 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
     var servingsText by remember { mutableStateOf("2") }
     var prepTimeText by remember { mutableStateOf("") }
     var cookTimeText by remember { mutableStateOf("") }
+    var tagsText by remember { mutableStateOf("") }
     val ingredients = remember { mutableStateListOf<Ingredient>() }
     val steps = remember { mutableStateListOf<String>() }
     val media = remember { mutableStateListOf<MediaAttachment>() }
@@ -711,6 +853,7 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
     var isRecording by remember { mutableStateOf(false) }
     val recorder = remember { AudioRecorder(context.applicationContext) }
     val previewPlayer = remember { AudioPlayer() }
+    var wizardStep by remember { mutableStateOf(CreateRecipeStep.CAPTURE) }
 
     val sessionCapture = remember {
         CookingSessionCapture(
@@ -768,6 +911,9 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
         isProcessingSession = false
         if (sessionCapture.start()) {
             isSessionCapturing = true
+            // Only once recognition is actually running: a denied microphone permission
+            // or a failed start is not a chef who began narrating.
+            ChefAnalytics.recipeCaptureStarted()
             // Hold the microphone open if the chef leaves the app or the screen
             // locks. Without this the session kept running but captured silence.
             ChefVoiceForegroundService.start(context, ChefVoiceForegroundService.MODE_COOKING)
@@ -856,338 +1002,412 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
         return
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item {
-            Text("Create recipe", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("Cook, talk, and let ChefVoice build the first draft while keeping the creator's real voice.")
-        }
-
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(18.dp)
+    Column(Modifier.fillMaxSize()) {
+        CreateRecipeStepHeader(wizardStep)
+        key(wizardStep) {
+            LazyColumn(
+                modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (isSessionCapturing) "🔴 LIVE COOKING CAPTURE" else "🎙 Cook & capture", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        if (isSessionCapturing) Text("Listening")
-                    }
-                    Text(captureStatus)
-                    Text(
-                        if (sessionCapture.savesFullSessionVoice)
-                            "On Android 13+, ChefVoice saves the microphone session as your original chef voice and feeds that same audio to compatible speech recognition services."
-                        else
-                            "This Android version can continuously transcribe, but full-session voice saving uses Android 13+; manual voice clips remain available below.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        "Speak naturally: “you add 2 teaspoons of salt,” “add salt and pepper,” or “then sauté the garlic.” ChefVoice now joins recognition segments back together and waits for late speech results before building the draft.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-
-                    if (sessionTranscript.isNotEmpty() || livePartial.isNotBlank()) {
-                        HorizontalDivider()
-                        Text("Live transcript", fontWeight = FontWeight.SemiBold)
-                        sessionTranscript.takeLast(4).forEach { segment ->
-                            Text("${formatElapsed(segment.elapsedMs)}  ${segment.text}", style = MaterialTheme.typography.bodySmall)
+                when (wizardStep) {
+                    CreateRecipeStep.CAPTURE -> {
+                        item {
+                            Text("Create recipe", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                            Text("Cook, talk, and let ChefVoice build the first draft while keeping the creator's real voice.")
                         }
-                        if (livePartial.isNotBlank()) {
-                            Text("… $livePartial", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
 
-                    Button(
-                        onClick = {
-                            if (isSessionCapturing) {
-                                finishCookingCapture()
-                            } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                startCookingCapture()
-                            } else {
-                                sessionPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                shape = RoundedCornerShape(18.dp)
+                            ) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(if (isSessionCapturing) "🔴 LIVE COOKING CAPTURE" else "🎙 Cook & capture", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                                        if (isSessionCapturing) Text("Listening")
+                                    }
+                                    Text(captureStatus)
+                                    Text(
+                                        if (sessionCapture.savesFullSessionVoice)
+                                            "On Android 13+, ChefVoice saves the microphone session as your original chef voice and feeds that same audio to compatible speech recognition services."
+                                        else
+                                            "This Android version can continuously transcribe, but full-session voice saving uses Android 13+; manual voice clips remain available below.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Text(
+                                        "Speak naturally: “you add 2 teaspoons of salt,” “add salt and pepper,” or “then sauté the garlic.” ChefVoice now joins recognition segments back together and waits for late speech results before building the draft.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+
+                                    if (sessionTranscript.isNotEmpty() || livePartial.isNotBlank()) {
+                                        HorizontalDivider()
+                                        Text("Live transcript", fontWeight = FontWeight.SemiBold)
+                                        sessionTranscript.takeLast(4).forEach { segment ->
+                                            Text("${formatElapsed(segment.elapsedMs)}  ${segment.text}", style = MaterialTheme.typography.bodySmall)
+                                        }
+                                        if (livePartial.isNotBlank()) {
+                                            Text("… $livePartial", style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            if (isSessionCapturing) {
+                                                finishCookingCapture()
+                                            } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                                startCookingCapture()
+                                            } else {
+                                                sessionPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                            }
+                                        },
+                                        enabled = !isRecording && !isProcessingSession,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            when {
+                                                isProcessingSession -> "Structuring recipe…"
+                                                isSessionCapturing -> "⏹ Finish & build recipe"
+                                                else -> "🎙 Start cooking capture"
+                                            }
+                                        )
+                                    }
+                                }
                             }
-                        },
-                        enabled = !isRecording && !isProcessingSession,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            when {
-                                isProcessingSession -> "Structuring recipe…"
-                                isSessionCapturing -> "⏹ Finish & build recipe"
-                                else -> "🎙 Start cooking capture"
+                        }
+                    }
+
+                    CreateRecipeStep.DETAILS -> {
+                        item { SectionTitle("Recipe details") }
+                        item {
+                            OutlinedTextField(
+                                value = title,
+                                onValueChange = { title = it },
+                                label = { Text("Recipe name") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                        item {
+                            OutlinedTextField(
+                                value = description,
+                                onValueChange = { description = it },
+                                label = { Text("Description / chef note") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 2
+                            )
+                        }
+                        item {
+                            OutlinedTextField(
+                                value = servingsText,
+                                onValueChange = { servingsText = it.filter { ch -> ch.isDigit() }.take(3) },
+                                label = { Text("Servings") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                        item {
+                            OutlinedTextField(
+                                value = tagsText,
+                                onValueChange = { tagsText = it },
+                                label = { Text("Tags") },
+                                placeholder = { Text("#bbq, camping, weeknight") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                        item {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = prepTimeText,
+                                    onValueChange = { prepTimeText = it.filter { ch -> ch.isDigit() }.take(4) },
+                                    label = { Text("Prep min") },
+                                    placeholder = { Text("Optional") },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = cookTimeText,
+                                    onValueChange = { cookTimeText = it.filter { ch -> ch.isDigit() }.take(4) },
+                                    label = { Text("Cook min") },
+                                    placeholder = { Text("Optional") },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
                             }
-                        )
-                    }
-                }
-            }
-        }
-
-        item {
-            OutlinedTextField(
-                value = title,
-                onValueChange = { title = it },
-                label = { Text("Recipe name") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-        }
-        item {
-            OutlinedTextField(
-                value = description,
-                onValueChange = { description = it },
-                label = { Text("Description / chef note") },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 2
-            )
-        }
-        item {
-            OutlinedTextField(
-                value = servingsText,
-                onValueChange = { servingsText = it.filter { ch -> ch.isDigit() }.take(3) },
-                label = { Text("Servings") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = prepTimeText,
-                    onValueChange = { prepTimeText = it.filter { ch -> ch.isDigit() }.take(4) },
-                    label = { Text("Prep min") },
-                    placeholder = { Text("Optional") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = cookTimeText,
-                    onValueChange = { cookTimeText = it.filter { ch -> ch.isDigit() }.take(4) },
-                    label = { Text("Cook min") },
-                    placeholder = { Text("Optional") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
-                )
-            }
-            Text("These are recipe summary times. Method-step timers stay exactly as captured.", style = MaterialTheme.typography.bodySmall)
-        }
-
-        item { SectionTitle("Ingredients") }
-        items(ingredients, key = { it.id }) { ingredient ->
-            IngredientRow(
-                ingredient = ingredient,
-                onChange = { updated ->
-                    val index = ingredients.indexOfFirst { it.id == ingredient.id }
-                    if (index >= 0) ingredients[index] = updated
-                },
-                onDelete = { ingredients.removeAll { it.id == ingredient.id } }
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = manualIngredient,
-                    onValueChange = { manualIngredient = it },
-                    label = { Text("Add ingredient") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
-                )
-                Button(
-                    onClick = {
-                        if (manualIngredient.isNotBlank()) {
-                            ingredients.add(IngredientParser.parse(manualIngredient))
-                            manualIngredient = ""
+                            Text("These are recipe summary times. Method-step timers stay exactly as captured.", style = MaterialTheme.typography.bodySmall)
                         }
                     }
-                ) { Text("Add") }
-            }
-        }
-        item {
-            OutlinedButton(
-                onClick = { launchSpeech(SpeechTarget.INGREDIENT) },
-                enabled = !isSessionCapturing,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("🎙 Dictate one ingredient")
-            }
-        }
 
-        item { SectionTitle("Method") }
-        items(steps) { step ->
-            val index = steps.indexOf(step)
-            Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${index + 1}.", fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(8.dp))
-                    Text(step, Modifier.weight(1f))
-                    TextButton(onClick = { steps.remove(step) }) { Text("Remove") }
-                }
-            }
-        }
-        item {
-            OutlinedTextField(
-                value = manualStep,
-                onValueChange = { manualStep = it },
-                label = { Text("Add cooking step") },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 2
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = {
-                        if (manualStep.isNotBlank()) {
-                            steps.add(manualStep.trim())
-                            manualStep = ""
+                    CreateRecipeStep.INGREDIENTS_METHOD -> {
+                        item { SectionTitle("Ingredients") }
+                        items(ingredients, key = { it.id }) { ingredient ->
+                            IngredientRow(
+                                ingredient = ingredient,
+                                onChange = { updated ->
+                                    val index = ingredients.indexOfFirst { it.id == ingredient.id }
+                                    if (index >= 0) ingredients[index] = updated
+                                },
+                                onDelete = { ingredients.removeAll { it.id == ingredient.id } }
+                            )
                         }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) { Text("Add step") }
-                OutlinedButton(
-                    onClick = { launchSpeech(SpeechTarget.STEP) },
-                    enabled = !isSessionCapturing,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("🎙 Dictate")
-                }
-            }
-        }
+                        item {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = manualIngredient,
+                                    onValueChange = { manualIngredient = it },
+                                    label = { Text("Add ingredient") },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
+                                Button(
+                                    onClick = {
+                                        if (manualIngredient.isNotBlank()) {
+                                            ingredients.add(IngredientParser.parse(manualIngredient))
+                                            manualIngredient = ""
+                                        }
+                                    }
+                                ) { Text("Add") }
+                            }
+                        }
+                        item {
+                            OutlinedButton(
+                                onClick = { launchSpeech(SpeechTarget.INGREDIENT) },
+                                enabled = !isSessionCapturing,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("🎙 Dictate one ingredient")
+                            }
+                        }
 
-        if (sessionTranscript.isNotEmpty()) {
-            item { SectionTitle("Cooking transcript") }
-            items(sessionTranscript, key = { it.id }) { segment ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(12.dp)) {
-                        Text(formatElapsed(segment.elapsedMs), fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.width(10.dp))
-                        Text(segment.text, Modifier.weight(1f))
+                        item { SectionTitle("Method") }
+                        items(steps) { step ->
+                            val index = steps.indexOf(step)
+                            Card(Modifier.fillMaxWidth()) {
+                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("${index + 1}.", fontWeight = FontWeight.Bold)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(step, Modifier.weight(1f))
+                                    TextButton(onClick = { steps.remove(step) }) { Text("Remove") }
+                                }
+                            }
+                        }
+                        item {
+                            OutlinedTextField(
+                                value = manualStep,
+                                onValueChange = { manualStep = it },
+                                label = { Text("Add cooking step") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 2
+                            )
+                        }
+                        item {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        if (manualStep.isNotBlank()) {
+                                            steps.add(manualStep.trim())
+                                            manualStep = ""
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("Add step") }
+                                OutlinedButton(
+                                    onClick = { launchSpeech(SpeechTarget.STEP) },
+                                    enabled = !isSessionCapturing,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("🎙 Dictate")
+                                }
+                            }
+                        }
+
+                        if (sessionTranscript.isNotEmpty()) {
+                            item { SectionTitle("Cooking transcript") }
+                            items(sessionTranscript, key = { it.id }) { segment ->
+                                Card(Modifier.fillMaxWidth()) {
+                                    Row(Modifier.padding(12.dp)) {
+                                        Text(formatElapsed(segment.elapsedMs), fontWeight = FontWeight.SemiBold)
+                                        Spacer(Modifier.width(10.dp))
+                                        Text(segment.text, Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    CreateRecipeStep.MEDIA -> {
+                        item { SectionTitle("Chef voice") }
+                        item {
+                            Text("The creator's original voice stays with the recipe. Full cooking sessions appear here automatically on supported phones; you can also record focused voice notes.")
+                        }
+                        items(voiceClips, key = { it.id }) { clip ->
+                            Card(Modifier.fillMaxWidth()) {
+                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("🎧 ${clip.label}", Modifier.weight(1f))
+                                    TextButton(onClick = { previewPlayer.play(clip.path) }) { Text("Play") }
+                                    TextButton(onClick = { voiceClips.removeAll { it.id == clip.id } }) { Text("Remove") }
+                                }
+                            }
+                        }
+                        item {
+                            Button(
+                                onClick = {
+                                    if (isRecording) {
+                                        recorder.stop()?.let { voiceClips.add(VoiceClip(path = it, label = "Chef voice ${voiceClips.size + 1}")) }
+                                        isRecording = false
+                                    } else {
+                                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                            startRecording()
+                                        } else {
+                                            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                        }
+                                    }
+                                },
+                                enabled = !isSessionCapturing,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(if (isRecording) "⏹ Stop & save voice" else "🔴 Record chef voice note")
+                            }
+                        }
+
+                        item { SectionTitle("Photos & video") }
+                        item {
+                            Text("Capture food photos and cooking clips directly inside ChefVoice, or choose something already on your phone.")
+                        }
+                        item {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { cameraMode = ChefCameraMode.PHOTO },
+                                    enabled = !isProcessingSession,
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("📷 Take photo") }
+                                Button(
+                                    onClick = { cameraMode = ChefCameraMode.VIDEO },
+                                    enabled = !isSessionCapturing && !isRecording && !isProcessingSession,
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("🎬 Record video") }
+                            }
+                        }
+                        item {
+                            OutlinedButton(
+                                onClick = {
+                                    mediaLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("🖼 Choose from phone") }
+                        }
+                        if (isSessionCapturing) {
+                            item {
+                                Text(
+                                    "Photos can be captured while ChefVoice is listening. Finish continuous voice capture before recording video so the microphone stays dedicated to recipe transcription.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                        items(media, key = { it.id }) { attachment ->
+                            MediaPreview(
+                                attachment = attachment,
+                                onRemove = { media.removeAll { it.id == attachment.id } }
+                            )
+                        }
+                    }
+
+                    CreateRecipeStep.REVIEW -> {
+                        item { SectionTitle("Review") }
+                        item { Text("Check everything before saving. Use Back to change anything.", style = MaterialTheme.typography.bodySmall) }
+                        item {
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(title.ifBlank { "Untitled recipe" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    if (description.isNotBlank()) Text(description, style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        "Serves ${servingsText.ifBlank { "2" }}" +
+                                            (prepTimeText.toIntOrNull()?.let { " · Prep ${it}m" } ?: "") +
+                                            (cookTimeText.toIntOrNull()?.let { " · Cook ${it}m" } ?: ""),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    val reviewTags = parseTagsInput(tagsText)
+                                    if (reviewTags.isNotEmpty()) {
+                                        Text(reviewTags.joinToString(" ") { "#$it" }, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                        }
+                        item { Text("${ingredients.size} ingredient${if (ingredients.size == 1) "" else "s"}", fontWeight = FontWeight.SemiBold) }
+                        items(ingredients, key = { it.id }) { ingredient ->
+                            Text("• ${ingredient.displayText()}", style = MaterialTheme.typography.bodySmall)
+                        }
+                        item { Text("${steps.size} method step${if (steps.size == 1) "" else "s"}", fontWeight = FontWeight.SemiBold) }
+                        items(steps) { step ->
+                            val index = steps.indexOf(step)
+                            Text("${index + 1}. $step", style = MaterialTheme.typography.bodySmall)
+                        }
+                        item {
+                            Text(
+                                "${media.size} photo/video, ${voiceClips.size} voice clip${if (voiceClips.size == 1) "" else "s"}",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        if (title.isBlank() || ingredients.isEmpty()) {
+                            item {
+                                Text(
+                                    if (title.isBlank()) "Add a recipe name before saving." else "Add at least one ingredient before saving.",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
                     }
                 }
+                item { Spacer(Modifier.height(8.dp)) }
             }
         }
-
-        item { SectionTitle("Chef voice") }
-        item {
-            Text("The creator's original voice stays with the recipe. Full cooking sessions appear here automatically on supported phones; you can also record focused voice notes.")
-        }
-        items(voiceClips, key = { it.id }) { clip ->
-            Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("🎧 ${clip.label}", Modifier.weight(1f))
-                    TextButton(onClick = { previewPlayer.play(clip.path) }) { Text("Play") }
-                    TextButton(onClick = { voiceClips.removeAll { it.id == clip.id } }) { Text("Remove") }
+        CreateRecipeStepNav(
+            step = wizardStep,
+            saveEnabled = title.isNotBlank() && ingredients.isNotEmpty() && !isSessionCapturing && !isProcessingSession,
+            onBack = { wizardStep = wizardStep.previous() ?: wizardStep },
+            onNext = { wizardStep = wizardStep.next() ?: wizardStep },
+            onSave = {
+                if (isRecording) {
+                    recorder.stop()?.let { voiceClips.add(VoiceClip(path = it, label = "Chef voice ${voiceClips.size + 1}")) }
+                    isRecording = false
                 }
-            }
-        }
-        item {
-            Button(
-                onClick = {
-                    if (isRecording) {
-                        recorder.stop()?.let { voiceClips.add(VoiceClip(path = it, label = "Chef voice ${voiceClips.size + 1}")) }
-                        isRecording = false
-                    } else {
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                            startRecording()
-                        } else {
-                            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                    }
-                },
-                enabled = !isSessionCapturing,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (isRecording) "⏹ Stop & save voice" else "🔴 Record chef voice note")
-            }
-        }
-
-        item { SectionTitle("Photos & video") }
-        item {
-            Text("Capture food photos and cooking clips directly inside ChefVoice, or choose something already on your phone.")
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = { cameraMode = ChefCameraMode.PHOTO },
-                    enabled = !isProcessingSession,
-                    modifier = Modifier.weight(1f)
-                ) { Text("📷 Take photo") }
-                Button(
-                    onClick = { cameraMode = ChefCameraMode.VIDEO },
-                    enabled = !isSessionCapturing && !isRecording && !isProcessingSession,
-                    modifier = Modifier.weight(1f)
-                ) { Text("🎬 Record video") }
-            }
-        }
-        item {
-            OutlinedButton(
-                onClick = {
-                    mediaLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                onSaved(
+                    Recipe(
+                        title = title.trim(),
+                        description = description.trim(),
+                        servings = servingsText.toIntOrNull()?.coerceAtLeast(1) ?: 2,
+                        prepTimeMinutes = prepTimeText.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+                        cookTimeMinutes = cookTimeText.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+                        ingredients = ingredients.toList(),
+                        steps = steps.toList(),
+                        stepIds = steps.map { java.util.UUID.randomUUID().toString() },
+                        media = media.toList(),
+                        voiceClips = voiceClips.toList(),
+                        transcript = sessionTranscript.toList(),
+                        authorName = authorName,
+                        tags = parseTagsInput(tagsText)
                     )
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("🖼 Choose from phone") }
-        }
-        if (isSessionCapturing) {
-            item {
-                Text(
-                    "Photos can be captured while ChefVoice is listening. Finish continuous voice capture before recording video so the microphone stays dedicated to recipe transcription.",
-                    style = MaterialTheme.typography.bodySmall
                 )
+                title = ""
+                description = ""
+                servingsText = "2"
+                prepTimeText = ""
+                cookTimeText = ""
+                tagsText = ""
+                ingredients.clear()
+                steps.clear()
+                media.clear()
+                voiceClips.clear()
+                sessionTranscript.clear()
+                livePartial = ""
+                captureStatus = "Talk naturally while you cook. ChefVoice will turn the session into an editable recipe draft."
+                wizardStep = CreateRecipeStep.CAPTURE
             }
-        }
-        items(media, key = { it.id }) { attachment ->
-            MediaPreview(
-                attachment = attachment,
-                onRemove = { media.removeAll { it.id == attachment.id } }
-            )
-        }
-
-        item {
-            Spacer(Modifier.height(8.dp))
-            Button(
-                enabled = title.isNotBlank() && ingredients.isNotEmpty() && !isSessionCapturing && !isProcessingSession,
-                onClick = {
-                    if (isRecording) {
-                        recorder.stop()?.let { voiceClips.add(VoiceClip(path = it, label = "Chef voice ${voiceClips.size + 1}")) }
-                        isRecording = false
-                    }
-                    onSaved(
-                        Recipe(
-                            title = title.trim(),
-                            description = description.trim(),
-                            servings = servingsText.toIntOrNull()?.coerceAtLeast(1) ?: 2,
-                            prepTimeMinutes = prepTimeText.toIntOrNull()?.coerceAtLeast(0) ?: 0,
-                            cookTimeMinutes = cookTimeText.toIntOrNull()?.coerceAtLeast(0) ?: 0,
-                            ingredients = ingredients.toList(),
-                            steps = steps.toList(),
-                            stepIds = steps.map { java.util.UUID.randomUUID().toString() },
-                            media = media.toList(),
-                            voiceClips = voiceClips.toList(),
-                            transcript = sessionTranscript.toList(),
-                            authorName = authorName
-                        )
-                    )
-                    title = ""
-                    description = ""
-                    servingsText = "2"
-                    prepTimeText = ""
-                    cookTimeText = ""
-                    ingredients.clear()
-                    steps.clear()
-                    media.clear()
-                    voiceClips.clear()
-                    sessionTranscript.clear()
-                    livePartial = ""
-                    captureStatus = "Talk naturally while you cook. ChefVoice will turn the session into an editable recipe draft."
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Save recipe") }
-        }
-        item { Spacer(Modifier.height(24.dp)) }
+        )
     }
 }
 
@@ -1196,6 +1416,22 @@ private fun formatElapsed(elapsedMs: Long): String {
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
     return "%02d:%02d".format(minutes, seconds)
+}
+
+private fun relativeTime(epochMs: Long): String {
+    if (epochMs <= 0L) return ""
+    return DateUtils.getRelativeTimeSpanString(
+        epochMs, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE
+    ).toString()
+}
+
+private fun formatCount(count: Int): String {
+    val value = count.coerceAtLeast(0)
+    return when {
+        value < 1000 -> value.toString()
+        value < 1_000_000 -> "%.1f".format(value / 1000.0).removeSuffix(".0") + "K"
+        else -> "%.1f".format(value / 1_000_000.0).removeSuffix(".0") + "M"
+    }
 }
 
 @Composable
@@ -1290,17 +1526,21 @@ private fun CommunityScreen(
     onSearchChefs: (String) -> Unit,
     isLiked: (String) -> Boolean,
     isBookmarked: (String) -> Boolean,
+    isUserBlocked: (String) -> Boolean,
     onLike: (Recipe) -> Unit,
     onBookmark: (Recipe) -> Unit,
     onOpen: (Recipe) -> Unit,
     onChefProfile: (String) -> Unit,
+    onMessageChef: (String, String) -> Unit,
+    onReportRecipe: (Recipe) -> Unit,
+    onToggleBlock: (String) -> Unit,
     unreadMessageCount: Int,
     unreadNotificationCount: Int,
     onMessages: () -> Unit,
-    onNotifications: () -> Unit,
-    onProfile: () -> Unit
+    onNotifications: () -> Unit
 ) {
     var communityMode by remember { mutableStateOf("discover") }
+    var searchExpanded by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
     var appliedSearch by remember { mutableStateOf("") }
     val term = appliedSearch.trim().lowercase(Locale.getDefault())
@@ -1310,6 +1550,7 @@ private fun CommunityScreen(
     val visibleItems = if (term.isBlank()) modeItems else modeItems.filter { item ->
         val recipe = item.recipe
         val profile = item.authorProfile
+        if (recipe.tags.any { tagMatchesQuery(it, term) }) return@filter true
         val haystack = buildList {
             add(recipe.title); add(recipe.description); add(recipe.authorName)
             add(profile?.displayName.orEmpty()); add(profile?.bio.orEmpty())
@@ -1322,9 +1563,12 @@ private fun CommunityScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Community", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("Finished dishes first. Find chefs worth following.", style = MaterialTheme.typography.bodySmall)
             }
-            TextButton(onClick = onMessages) { Text(if (unreadMessageCount > 0) "✉ $unreadMessageCount" else "✉") }
+            TextButton(onClick = {
+                if (searchExpanded) { searchText = ""; appliedSearch = ""; onSearchChefs("") }
+                searchExpanded = !searchExpanded
+            }) { Text(if (searchExpanded) "✕" else "🔍") }
+            TextButton(onClick = onMessages) { Text(if (unreadMessageCount > 0) "✉ $unreadMessageCount" else "✉", style = MaterialTheme.typography.headlineSmall) }
             TextButton(onClick = onNotifications) { Text(if (unreadNotificationCount > 0) "🔔 $unreadNotificationCount" else "🔔") }
         }
         Spacer(Modifier.height(8.dp))
@@ -1334,30 +1578,25 @@ private fun CommunityScreen(
             if (communityMode == "discover") Button(onClick = { communityMode = "discover" }, modifier = Modifier.weight(1f)) { Text("Discover") }
             else OutlinedButton(onClick = { communityMode = "discover" }, modifier = Modifier.weight(1f)) { Text("Discover") }
         }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = searchText,
-                onValueChange = { searchText = it },
-                label = { Text("Search chefs or dishes") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-            Button(onClick = { appliedSearch = searchText.trim(); onSearchChefs(appliedSearch) }, enabled = searchText.trim().length >= 2) { Text("Search") }
-        }
-        if (appliedSearch.isNotBlank()) {
-            TextButton(onClick = { searchText = ""; appliedSearch = ""; onSearchChefs("") }) { Text("Clear search") }
+        if (searchExpanded) {
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = searchText,
+                    onValueChange = { searchText = it },
+                    label = { Text("Search chefs, dishes or #tags") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(onClick = { appliedSearch = searchText.trim(); onSearchChefs(appliedSearch) }, enabled = searchText.trim().length >= 2) { Text("Search") }
+            }
+            if (appliedSearch.isNotBlank()) {
+                TextButton(onClick = { searchText = ""; appliedSearch = ""; onSearchChefs("") }) { Text("Clear search") }
+            }
         }
         if (!cloudConfigured) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                 Text("Demo mode · Connect Firebase for the real member feed.", Modifier.padding(12.dp))
-            }
-        } else if (!isSignedIn) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Browse Discover freely. Sign in to follow chefs and unlock your Following feed.", Modifier.weight(1f))
-                    TextButton(onClick = onProfile) { Text("Sign in") }
-                }
             }
         }
         if (cloudMessage.isNotBlank()) Text(cloudMessage, style = MaterialTheme.typography.bodySmall)
@@ -1391,8 +1630,6 @@ private fun CommunityScreen(
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text(if (communityMode == "following") "Following" else "Finished dishes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(6.dp))
         if (visibleItems.isEmpty()) {
             val message = when {
                 communityMode == "following" && !isSignedIn -> "Sign in to see finished dishes from chefs you follow."
@@ -1406,12 +1643,29 @@ private fun CommunityScreen(
                 items(visibleItems, key = { it.recipe.id }) { item ->
                     val recipe = item.recipe
                     val profile = item.authorProfile
+                    val context = LocalContext.current
+                    var menuOpen by remember { mutableStateOf(false) }
+                    var heartTrigger by remember { mutableIntStateOf(0) }
+                    val canModerate = isSignedIn && recipe.authorId.isNotBlank() && recipe.authorId != signedInUserId
                     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
-                        Box(Modifier.fillMaxWidth().height(360.dp).clickable { onOpen(recipe) }) {
+                        Box(
+                            Modifier.fillMaxWidth().height(360.dp).pointerInput(recipe.id) {
+                                detectTapGestures(
+                                    onTap = { onOpen(recipe) },
+                                    // Instagram-style: a double-tap always likes and always
+                                    // shows the heart, but never removes an existing like.
+                                    onDoubleTap = {
+                                        if (!isLiked(recipe.id)) onLike(recipe)
+                                        heartTrigger++
+                                    }
+                                )
+                            }
+                        ) {
                             val hero = recipe.media.firstOrNull { it.type == MediaType.IMAGE } ?: recipe.media.firstOrNull()
                             if (hero != null) RecipeMediaBanner(hero, Modifier.fillMaxSize())
                             else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondary), contentAlignment = Alignment.Center) { Text("🍽️", style = MaterialTheme.typography.displayMedium, color = Color.White) }
                             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.16f)))
+                            HeartBurstOverlay(heartTrigger, Modifier.align(Alignment.Center))
                             Row(
                                 modifier = Modifier.align(Alignment.TopStart).padding(12.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(24.dp)).clickable(enabled = recipe.authorId.isNotBlank()) { onChefProfile(recipe.authorId) }.padding(horizontal = 7.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -1419,14 +1673,46 @@ private fun CommunityScreen(
                                 RemoteProfileImage(profile?.photoUrl.orEmpty(), "${profile?.displayName ?: recipe.authorName} profile", Modifier.size(36.dp))
                                 Spacer(Modifier.width(8.dp)); Text(profile?.displayName?.ifBlank { recipe.authorName } ?: recipe.authorName, color = Color.White, fontWeight = FontWeight.Bold)
                             }
+                            if (canModerate) {
+                                Row(
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    val following = isFollowing(recipe.authorId)
+                                    TextButton(
+                                        onClick = { onFollowChef(recipe.authorId) },
+                                        modifier = Modifier.background(if (following) Color.Black.copy(alpha = 0.5f) else Color.White, CircleShape),
+                                        colors = ButtonDefaults.textButtonColors(contentColor = if (following) Color.White else Color.Black)
+                                    ) { Text(if (following) "Following" else "Follow", style = MaterialTheme.typography.labelSmall) }
+                                    Box {
+                                        TextButton(
+                                            onClick = { menuOpen = true },
+                                            modifier = Modifier.background(Color.Black.copy(alpha = 0.58f), CircleShape)
+                                        ) { Text("⋯", color = Color.White, fontWeight = FontWeight.Bold) }
+                                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                            DropdownMenuItem(text = { Text("✉ Message chef") }, onClick = { menuOpen = false; onMessageChef(recipe.authorId, recipe.authorName) })
+                                            DropdownMenuItem(text = { Text("⚑ Report") }, onClick = { menuOpen = false; onReportRecipe(recipe) })
+                                            DropdownMenuItem(
+                                                text = { Text(if (isUserBlocked(recipe.authorId)) "Unblock chef" else "🚫 Block chef") },
+                                                onClick = { menuOpen = false; onToggleBlock(recipe.authorId) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             Column(modifier = Modifier.align(Alignment.BottomStart).padding(14.dp).background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(16.dp)).padding(10.dp)) {
                                 Text(recipe.title, color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Text("${recipe.ingredients.size} ingredients · 💬 ${recipe.commentCount}", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                                Text("${recipe.ingredients.size} ingredients · 💬 ${formatCount(recipe.commentCount)} · ${relativeTime(recipe.createdAt)}", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                                if (recipe.tags.isNotEmpty()) {
+                                    Text(recipe.tags.take(3).joinToString(" ") { "#$it" }, color = Color.White, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
                             }
                             Column(modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp)), horizontalAlignment = Alignment.CenterHorizontally) {
-                                TextButton(onClick = { onLike(recipe) }) { Text(if (isLiked(recipe.id)) "♥ ${recipe.likes}" else "♡ ${recipe.likes}", color = Color.White) }
-                                TextButton(onClick = { onBookmark(recipe) }) { Text(if (isBookmarked(recipe.id)) "★" else "☆", color = Color.White) }
+                                TextButton(onClick = { onLike(recipe) }) { Text(if (isLiked(recipe.id)) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}", color = Color.White) }
                                 TextButton(onClick = { onOpen(recipe) }) { Text("💬", color = Color.White) }
+                                TextButton(onClick = { shareRecipe(context, recipe) }) { Text("📤", color = Color.White) }
+                                TextButton(onClick = { onBookmark(recipe) }) { Text(if (isBookmarked(recipe.id)) "★" else "☆", color = Color.White) }
                             }
                         }
                     }
@@ -2022,6 +2308,7 @@ private fun RecipeDetailScreen(
     onRemoveIngredient: (String) -> Unit,
     onRemoveStep: (String) -> Unit,
     onUpdateTimes: (Int, Int) -> Unit,
+    onUpdateTags: (List<String>) -> Unit,
     onCook: () -> Unit,
     onPlayVoice: (String) -> Unit,
     onLike: () -> Unit,
@@ -2046,6 +2333,7 @@ private fun RecipeDetailScreen(
     var mediaEditMode by remember(recipe.id) { mutableStateOf(false) }
     var prepTimeText by remember(recipe.id) { mutableStateOf(recipe.prepTimeMinutes.takeIf { it > 0 }?.toString().orEmpty()) }
     var cookTimeText by remember(recipe.id) { mutableStateOf(recipe.cookTimeMinutes.takeIf { it > 0 }?.toString().orEmpty()) }
+    var tagsText by remember(recipe.id) { mutableStateOf(recipe.tags.joinToString(", ") { "#$it" }) }
     var pendingMediaStepId by remember(recipe.id) { mutableStateOf("") }
     val context = LocalContext.current
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -2070,7 +2358,10 @@ private fun RecipeDetailScreen(
             navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
             actions = {
                 if (isOwned) TextButton(onClick = {
-                    if (mediaEditMode) onUpdateTimes(prepTimeText.toIntOrNull() ?: 0, cookTimeText.toIntOrNull() ?: 0)
+                    if (mediaEditMode) {
+                        onUpdateTimes(prepTimeText.toIntOrNull() ?: 0, cookTimeText.toIntOrNull() ?: 0)
+                        onUpdateTags(parseTagsInput(tagsText))
+                    }
                     mediaEditMode = !mediaEditMode
                 }) {
                     Text(if (mediaEditMode) "Done" else "Edit recipe")
@@ -2116,8 +2407,21 @@ private fun RecipeDetailScreen(
                                 OutlinedTextField(value = cookTimeText, onValueChange = { cookTimeText = it.filter { ch -> ch.isDigit() }.take(4) }, label = { Text("Cook min") }, modifier = Modifier.weight(1f), singleLine = true)
                             }
                             Text("Leave blank if unknown. Total time is shown automatically when both are set.", style = MaterialTheme.typography.bodySmall)
+                            OutlinedTextField(
+                                value = tagsText,
+                                onValueChange = { tagsText = it },
+                                label = { Text("Tags") },
+                                placeholder = { Text("#bbq, camping, weeknight") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
                         }
                     }
+                }
+            }
+            if (recipe.tags.isNotEmpty() && !mediaEditMode) {
+                item {
+                    Text(recipe.tags.joinToString("   ") { "#$it" }, style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -2370,10 +2674,11 @@ private fun RecipeDetailScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onShare, modifier = Modifier.weight(1f)) { Text("Share") }
                     OutlinedButton(onClick = onLike, modifier = Modifier.weight(1f)) {
-                        Text(if (isLiked) "♥ ${recipe.likes}" else "♡ ${recipe.likes}")
+                        Text(if (isLiked) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}")
                     }
                 }
             }
+            if (recipe.isPublic && recipe.createdAt > 0) item { Text("Published ${relativeTime(recipe.createdAt)}", style = MaterialTheme.typography.bodySmall) }
             if (recipe.authorId.isNotBlank()) {
                 item {
                     OutlinedButton(onClick = onBookmark, modifier = Modifier.fillMaxWidth()) {
@@ -2486,6 +2791,13 @@ private fun RecipeDetailScreen(
 private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (String) -> Unit) {
     var stepIndex by remember(recipe.id) { mutableIntStateOf(0) }
     val step = recipe.steps.getOrNull(stepIndex)
+    val speakerContext = LocalContext.current
+    val speaker = remember { RecipeSpeaker(speakerContext) }
+    var readAloud by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) { onDispose { speaker.shutdown() } }
+    LaunchedEffect(stepIndex, readAloud) {
+        if (readAloud) speaker.speak(step.orEmpty()) else speaker.stop()
+    }
 
     Scaffold(topBar = {
         TopAppBar(
@@ -2522,6 +2834,10 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
                         modifier = Modifier.weight(1f)
                     ) { Text("Next") }
                 }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = { readAloud = !readAloud }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (readAloud) "🔊 Reading aloud — tap to stop" else "🔊 Read steps aloud")
+                }
                 if (recipe.voiceClips.isNotEmpty()) {
                     Spacer(Modifier.height(18.dp))
                     OutlinedButton(
@@ -2545,10 +2861,12 @@ private fun PublicChefProfileScreen(
     isSignedIn: Boolean,
     loading: Boolean,
     activeLive: LiveSession?,
+    isBlocked: Boolean,
     onBack: () -> Unit,
     onFollow: () -> Unit,
     onMessage: () -> Unit,
     onReport: () -> Unit,
+    onToggleBlock: () -> Unit,
     onWatchLive: (LiveSession) -> Unit,
     onOpenRecipe: (Recipe) -> Unit
 ) {
@@ -2571,10 +2889,19 @@ private fun PublicChefProfileScreen(
                         Column { Text("${recipes.size}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Text("Recipes", style = MaterialTheme.typography.bodySmall) }
                     }
                     if (!profile?.favoriteThings.isNullOrEmpty()) { Spacer(Modifier.height(10.dp)); Text(profile!!.favoriteThings.joinToString("  ·  "), Modifier.padding(horizontal = 14.dp), style = MaterialTheme.typography.bodySmall) }
-                    Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (!isSelf) Button(enabled = isSignedIn, onClick = onFollow, modifier = Modifier.weight(1f)) { Text(if (isFollowing) "✓ Following" else "+ Follow") }
                         if (!isSelf && isSignedIn) OutlinedButton(onClick = onMessage, modifier = Modifier.weight(1f)) { Text("✉ Message") }
-                        if (!isSelf && isSignedIn) TextButton(onClick = onReport) { Text("Report chef", color = MaterialTheme.colorScheme.error) }
+                        if (!isSelf && isSignedIn) {
+                            var menuOpen by remember { mutableStateOf(false) }
+                            Box {
+                                TextButton(onClick = { menuOpen = true }) { Text("⋯", fontWeight = FontWeight.Bold) }
+                                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                    DropdownMenuItem(text = { Text("⚑ Report chef", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onReport() })
+                                    DropdownMenuItem(text = { Text(if (isBlocked) "Unblock chef" else "🚫 Block chef", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onToggleBlock() })
+                                }
+                            }
+                        }
                     }
                     if (activeLive != null) Button(onClick = { onWatchLive(activeLive) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(bottom = 14.dp)) { Text("🔴 Watch Live") }
                 }
@@ -2622,6 +2949,16 @@ private fun ProfileScreen(
     bookmarks: List<Recipe>,
     accountBusy: Boolean,
     cloudMessage: String,
+    needsReauthForDelete: Boolean,
+    isPro: Boolean,
+    proEntitlement: ProEntitlement,
+    proPreviewAvailable: Boolean,
+    proPreviewOverride: Boolean,
+    onProPreviewChange: (Boolean) -> Unit,
+    onSeePro: () -> Unit,
+    secondPassUsed: Int,
+    secondPassLimit: Int,
+    cloudRecipeCount: Int,
     unreadMessageCount: Int,
     unreadNotificationCount: Int,
     blackoutMode: Boolean,
@@ -2636,6 +2973,8 @@ private fun ProfileScreen(
     onResetPassword: (String) -> Unit,
     onVerifyEmail: () -> Unit,
     onDeleteAccount: () -> Unit,
+    onConfirmDeletePassword: (String) -> Unit,
+    onCancelDeleteReauth: () -> Unit,
     onModerateReport: (String, String, String, String) -> Unit,
     onSignOut: () -> Unit,
     onOpenRecipe: (Recipe) -> Unit
@@ -2645,7 +2984,10 @@ private fun ProfileScreen(
     var favoritesText by remember(favoriteThings) { mutableStateOf(favoriteThings.joinToString(", ")) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var creatingAccount by remember { mutableStateOf(false) }
+    var newChefName by remember { mutableStateOf("") }
     var deleteArmed by remember { mutableStateOf(false) }
+    var deletePassword by remember { mutableStateOf("") }
     var moderationNote by remember { mutableStateOf("") }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) onUploadProfilePhoto("avatar", uri)
@@ -2715,39 +3057,112 @@ private fun ProfileScreen(
                 }
             }
         } else if (!isSignedIn) {
+            // Signing in and creating an account are separate modes. They used to share
+            // one form, which showed returning users a "Chef name for new account" field
+            // bound to the same state as the profile editor below - so typing a name
+            // while signing in silently rewrote the saved display name.
+            item {
+                Text(
+                    if (creatingAccount) "Create your ChefVoice account" else "Sign in to ChefVoice",
+                    fontWeight = FontWeight.Bold
+                )
+            }
             item { OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
             item { OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text("Password") }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation()) }
-            item { OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Chef name for new account") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(enabled = !accountBusy && email.isNotBlank() && password.length >= 6, onClick = { onSignIn(email, password) }, modifier = Modifier.weight(1f)) { Text("Sign in") }
-                    OutlinedButton(enabled = !accountBusy && email.isNotBlank() && password.length >= 6, onClick = { onSignUp(email, password, name) }, modifier = Modifier.weight(1f)) { Text("Create account") }
+            if (creatingAccount) {
+                item {
+                    OutlinedTextField(
+                        value = newChefName,
+                        onValueChange = { newChefName = it.take(80) },
+                        label = { Text("Chef name") },
+                        supportingText = { Text("How other cooks will see you in Community. You can change it later.") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
                 }
             }
-            item { OutlinedButton(enabled = !accountBusy && email.isNotBlank(), onClick = { onResetPassword(email) }, modifier = Modifier.fillMaxWidth()) { Text("Forgot password?") } }
+            item {
+                if (creatingAccount) {
+                    Button(
+                        enabled = !accountBusy && email.isNotBlank() && password.length >= 6 && newChefName.isNotBlank(),
+                        onClick = { onSignUp(email, password, newChefName) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Create account") }
+                } else {
+                    Button(
+                        enabled = !accountBusy && email.isNotBlank() && password.length >= 6,
+                        onClick = { onSignIn(email, password) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Sign in") }
+                }
+            }
+            item {
+                OutlinedButton(
+                    enabled = !accountBusy,
+                    onClick = { creatingAccount = !creatingAccount },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (creatingAccount) "Already have an account? Sign in" else "New to ChefVoice? Create an account") }
+            }
+            if (!creatingAccount) {
+                item { OutlinedButton(enabled = !accountBusy && email.isNotBlank(), onClick = { onResetPassword(email) }, modifier = Modifier.fillMaxWidth()) { Text("Forgot password?") } }
+            }
         }
 
-        item { OutlinedTextField(value = name, onValueChange = { name = it.take(80) }, label = { Text("Chef / display name") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
-        item { OutlinedTextField(value = bioText, onValueChange = { bioText = it.take(500) }, label = { Text("Chef bio") }, supportingText = { Text("Tell people what you love about cooking.") }, modifier = Modifier.fillMaxWidth(), minLines = 3) }
-        item {
-            OutlinedTextField(
-                value = favoritesText,
-                onValueChange = { favoritesText = it.take(240) },
-                label = { Text("Favorite things to cook") },
-                supportingText = { Text("Comma separated · e.g. BBQ, pasta, seafood, baking") },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 2
-            )
-        }
-        item {
-            Button(
-                enabled = !accountBusy,
-                onClick = { onSaveProfile(name, bioText, favoritesText.split(',').map { it.trim() }.filter { it.isNotBlank() }) },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Save Chef Profile") }
+        if (isSignedIn) {
+            item {
+                ProMembershipCard(
+                    isPro = isPro,
+                    entitlement = proEntitlement,
+                    secondPassUsed = secondPassUsed,
+                    secondPassLimit = secondPassLimit,
+                    cloudRecipeCount = cloudRecipeCount,
+                    onSeePro = onSeePro
+                )
+            }
+            if (proPreviewAvailable) {
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Preview ChefVoice Pro", fontWeight = FontWeight.Bold)
+                                Text(
+                                    "Debug builds only. Renders the Pro experience without a purchase. " +
+                                        "Nothing is written to your account and this switch does not exist in a release build.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            Switch(checked = proPreviewOverride, onCheckedChange = onProPreviewChange)
+                        }
+                    }
+                }
+            }
         }
 
-        if (favoriteThings.isNotEmpty()) item { FavoriteThingsCard(favoriteThings) }
+        // Profile editing needs an account to save to. These fields used to render
+        // while signed out, above a Save button that could not do anything.
+        if (isSignedIn) {
+            item { OutlinedTextField(value = name, onValueChange = { name = it.take(80) }, label = { Text("Chef / display name") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
+            item { OutlinedTextField(value = bioText, onValueChange = { bioText = it.take(500) }, label = { Text("Chef bio") }, supportingText = { Text("Tell people what you love about cooking.") }, modifier = Modifier.fillMaxWidth(), minLines = 3) }
+            item {
+                OutlinedTextField(
+                    value = favoritesText,
+                    onValueChange = { favoritesText = it.take(240) },
+                    label = { Text("Favorite things to cook") },
+                    supportingText = { Text("Comma separated · e.g. BBQ, pasta, seafood, baking") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+            }
+            item {
+                Button(
+                    enabled = !accountBusy,
+                    onClick = { onSaveProfile(name, bioText, favoritesText.split(',').map { it.trim() }.filter { it.isNotBlank() }) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Save Chef Profile") }
+            }
+
+            if (favoriteThings.isNotEmpty()) item { FavoriteThingsCard(favoriteThings) }
+        }
 
         if (isSignedIn) {
             item {
@@ -2760,7 +3175,28 @@ private fun ProfileScreen(
                             OutlinedButton(enabled = !accountBusy, onClick = { onResetPassword(signedInEmail) }, modifier = Modifier.weight(1f)) { Text("Reset password") }
                         }
                         Text("Deleting your cloud account removes owned Community data but intentionally keeps local Cook & Capture recipes on this phone.", style = MaterialTheme.typography.bodySmall)
-                        if (!deleteArmed) {
+                        if (needsReauthForDelete) {
+                            Text("For security, enter your password to confirm this is you before we permanently delete your account.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            OutlinedTextField(
+                                value = deletePassword,
+                                onValueChange = { deletePassword = it },
+                                label = { Text("Password") },
+                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    enabled = !accountBusy && deletePassword.isNotBlank(),
+                                    onClick = { onConfirmDeletePassword(deletePassword); deletePassword = "" },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("Confirm delete") }
+                                OutlinedButton(
+                                    enabled = !accountBusy,
+                                    onClick = { deletePassword = ""; deleteArmed = false; onCancelDeleteReauth() },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text("Cancel") }
+                            }
+                        } else if (!deleteArmed) {
                             OutlinedButton(enabled = !accountBusy, onClick = { deleteArmed = true }, modifier = Modifier.fillMaxWidth()) { Text("Delete ChefVoice cloud account") }
                         } else {
                             Text("Confirm permanent cloud deletion. Recent sign-in is required.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -2945,4 +3381,223 @@ private fun EmptyState(title: String, body: String) {
             Text(body)
         }
     }
+}
+
+/**
+ * Placeholder pricing for the pre-billing demo only.
+ *
+ * Real prices must come from Play `ProductDetails.formattedPrice` once Billing is
+ * wired: Play localises price and currency per storefront, and a hard-coded string
+ * shows the wrong currency to most of the world. This object exists so there is
+ * exactly one place to delete when that lands.
+ */
+private object DemoPricing {
+    const val ANNUAL_NOTE = "Save about 52% versus monthly"
+}
+
+/**
+ * Remaining complimentary access in whatever unit reads naturally. "641 days left" is
+ * true and useless; a chef two years into free Pro wants to hear months. Only used for
+ * the founding window — the 90-day promo stays in days, where the precision is the
+ * point and "2 months left" would blur a deadline that is close enough to matter.
+ */
+private fun remainingLabel(days: Int): String =
+    if (days >= 60) {
+        val months = days / 30
+        "$months month${if (months == 1) "" else "s"}"
+    } else {
+        "$days day${if (days == 1) "" else "s"}"
+    }
+
+@Composable
+private fun ProMembershipCard(
+    isPro: Boolean,
+    entitlement: ProEntitlement,
+    secondPassUsed: Int,
+    secondPassLimit: Int,
+    cloudRecipeCount: Int,
+    onSeePro: () -> Unit
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when {
+                        isPro && entitlement.isFounding -> "ChefVoice Pro · Founding member"
+                        isPro && entitlement.isPromo -> "ChefVoice Pro · Free launch access"
+                        isPro -> "ChefVoice Pro"
+                        else -> "ChefVoice Free"
+                    },
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isPro) Text("✓ Active", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+            }
+
+            when {
+                // Complimentary access is stated plainly, before any payment-state
+                // messaging below. These chefs never entered a payment method, so
+                // warning them about one, or offering to manage a subscription they
+                // do not have, would be nonsense.
+                isPro && entitlement.isFounding -> {
+                    val days = entitlement.daysRemaining()
+                    Text(
+                        when {
+                            days <= 0 ->
+                                "Your founding Pro access has ended. Everything you cooked stays yours."
+                            // Defensive: a founding grant always carries an expiry now.
+                            days == Int.MAX_VALUE ->
+                                "You were one of the first ${FoundingAccess.SEATS} chefs on " +
+                                    "ChefVoice. Pro is yours — no card, no renewal, nothing to cancel."
+                            else ->
+                                "You were one of the first ${FoundingAccess.SEATS} chefs on " +
+                                    "ChefVoice. Pro is free for ${FoundingAccess.FOUNDING_YEARS} " +
+                                    "years — ${remainingLabel(days)} left. No card, no renewal, " +
+                                    "nothing to cancel."
+                        },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                isPro && entitlement.isPromo -> {
+                    val days = entitlement.daysRemaining()
+                    Text(
+                        if (days > 0)
+                            "The first ${FoundingAccess.PROMO_DAYS} days of Pro are free — " +
+                                "$days ${if (days == 1) "day" else "days"} left. " +
+                                "No card, and nothing happens automatically when it ends."
+                        else "Your free Pro access has ended. Everything you cooked stays yours.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                // Grace period and account hold are the states worth surfacing plainly.
+                // A large share of subscription churn is a failed card, not a decision,
+                // and a chef who does not know their payment failed cannot fix it.
+                entitlement.status == ProEntitlement.STATUS_IN_GRACE -> Text(
+                    "Your last payment did not go through. Google Play is retrying — update your payment method to keep Pro.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                entitlement.status == ProEntitlement.STATUS_ON_HOLD -> Text(
+                    "Your subscription is on hold because payment failed. Pro features are paused until it is fixed in Google Play.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                entitlement.status == ProEntitlement.STATUS_PAUSED -> Text(
+                    "Your subscription is paused. Resume it in Google Play to get Pro back.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                isPro && entitlement.isLifetime -> Text(
+                    "You bought ChefVoice Pro for life — nothing to renew, ever.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                isPro -> Text(
+                    "Unlimited cloud recipes, video, and ${ProTierLimits.SECOND_PASS_PER_MONTH} Second Pass reviews a month.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                else -> Text(
+                    "${FreeTierLimits.CLOUD_RECIPES} cloud recipes, 1 photo per recipe, and " +
+                        "${FreeTierLimits.SECOND_PASS_PER_MONTH} Second Pass reviews a month. " +
+                        "Cooking and local recipes are always free.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            HorizontalDivider()
+            Text(
+                "Second Pass this month: $secondPassUsed of $secondPassLimit",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                if (isPro) "Cloud-synced recipes: $cloudRecipeCount"
+                else "Cloud-synced recipes: $cloudRecipeCount of ${FreeTierLimits.CLOUD_RECIPES}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                if (isPro) "Video slots unlocked" else "Video slots need Pro · 1 photo per recipe on Free",
+                style = MaterialTheme.typography.bodySmall
+            )
+
+            if (!isPro) {
+                Button(onClick = onSeePro, modifier = Modifier.fillMaxWidth()) { Text("See ChefVoice Pro") }
+            }
+        }
+    }
+}
+
+/**
+ * The paywall. Worded as capability rather than restriction, and never shown before
+ * a chef has finished a recipe — the value has to land before the ask.
+ */
+@Composable
+private fun ProPaywallDialog(
+    trigger: String,
+    monthlyPrice: String,
+    annualPrice: String,
+    lifetimePrice: String,
+    onDismiss: () -> Unit,
+    onStartCheckout: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("ChefVoice Pro") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    when (trigger) {
+                        PaywallTrigger.SECOND_PASS ->
+                            "Second Pass checks every recipe against your original audio and shows you what it caught. " +
+                                "Two free each month — ${ProTierLimits.SECOND_PASS_PER_MONTH} a month with ChefVoice Pro."
+                        PaywallTrigger.CLOUD_LIMIT ->
+                            "You've filled your ${FreeTierLimits.CLOUD_RECIPES} free cloud recipes. " +
+                                "ChefVoice Pro syncs your whole cookbook so it survives a lost phone."
+                        PaywallTrigger.VIDEO ->
+                            "Video slots let you show the technique, not just the result. ChefVoice Pro unlocks them."
+                        else ->
+                            "More room to cook, sync and review — without touching what's already free."
+                    }
+                )
+                Text("Pro includes", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "• Unlimited cloud-synced recipes\n" +
+                        "• Video slots on your recipes\n" +
+                        "• ${ProTierLimits.SECOND_PASS_PER_MONTH} Second Pass reviews a month\n" +
+                        "• Private recipes, collections, export and print",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "Cooking, the deterministic parser and every recipe saved on this phone stay free and keep working.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        },
+        confirmButton = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    onClick = { onStartCheckout(ProEntitlement.PRODUCT_ANNUAL) },
+                    enabled = annualPrice.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(annualPrice.ifBlank { "Annual — loading price…" } + "/year") }
+                Text(DemoPricing.ANNUAL_NOTE, style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(
+                    onClick = { onStartCheckout(ProEntitlement.PRODUCT_MONTHLY) },
+                    enabled = monthlyPrice.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(monthlyPrice.ifBlank { "Monthly — loading price…" } + "/month") }
+                OutlinedButton(
+                    onClick = { onStartCheckout(ProEntitlement.PRODUCT_LIFETIME) },
+                    enabled = lifetimePrice.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text((lifetimePrice.ifBlank { "Lifetime — loading price…" }) + " once, forever") }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } }
+    )
+}
+
+/** Where a paywall was raised from. Recorded with the `paywall_shown` analytics event. */
+object PaywallTrigger {
+    const val SECOND_PASS = "second_pass"
+    const val CLOUD_LIMIT = "cloud_limit"
+    const val VIDEO = "video"
+    const val PROFILE = "profile"
 }

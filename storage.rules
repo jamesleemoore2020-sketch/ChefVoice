@@ -111,15 +111,24 @@ service firebase.storage {
     }
 
     // Current public recipe media. New writes use 24 deterministic slots.
+    //
+    // create/update deliberately do NOT also call socialUploadAllowed(uid) here:
+    // Storage Rules cap cross-service firestore.get()/exists() at two distinct
+    // documents per evaluation, and recipeOwnedBy() (reads recipes/{recipeId}) plus
+    // uploadPermit() (reads storageUploadPermits/{permitId}) already spend that
+    // budget. A third document (userRestrictions/{uid}) made every create/update
+    // evaluate to false unconditionally. authorizeChefVoiceStorageUpload already
+    // calls publicSocialUploadRestricted(uid) before it will ever issue a permit for
+    // kind "public_media", so a restricted account can't obtain one to begin with --
+    // this mirrors the profiles/{uid}/avatar rule below, which never re-checks
+    // socialUploadAllowed for the same reason.
     match /recipes/{uid}/{recipeId}/publicMedia/{fileName} {
       allow read: if recipeIsPublic(recipeId) || owner(uid);
       allow create: if recipeOwnedBy(uid, recipeId)
-        && socialUploadAllowed(uid)
         && validMediaSlot(fileName)
         && validPublicMedia()
         && uploadPermit(uid, 'public-' + recipeId + '-' + fileName, 'public_media', recipeId, fileName);
       allow update: if recipeOwnedBy(uid, recipeId)
-        && socialUploadAllowed(uid)
         && validMediaSlot(fileName)
         && validPublicMedia()
         && uploadPermit(uid, 'public-' + recipeId + '-' + fileName, 'public_media', recipeId, fileName)

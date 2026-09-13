@@ -1,3 +1,414 @@
+# ChefVoice — Play Billing integration (0.11.1)
+
+- Real Google Play purchases, client and backend. Android:
+  `PlayBillingManager.kt` wraps Billing Library 9.1.0 (added to
+  `app/build.gradle.kts` — not actually present despite being described as
+  already there), wired into `ChefAppState`/`ProPaywallDialog` following
+  the existing callback-based repository pattern. Backend:
+  `verifyChefVoicePurchase` (callable) and `processChefVoiceRtdn`
+  (Pub/Sub-triggered) added to `billing/functions/index.js`, the same file
+  the founding-seat/promo launch access already lives in.
+- One deliberate deviation from spec, documented in full in the writeup
+  below: `verifyChefVoicePurchase` runs *as*
+  `chefvoice-billing-verifier@...` (as asked), but `processChefVoiceRtdn`
+  impersonates that service account per-call instead of running as it,
+  because giving a 2nd-gen Pub/Sub/EventArc trigger a custom runtime
+  service account hits a currently-open firebase-tools bug.
+- Both new functions log their own runtime identity on every invocation
+  specifically so that IAM setup can be verified against Cloud Logging,
+  rather than trusted on paper.
+- `gradlew.bat :app:testDebugUnitTest` — BUILD SUCCESSFUL, same 3
+  pre-existing warnings, confirms the Billing Library 9.1.0 API surface
+  used here is real. `node --check` + the full `billing/` and
+  `notifications/` gates (91 tests) pass with no regressions. Installed on
+  a physical device (launches); the live paywall screen itself has not
+  yet been walked through by hand.
+- **Deployed via `DEPLOY_BILLING.cmd`.** Along the way, found and deleted a
+  stale `onChefVoicePlayNotification` function left live in the project by
+  a separate, never-merged attempt at this same feature
+  (`claude/android-publisher-adc-auth-fe9407`) — one RTDN code path now,
+  not two. The one-time IAM grant (`Service Account Token Creator` for
+  `processChefVoiceRtdn`'s default identity on `chefvoice-billing-verifier`)
+  is also done. **Still unverified against a real purchase or RTDN event**
+  — no product exists in Play Console yet, so nothing has actually
+  exercised either function for real. See "Not done" in the writeup.
+- `firestore.rules`, `storage.rules`, `chefvoice-notifications`, the PWA,
+  and the existing launch-access logic are all untouched. Version
+  0.10.8/60 → 0.11.1/61 (jumping to the 0.11.x line already used for the
+  rest of the monetization work, not continuing 0.10.x's parser/UI-fix
+  sequence).
+
+See `PLAY_BILLING_INTEGRATION_0.11.1.md`.
+
+---
+
+# ChefVoice — Create Recipe flow simplification (0.10.8)
+
+- `CreateRecipeScreen` was one long scrolling flow covering capture,
+  details, ingredients, method, chef voice and media all at once —
+  flagged in `UI_BRANDING_AUDIT.md` and again in
+  `MONETIZATION_REVIEW_2026-09.md`'s sequencing as the thing standing
+  between a new user and their first successful recipe.
+- Split into five steps matching the audit's proposal exactly: Capture →
+  Recipe Details → Ingredients/Method → Media → Review, with a step
+  progress header and Back/Next navigation. No capture, parsing,
+  validation or save logic changed — same fields, same buttons, same
+  save-enabled condition, just spread across steps instead of one scroll.
+- Added a Review step that didn't exist before: a summary of the recipe
+  (name, description, times, tags, every ingredient and method step,
+  media/voice counts) shown right before Save.
+- `gradlew.bat :app:testDebugUnitTest` — BUILD SUCCESSFUL, same 3
+  pre-existing unrelated warnings. Built, installed and walked through
+  end to end on a real device (all five steps, Back navigation, Review,
+  Save) — confirmed working.
+- The deterministic voice pipeline (`CookingSessionCapture.kt`,
+  `CookingSessionParser.kt`, `IngredientParser.kt`), Firestore/Storage
+  rules, Cloud Functions, and the PWA are all untouched — this is an
+  Android-only presentation change. Version 0.10.7/59 → 0.10.8/60.
+
+See `CREATE_RECIPE_FLOW_SIMPLIFICATION_0.10.8.md`.
+
+---
+
+# ChefVoice — Firestore rules deploy gate hardening (0.10.7 line)
+
+- `DEPLOY_COMMUNITY_PROFILE_RULES.cmd` now runs `RUN_RULES_GATES.cmd` (the
+  Firestore emulator suite — the only gate that actually evaluates a rule,
+  not just its source text) before deploying, and refuses to deploy on
+  failure. Closes a real gap: the prior `firestore.rules` deploy (adding
+  `tags`) shipped without that gate having been run.
+- Verified both the refusal path (deliberately broke a test, confirmed the
+  script refuses and never reaches `firebase deploy`, then reverted the
+  test cleanly) and the pass path (33/33 rules-tests green) without ever
+  triggering a live deploy — `firestore.rules` itself is unchanged, so
+  there was nothing to ship.
+- Also folded in two other items from the same backlog: a
+  `DEPLOY_STORAGE_RULES.cmd` wrapper (Storage was the one deploy surface
+  without a scoped script) and `BuildAndInstall.ps1` no longer forcing
+  `--no-daemon clean` on every debug build — that was turning ~10-second
+  incremental installs into 2-11 minute full rebuilds for no benefit on
+  this fast dev-loop script.
+- Android/PWA app code, Cloud Functions, and Storage/Firestore rules
+  content are all untouched. `app/build.gradle.kts` stays at 0.10.7 / 59.
+
+See `RULES_DEPLOY_GATE_HARDENING_0.10.7.md`.
+
+---
+
+# ChefVoice PWA — Private cooking-session upload hotfix (0.10.7 line)
+
+- Fixes the item this handoff's prior entry deliberately left broken: the
+  PWA's `publishRecipe()` was uploading the chef's full-session recording
+  to a closed legacy Storage path with no upload permit, so it silently
+  failed on every publish. Now uploads to `privateVoice/{uid}/{recipeId}/session`
+  with a `private_session` permit, never a public URL, and never listed
+  in the recipe's public `voiceClips` — matching Android's `uploadVoice()`
+  exactly, so a recipe published from the PWA can be re-reviewed with
+  ChefVoice Review from any device.
+- PWA-only: `storage.rules`, `firestore.rules`, Cloud Functions and Android
+  app code are all untouched. `app/build.gradle.kts` stays at 0.10.7 / 59.
+- `npm test` 86/86, unchanged. Not verified end-to-end against the live
+  Firebase project (would need a signed-in, verified-email account
+  publishing a real recipe with recorded audio); not yet deployed.
+- While running the full `notifications/` gate to check for regressions,
+  found 5 pre-existing failures unrelated to this fix — stale hardcoded
+  `versionCode`/`versionName` and a search-placeholder string assertion
+  left behind by the *previous* entry's own version bump and collapsible-search
+  change. Flagged separately rather than fixed here.
+
+See `PWA_PRIVATE_SESSION_UPLOAD_HOTFIX_0.10.7.md`.
+
+---
+
+# ChefVoice — Recipe #tags, collapsible search, read-aloud, Storage rules fix (0.10.7)
+
+- All four next-release asks from the 2026-09-10 handoff, done: collapsible
+  Community search (both platforms), freeform alias-aware `#tags` replacing
+  the fixed-enum idea (both platforms + `firestore.rules`), TTS read-aloud
+  (Android `CookingScreen` step-by-step; PWA reads the whole method in one
+  pass), and three complete seed recipes published to Community with photos.
+- **Found and fixed a real production bug while seeding**: PWA recipe photo
+  uploads were completely broken for every user — `storage.rules`' `publicMedia`
+  create/update chained three cross-service Firestore reads, one over
+  Firebase's hard limit of two per rule evaluation. Fixed by dropping the
+  redundant restriction recheck (already enforced before permit issuance);
+  confirmed against Firebase's own docs before deploying. Deployed via
+  `firebase deploy --only storage` — no wrapper script existed for Storage
+  rules before now.
+- Also fixed live: the PWA's Cook screen had no way to remove an
+  accidentally-added photo before saving (Android already had this). Small
+  `×` overlay added to each media thumbnail.
+- Deliberately **not** fixed: the PWA's voice-clip upload path uses the same
+  closed legacy Storage path, but also sends the chef's private full-session
+  recording toward a *public* path (unlike Android, which keeps it private
+  with no public URL). Fixing the permit call without first correcting which
+  path it targets risked actually publishing previously-private audio, so
+  it's left broken (same as before) pending a dedicated fix.
+- `npm test` 86/86 (81 + 5 new tag-utils cases). Android `:app:testDebugUnitTest`
+  BUILD SUCCESSFUL, including new `TagUtilsTest.kt`; same 3 pre-existing
+  unrelated warnings as the last handoff. Verified end-to-end against live
+  production, signed in: tag alias search, search collapse, read-aloud, the
+  new remove button, and all three seed recipes' photos rendering in Community.
+
+See `RECIPE_TAGS_SEARCH_READ_ALOUD_0.10.7.md`.
+
+---
+
+# ChefVoice PWA — Feature Parity with Android (0.11.0)
+
+- Completes the PWA catch-up: direct messages, in-app activity notifications,
+  threaded comment replies, chef search and public chef profiles, Second Pass
+  (ChefVoice Review) and web push registration. `npm test` 69/69, up from 26.
+- Second Pass ports `SecondPassReviewer.kt` + `IngredientReviewClassifier.kt`, with
+  **all 19 tests from `SecondPassReviewerTest.kt` ported verbatim and passing** —
+  the cross-platform contract for Second Pass, the same role the golden corpus plays
+  for the parser. The private upload is permit-gated exactly as on Android.
+- Messaging follows the rules exactly: sorted `uid--uid` ids, live profile names,
+  empty preview metadata on create, monotonic read markers marked against the newest
+  message actually seen.
+- Web push needed no backend change — the backend already targets Firebase
+  Installation IDs (current Admin SDK API; `tokens` is deprecated) and the rules
+  already accepted `platform: 'web'`. The VAPID key is the one piece of config that
+  must be created by hand in the Firebase Console; until it is, push stays disabled
+  and the in-app Activity feed covers it.
+- **Two pre-existing bugs fixed:** `toggleLike` and `addComment` were writing the
+  backend-maintained `likes`/`commentCount` counters, which `validOwnerRecipeUpdate`
+  rejects — liking and commenting were broken outright against the deployed rules.
+  And rule-bound writes were sending `chefName()`'s email-prefix fallback, which
+  `profileNameMatches` rejects.
+- Deliberately not done: the video/photo caps (no Android call site — enforcing on
+  web alone would give Free chefs a worse deal in Safari), and Live/WebRTC (still
+  gated on both platforms pending real-device testing).
+- Not verified end to end: signed-in message/block/report round trips, the Second
+  Pass cloud call (needs a verified-email account), and push delivery (needs the
+  VAPID key). Rule-shape source gates stand in for the write paths.
+- Android untouched and still passing. Nothing deployed. Version 0.10.6 / code 58.
+
+See `PWA_FEATURE_PARITY_0.11.0.md`.
+
+---
+
+# ChefVoice PWA — Entitlements, Analytics, Blocking & Moderation (0.11.0)
+
+- Brings the Android feature work that sits *around* the parser across to `web/`,
+  following the parser-parity restore below.
+- `entitlement.js` mirrors `ProEntitlement`/tier limits/`FoundingAccess`: active and
+  in_grace unlock Pro, on_hold/paused/unknown do not, founding and promo read as
+  complimentary so the membership card never treats those chefs as subscribers, and
+  every check fails closed to Free. Read-only by rule; the client grants nothing.
+- Found and fixed by its own test: Kotlin's `getString` returns null for a
+  non-string field so a malformed status falls through to `expired`, but JS
+  coercion turns `['active']` into `'active'` and would have unlocked Pro. The
+  normalizer now reads strictly by type.
+- `chef-analytics.js` mirrors `ChefAnalytics.kt`'s vocabulary and its three rules
+  (never throws, no-op without Analytics, no personal or recipe content).
+  `showPaywall`/`dismissPaywall` are the only entrance/exit, as on Android.
+- Deliberately NOT enforced: the video and per-recipe photo caps. Both exist in the
+  tier model on both platforms but Android has no call site for either. An earlier
+  draft gated them on web and it was reverted before shipping — enforcing on web
+  alone would give a Free chef a worse deal in Safari than on their phone.
+- Blocking and moderation reporting ported with payloads byte-compatible with
+  `firestore.rules` (exact key sets, 500-char reason cap, fixed `open` status).
+  Blocked chefs' recipes and comments are hidden from the Community feed and can be
+  unblocked from Profile.
+- Known gap filed as follow-up: Android consults `isUserBlocked` only in the
+  messaging UI, so its Community feed is still unfiltered.
+- `npm test` 39/39 (up from 26), including source-text gates asserting the block and
+  report payloads still match the rules. Android `:app:testDebugUnitTest` untouched
+  and still passing.
+- Verified in a browser against live Firebase: loads clean, feed renders, membership
+  card/paywall render and dismiss, cloud-recipe gate blocks at 10 for Free not Pro.
+  **Not verified:** the signed-in block/unblock/report round trip — needs real
+  credentials.
+- Still missing versus Android: messaging, push notifications, threaded replies,
+  chef search, Second Pass, Live. Nothing deployed. Version unchanged 0.10.6 / 58.
+
+See `PWA_SOCIAL_BILLING_ANALYTICS_0.11.0.md`.
+
+---
+
+# ChefVoice PWA — Parser Parity Restored (0.11.0)
+
+- `web/` was missing from this checkout entirely, not just out of date. Recovered
+  the real source (v0.7.0 alpha.3, `chefvoice-pwa@0.3.0`) from a user-supplied
+  backup and brought it back into the repo.
+- Its JS parser predated roughly fifteen real-device point-release fixes and
+  passed 36/56 rows of the current `shared/golden-cooking-corpus.tsv`.
+- Rewrote `web/js/cooking-session-parser.js` and `web/js/ingredient-parser.js`
+  to port every remaining piece of `CookingSessionParser.kt`/`IngredientParser.kt`
+  (determiner-gated `need`, yield-sentence suppression, back-reference rejection,
+  trailing-quantity ingredients, segment-aware step collection, scratch/wait/
+  quantity corrections, `RecipeCanonicalizer` post-processing, the `chunk` unit
+  alias, `cupful`/`tbsp spoon` ASR repairs), staying line-close to the Kotlin
+  source so a future fix is easy to port either direction.
+- Added `web/tests/golden-corpus.test.mjs` (runs the identical 56-row corpus,
+  same row-count guard as Android) and `web/tests/real-device-fixtures.test.mjs`
+  (ports the 5 Kotlin fixture tests that assert exact step order and step
+  "must NOT contain X" negatives, which the corpus can't express).
+- Result: 56/56 corpus rows, 26/26 `npm test`, all 20 pre-existing PWA tests
+  unmodified and passing. `RUN_PARSER_GATES.cmd` now runs to completion.
+- Explicitly out of scope: the rest of the PWA UI (community/profile/live,
+  `app.js`, `firebase-client.js`) is still the v0.3.0 alpha and does not reflect
+  Android's newer social/analytics/monetization features. Parser parity only.
+- Protected: Android parser, rules, Live/WebRTC, App Check (still OFF), both
+  Functions codebases, `transcribeChefVoice` all unchanged. Nothing deployed.
+  Version unchanged: 0.10.6 / `versionCode 58`.
+
+See `PWA_PARSER_PARITY_0.11.0.md`.
+
+---
+
+# ChefVoice Android 0.11.0 work — Parser: Ingredient Declarations, Yield Sentences, Back-references
+
+- Deterministic parser fix driven by a real Android nachos capture (0909). Corpus-first
+  per `shared/README.md`: three rows added and confirmed failing before any fix.
+- **Second Pass was not the defect.** It ran end to end, got a clean Chirp 3 transcript,
+  and flagged 6 ingredient + 3 method issues correctly. Re-parsing the *clean* transcript
+  still produced garbage - both passes share the parser, so a systematic parser defect
+  appears in both and is marked "confirmed" instead of flagged. `SecondPassReviewer.kt`
+  is untouched.
+- Fix 1: "you're going to need some X" is now an ingredient declaration. `need` had been
+  deliberately excluded to protect narration like "what you need to do"; it is now
+  admitted only when a determiner follows (`need some|a|an`), so that narration still
+  fails. Recovered sour cream, hot sauce and jalapenos, all previously lost.
+- Fix 2: yield sentences ("one pack should feed at least two people, maybe three") no
+  longer yield ingredients. Bare "serve" deliberately excluded - it is a method verb.
+- Fix 3: unmeasured names opening with a back-reference (it/them/this/that/these/those)
+  are rejected. Killed the ingredient "It on top of your nachos".
+- Regression found and fixed in the same change: making "need some X" yield ingredients
+  caused `collectSegmentAwareSteps` to swallow those declarations into the preceding
+  method step (the ingredient-continuation branch armed by "sprinkle"). A declaration is
+  not a continuation; the branch now skips them. Caught by diffing the full transcript
+  against the pre-change parser, not by the corpus - the corpus asserts required step
+  substrings and cannot express "this step must NOT contain X", so the guard is a
+  dedicated fixture test.
+- Real transcript: 8 ingredients / 2 correct -> 6 ingredients / 6 correct, with method
+  steps byte-identical to before.
+- No existing corpus row weakened or edited; additions only. Corpus guard 52 -> 55.
+- Rules, Live/WebRTC, App Check (still OFF), both Functions codebases and
+  `transcribeChefVoice` untouched. Nothing deployed.
+- Version unchanged: 0.10.6 / `versionCode 58`.
+- Status: `:app:testDebugUnitTest` BUILD SUCCESSFUL 31/31 with all 55 corpus rows; 91/91
+  node gates. Installed to SM-S938U (debug). Still open: "need your favorite Dorito
+  chips, one bag" is a different parse shape and remains lost; PWA half of the corpus
+  contract cannot run (no `web/` in this checkout).
+
+See `PARSER_INGREDIENT_DECLARATIONS_0.11.0.md`.
+
+---
+
+# ChefVoice Android 0.11.0 work — Launch Access: 10 Founding Seats (2 Years) + 90 Free Days
+
+- Grants Pro without Play Billing existing. First 10 signups get Pro free for 2 years
+  (`source: "founding"`, dated from the grant); everyone after gets Pro free for 90 days from
+  signup (`source: "promo"`); both stop at the kill switch.
+- Rationale: with no billing integration a paywall can only take features away, and at
+  fewer than five users the Free limits would ration the app's own demo to exactly the
+  people whose enthusiasm it needs. No gate was disabled or loosened - people are
+  simply entitled, through the real entitlement path.
+- Adds `chefvoice-billing`, a fourth independently-deployed unit (`billing/functions/`,
+  `DEPLOY_BILLING.cmd`, scoped to `--only functions:chefvoice-billing`). `firebase.json`
+  `functions` is now an array of two codebases; `DEPLOY_NOTIFICATIONS.cmd` is unchanged.
+- Three functions: `grantChefVoiceLaunchAccess` (onDocumentCreated `users/{uid}`),
+  `backfillChefVoiceLaunchAccess` (admin onCall, for accounts predating the deploy),
+  `endChefVoiceLaunchPromo` (admin onCall, the kill switch).
+- Kill switch has two levels: soft (default) stops new grants and lets live 90-day
+  promos run out; hard (`revokeActive: true`) also expires them. Founding seats and any
+  `source: "play"` entitlement survive both - the revoke filter is an allowlist.
+- Entitlement stays server-authoritative and Admin-SDK-written. Nothing fakes a
+  purchase; the client still grants itself nothing.
+- `firestore.rules` gains one block: `config/{configId}` closed to clients both ways.
+  Nothing existing was modified.
+- Client: `ProEntitlement` gains source constants, `isFounding`/`isPromo`/
+  `isComplimentary`/`daysRemaining()`; `FoundingAccess` mirrors the two numbers for
+  copy only. `ProMembershipCard` no longer describes a complimentary chef as a
+  subscriber or warns them about a payment method they never entered.
+- Protected parser and golden cooking corpus, Second Pass semantics, gating model,
+  `chefvoice-notifications`, `transcribeChefVoice`, Hosting, Storage rules,
+  Live/WebRTC and App Check state (still OFF) are all unchanged.
+- Version intentionally NOT bumped: stays 0.10.6 / `versionCode 58`.
+- Status: `:app:testDebugUnitTest` BUILD SUCCESSFUL 31/31 with the golden corpus
+  unaffected; 89/89 node gates (74 notification + 15 new billing); 25/25 emulator rules
+  tests (21 existing + 4 new). **Nothing is deployed and the trigger has never fired** -
+  `DEPLOY_BILLING.cmd` is unrun, the `config` rules block is undeployed, and no admin
+  custom claim has been verified.
+
+See `LAUNCH_ACCESS_FOUNDING_AND_PROMO_0.11.0.md`.
+
+---
+
+# ChefVoice Android 0.11.0 work — Product Analytics Instrumentation
+
+- Work Item D of the monetization handoff. Instrumentation only: no user-visible
+  change, no behaviour change, no new gating.
+- Adds `com.google.firebase:firebase-analytics` (BoM-managed) and
+  `analytics/ChefAnalytics.kt`, a single object owning the event vocabulary and every
+  emission.
+- Events wired: `first_recipe_started`, `first_recipe_completed` (the activation
+  metric), `second_recipe_completed`, `second_pass_opened`, `second_pass_accepted`
+  (with `kind`), `paywall_shown` (with `trigger`), `paywall_dismissed`.
+- Billing events (`checkout_started`, `purchase_completed`, `subscription_cancelled`,
+  `billing_failure`) are declared but have no emitter — there is no Play Billing
+  integration yet. The names are fixed now so the vocabulary does not drift.
+- `install` is deliberately not emitted: Firebase Analytics logs `first_open`
+  automatically with campaign attribution, and a custom duplicate would double-count
+  installs in every funnel built on it.
+- The module never throws, is a no-op when Firebase is not configured, and sends no
+  personal or recipe content — no titles, transcripts, ingredients, names, emails,
+  uids or purchase tokens.
+- Only behavioural edit: `runSecondPass` and `publish` assigned `paywallTrigger`
+  directly, bypassing `showPaywall`. Both now route through it so `paywall_shown`
+  cannot be missed. Behaviour-preserving — same trigger strings, now from the
+  `PaywallTrigger` constants rather than repeated literals.
+- Protected parser and golden cooking corpus, Second Pass semantics, Firestore and
+  Storage rules, Live/WebRTC, App Check state (still OFF), `transcribeChefVoice` and
+  the `chefvoice-notifications` codebase are all unchanged. Nothing was deployed.
+- Version intentionally NOT bumped: stays 0.10.6 / `versionCode 58`, matching the two
+  monetization commits before it. 0.11.0 is not shippable without billing, and the
+  four `versionCode 58` pins in `notifications/*.test.js` still hold.
+- Status: compiles, `:app:testDebugUnitTest` and the golden cooking corpus pass.
+  **Not yet verified on a real device** — the events still need a Firebase DebugView
+  run to confirm they arrive with the right parameters.
+
+See `ANALYTICS_INSTRUMENTATION_0.11.0.md`.
+
+---
+
+# ChefVoice Android v0.10.6 — Account Deletion Re-auth + Web Deletion Resource
+
+- Policy fix only, shipped standalone (not bundled with feature work).
+- Fixes in-app account deletion: the backend's `auth_time` freshness gate was
+  already correct, but the client had no way to re-prove identity when it fired —
+  only a hint to fully sign out and back in. Now shows an inline password
+  re-authentication prompt that forces a fresh ID token and retries.
+- Adds the Play-required web account-deletion page, live at
+  `https://chefvoice-delete-account.web.app/`, calling the same
+  `deleteChefVoiceAccount` callable Android uses — one deletion implementation, two
+  front doors. It deploys to a dedicated Hosting site pinned in `firebase.json`; the
+  default site still serves the PWA and must not be overwritten by a hosting deploy.
+- Adds a release-signing guard in `app/build.gradle.kts`: release packaging tasks now
+  throw when the `CHEFVOICE_RELEASE_*` environment variables are missing, instead of
+  silently producing an unsigned artifact.
+- Backend deletion sweep (recipes/media, social edges, Storage prefixes, Auth user)
+  was audited and found already complete; untouched.
+- Protected parser, Second Pass, Live/WebRTC, App Check, and all Firestore/Storage
+  rules are unchanged.
+- Version: 0.10.6 (`versionCode 58`).
+- Account deletion required three independent fixes, not one: the client re-auth
+  path (app), deploying `firestore.indexes.json` for the sweep's collection-group
+  queries (it had never been deployed - `firebase.json` had no `indexes` key), and
+  granting `roles/firebaseauth.admin` to the Functions runtime service account so
+  `getAuth().deleteUser()` could succeed. Adds `DEPLOY_FIRESTORE_INDEXES.cmd`.
+- Status: compiles, unit tests and golden cooking corpus pass, notification gates
+  pass. **End-to-end account deletion verified on a real S25 from a >10-minute-old
+  sign-in: password prompt, re-auth, retry, callable success, Auth user gone.**
+  A real web-page deletion and the Play Console Data safety form update are the
+  only items still outstanding - see `ACCOUNT_DELETION_REAUTH_AND_WEB_0.10.6.md`.
+
+See `ACCOUNT_DELETION_REAUTH_AND_WEB_0.10.6.md`.
+
+---
+
 # ChefVoice Android v0.8.6 — Food-First Community Profiles
 
 - Continues from v0.8.5 Followed Live Alerts.
