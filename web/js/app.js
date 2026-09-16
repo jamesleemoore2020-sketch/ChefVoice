@@ -500,7 +500,12 @@ async function runCaptureSecondPass(){
       model:cloudResult.model
     });
     result.rawSegments=cloudResult.segments;
-    captureSecondPass={busy:false,message:'',result};
+    // Recipe Details fills straight from the review, without waiting for a
+    // "Use second pass" click. Running the review is already the chef's
+    // explicit opt-in, and this only ever writes into fields they left empty,
+    // so nothing they typed and no ingredient or method wording is touched --
+    // those still require an accept.
+    captureSecondPass={busy:false,message:applyDetectedRecipeMeta(result).trim(),result};
   }catch(e){
     captureSecondPass={busy:false,message:e?.message||'ChefVoice Review could not finish. Your local recipe and audio are unchanged.',result:null};
   }

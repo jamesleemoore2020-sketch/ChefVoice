@@ -31,8 +31,9 @@ test('captures method steps while ingredients remain separate',()=>{const d=pars
 
 // ---- Recipe title -----------------------------------------------------------
 test('extracts title from "today I\'m making X"',()=>assert.equal(parseCookingSession([{text:"today I'm making my famous chili"}]).title,"Famous chili"));
-test('a dropped copula still announces a title, but only for "make"',()=>{
+test('a dropped copula still announces a title, but only for "make"/"do"',()=>{
   assert.equal(parseCookingSession([{text:'so today we going to make my famous top ramen meal'}]).title,'Famous top ramen meal');
+  assert.equal(parseCookingSession([{text:'so today we going to do my famous top ramen'}]).title,'Famous top ramen');
   assert.equal(parseCookingSession([{text:'we going to cook our ground beef for 10 mins'}]).title,'');
 });
 test('extracts title from "this is my recipe for X"',()=>assert.equal(parseCookingSession([{text:'we took one pound of beef'},{text:'this is my recipe for spicy chili'}]).title,'Spicy chili'));

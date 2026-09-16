@@ -199,7 +199,7 @@ object CookingSessionParser {
     // as the title would also delete that step and its duration. The pronoun stays
     // mandatory on both paths, so a bare imperative is still rejected.
     private val titleMakingPattern = Regex(
-        "(?i)(?:today[, ]*)?(?:i|we)(?:(?:'m|'re| am| are)\\s+(?:going\\s+to\\s+|gonna\\s+)?(?:making|make|cooking|cook)|\\s+(?:going\\s+to\\s+|gonna\\s+)(?:making|make))\\s+(.{1,60}?)$titleStopBoundary"
+        "(?i)(?:today[, ]*)?(?:i|we)(?:(?:'m|'re| am| are)\\s+(?:going\\s+to\\s+|gonna\\s+)?(?:making|make|cooking|cook|doing|do)|\\s+(?:going\\s+to\\s+|gonna\\s+)(?:making|make|doing|do))\\s+(.{1,60}?)$titleStopBoundary"
     )
     private val titleRecipeForPattern = Regex(
         "(?i)this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+(.{1,60}?)$titleStopBoundary"

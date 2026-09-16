@@ -677,7 +677,7 @@ const titleStopBoundary = '(?=[,.!?]|\\s+(?:and\\s+)?(?:i|you|we)(?:\'m|\'re| am
 // as the title would also delete that step and its duration. The pronoun stays
 // mandatory on both paths, so a bare imperative is still rejected.
 const titleMakingPattern = new RegExp(
-  `(?:today[, ]*)?(?:i|we)(?:(?:'m|'re| am| are)\\s+(?:going\\s+to\\s+|gonna\\s+)?(?:making|make|cooking|cook)|\\s+(?:going\\s+to\\s+|gonna\\s+)(?:making|make))\\s+(.{1,60}?)${titleStopBoundary}`,
+  `(?:today[, ]*)?(?:i|we)(?:(?:'m|'re| am| are)\\s+(?:going\\s+to\\s+|gonna\\s+)?(?:making|make|cooking|cook|doing|do)|\\s+(?:going\\s+to\\s+|gonna\\s+)(?:making|make|doing|do))\\s+(.{1,60}?)${titleStopBoundary}`,
   'i'
 );
 const titleRecipeForPattern = new RegExp(`this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+(.{1,60}?)${titleStopBoundary}`, 'i');

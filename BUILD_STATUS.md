@@ -70,6 +70,19 @@
   fields). PWA cache/package version 0.5.8. No parser change, and no Android
   change (pre-save review is PWA-only). See
   `REVIEW_FILLS_RECIPE_DETAILS_0.5.8.md`.
+- Cook time confirmed filling live (Cook min 1 from "let it cook for 1
+  minute"), but the recipe name was still blank: this capture said "we going
+  to *do* my famous top ramen" and the title verb list only had
+  make/cook, so `doing|do` was added on both paths. Third phrasing of the same
+  announcement to miss in as many rounds -- the list stays explicit on purpose,
+  since that is what keeps "we going to cook our ground beef for 10 mins" an
+  instruction rather than a title. Also, by request, Recipe Details now fills
+  as soon as ChefVoice Review returns instead of waiting for a "Use second
+  pass" click; ingredient and method wording still require an accept, and the
+  autofill only writes into fields left empty. PWA cache/package version
+  0.5.9, Android versionCode 72 / versionName 0.11.11. No rules/Functions/
+  Live/App Check/billing changes. See
+  `REVIEW_AUTOFILLS_DETAILS_0.5.9_0.11.11.md`.
 
 # Current handoff — 2026-09-15
 

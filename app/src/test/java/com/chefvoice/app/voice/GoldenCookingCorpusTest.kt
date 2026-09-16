@@ -306,6 +306,12 @@ class GoldenCookingCorpusTest {
         )
         assertEquals("Famous top ramen meal", announced.title)
 
+        // Chefs say "do" for a dish just as readily as "make".
+        val announcedWithDo = CookingSessionParser.parse(
+            listOf(TranscriptSegment(elapsedMs = 0L, text = "so today we going to do my famous top ramen"))
+        )
+        assertEquals("Famous top ramen", announcedWithDo.title)
+
         val instruction = CookingSessionParser.parse(
             listOf(TranscriptSegment(elapsedMs = 0L, text = "we going to cook our ground beef for 10 mins"))
         )
