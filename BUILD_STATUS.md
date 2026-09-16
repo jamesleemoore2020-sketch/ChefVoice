@@ -98,15 +98,22 @@
   `BUILD_PRODUCTION_TRUST_APK.cmd`: `ChefVoice-v0.11.11-Production.aab`,
   SHA-256 `a0a4366618c8267bc8d42cb238f3f4dfbb22dee37a8d64844a0de0d3bc2614f9`,
   plus the sideload `.apk` and `ChefVoice-v0.11.11-mapping.txt` (upload the
-  mapping with the release). APK verified under signature scheme v2. **Not yet
-  uploaded** -- Play Console is a browser task. Two things to check before
-  promoting: codes 68-72 have never been uploaded and code 67's acceptance was
-  never confirmed, so the Console may be several versions behind; and R8
-  minify/shrink is on while this release build has not been smoke-tested on a
-  device (no device was attached), which is exactly the failure mode the
-  buildTypes comment warns about. Sideload the `.apk` first. Note the
-  ChefVoice Review autofill/auto-apply work in 0.5.8-0.5.10 is PWA-only, so
-  this Android build carries the parser fixes but none of that review UX.
+  mapping with the release). APK verified under signature scheme v2.
+- Uploaded that AAB to the Play Console Production track and **saved it as a
+  draft release** -- not rolled out. Console state, checked directly rather
+  than inferred: Production is Active at **versionCode 69 (0.11.8)**, 177
+  countries, 3 installs. The older note below claiming code 67's acceptance was
+  unconfirmed is stale; 69 is live, so this is a clean 69 -> 72. The draft has
+  release name "72 (0.11.11)", the bundle accepted as version 72 (0.11.11),
+  API 26+, target SDK 36, and en-US release notes covering the two
+  user-visible Android changes (recipe-name recognition, ingredient names no
+  longer absorbing a trailing narration clause).
+- Before rolling that draft out: R8 minify/shrink is on and this release build
+  has still not been smoke-tested on a device (none was attached), which is
+  exactly the failure mode the `buildTypes` comment warns about -- sideload
+  `ChefVoice-v0.11.11-Production.apk` first. Also note the ChefVoice Review
+  autofill/auto-apply work in 0.5.8-0.5.10 is PWA-only, so this Android build
+  carries the parser fixes but none of that review UX.
 
 # Current handoff — 2026-09-15
 
