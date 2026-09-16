@@ -14,7 +14,7 @@ const [appSdk,authSdk,firestoreSdk,storageSdk]=await Promise.all([
 ]);
 
 const {initializeApp}=appSdk;
-const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,sendEmailVerification,reload}=authSdk;
+const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,sendEmailVerification,reload,getIdToken}=authSdk;
 const {
   getFirestore,collection,doc,increment,limit,onSnapshot,query,setDoc,where,orderBy,
   getDoc,getDocs,deleteDoc,updateDoc,runTransaction,writeBatch,documentId,startAfter
@@ -68,11 +68,19 @@ export async function sendVerificationEmail(){
 // emailVerified flip via reload() -- onAuthStateChanged does not fire just
 // because verification status changed, so without this the chef stays
 // stuck showing "not verified" until the next sign-in even after clicking
-// the emailed link.
+// the emailed link. reload() alone only updates the local user object though;
+// it does not reissue the ID token, so authorizeChefVoiceStorageUpload's
+// request.auth.token.email_verified check (and the Storage rules'
+// verifiedOwner()) keep seeing the pre-verification token until a forced
+// getIdToken(true) mints a new one -- without it ChefVoice Review and media
+// uploads still reject a chef the UI already shows as verified.
 export async function refreshEmailVerification(){
   const user=auth.currentUser;
   if(!user)return false;
-  try{await reload(user);}catch{/* stale network/session; report last-known status below */}
+  try{
+    await reload(user);
+    if(user.emailVerified)await getIdToken(user,true);
+  }catch{/* stale network/session; report last-known status below */}
   return user.emailVerified;
 }
 

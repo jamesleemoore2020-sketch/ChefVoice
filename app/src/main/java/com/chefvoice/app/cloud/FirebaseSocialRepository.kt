@@ -238,12 +238,26 @@ class FirebaseSocialRepository(private val context: Context) {
      * FirebaseAuth's cached [currentUser] only picks up a server-side isEmailVerified
      * flip via [android.gms.FirebaseUser.reload] -- the AuthStateListener does not fire
      * just because verification status changed, so without this callers stay stuck
-     * showing "not verified" until the next sign-in.
+     * showing "not verified" until the next sign-in. reload() alone only updates the
+     * local user object though; it does not reissue the ID token, so the Storage
+     * rules' verifiedOwner() and authorizeChefVoiceStorageUpload's
+     * request.auth.token.email_verified check keep seeing the pre-verification token
+     * until a forced getIdToken(true) mints a new one -- same class of bug
+     * reauthenticateAndDeleteChefVoiceAccount works around below. Without it, ChefVoice
+     * Review and media uploads still reject a chef this screen already shows as verified.
      */
     fun refreshEmailVerification(callback: (Boolean) -> Unit) {
         val user = currentUser ?: return callback(false)
         user.reload()
-            .addOnSuccessListener { callback(user.isEmailVerified) }
+            .addOnSuccessListener {
+                if (user.isEmailVerified) {
+                    user.getIdToken(true)
+                        .addOnSuccessListener { callback(true) }
+                        .addOnFailureListener { callback(true) }
+                } else {
+                    callback(false)
+                }
+            }
             .addOnFailureListener { callback(user.isEmailVerified) }
     }
 

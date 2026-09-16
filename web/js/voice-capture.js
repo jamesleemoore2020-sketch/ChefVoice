@@ -34,7 +34,13 @@ export class VoiceCapture {
     if(!this.recordingSupported) throw new Error('This browser cannot record microphone audio.');
     this.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
     this.chunks=[]; this.audioBlob=null; this.startedAt=Date.now(); this.running=true; this.lastPartial=''; this.lastFinal=''; this.currentSegmentId=null;
-    const preferred=['audio/mp4','audio/webm;codecs=opus','audio/webm'].find(t=>MediaRecorder.isTypeSupported?.(t));
+    // audio/mp4 first would let a Chrome/Android build that now reports it as
+    // supported win over WebM/Opus -- ChefVoice Review's Chirp 3 backend reliably
+    // auto-detects WEBM_OPUS but has been seen to reject a MediaRecorder MP4/AAC
+    // file outright ("does not appear to be in a supported encoding"). audio/mp4
+    // stays last as the Safari/iOS fallback, since WebKit's MediaRecorder never
+    // reports WebM as supported.
+    const preferred=['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(t=>MediaRecorder.isTypeSupported?.(t));
     this.recorder=new MediaRecorder(this.stream,preferred?{mimeType:preferred}:undefined);
     this.recorder.ondataavailable=e=>{if(e.data?.size)this.chunks.push(e.data);};
     this.recorder.start(1000);
