@@ -28,6 +28,7 @@ export class LiveViewerController {
     this.peerRef = doc(db, 'liveSessions', sessionId, 'peers', viewerUid);
     this.pc = null;
     this.started = false;
+    this.joinPromise = null;
     this.unsubPeerDoc = null;
     this.unsubHostCandidates = null;
     this.pendingCandidates = [];
@@ -42,15 +43,19 @@ export class LiveViewerController {
     this.started = true;
     this.status('Joining live video…');
 
-    // Best-effort: clear a peer doc left over from an earlier watch of this same
-    // Live that did not end cleanly (closed tab, backgrounded Safari evicted the
-    // page). Without this, rejoining would ask Firestore to "create" a document
-    // that already exists -- rules see that as an update, and the update rules
-    // only allow OFFERED -> ANSWERED, never a reset back to JOINING. A missing
-    // doc makes this delete fail permission-denied, which is expected and ignored.
-    try { await deleteDoc(this.peerRef); } catch {}
-
-    this.pc = new RTCPeerConnection({ iceServers: LIVE_ICE_SERVERS });
+    // livePeerViewer() requires a committed peer document with our viewerUid.
+    // Listening before this write is acknowledged can permanently terminate
+    // both listeners with permission-denied. An early host offer is delivered
+    // in the initial snapshot after we subscribe; it cannot be missed here.
+    this.joinPromise = this.#joinSignaling();
+    try {
+      await this.joinPromise;
+      if (!this.started) return;
+      this.pc = new RTCPeerConnection({ iceServers: LIVE_ICE_SERVERS });
+    } catch (error) {
+      this.status(`Could not join live signaling: ${error?.message || 'Firestore write failed'}`);
+      return;
+    }
     this.pc.onicecandidate = (event) => {
       if (event.candidate) this.#sendViewerCandidate(event.candidate);
     };
@@ -72,23 +77,29 @@ export class LiveViewerController {
       (error) => this.status(`Live signaling error: ${error?.message || 'unknown error'}`));
 
     this.unsubHostCandidates = onSnapshot(collection(this.peerRef, 'hostCandidates'),
-      (snapshot) => this.#onHostCandidates(snapshot));
+      (snapshot) => this.#onHostCandidates(snapshot),
+      (error) => this.status(`Live connection details error: ${error?.message || 'unknown error'}`));
+  }
 
-    try {
-      await setDoc(this.peerRef, {
-        viewerUid: this.viewerUid, state: 'JOINING', joinedAt: Date.now(), updatedAt: Date.now()
-      });
-    } catch (e) {
-      this.status(`Could not join live signaling: ${e?.message || 'Firestore write failed'}`);
-    }
+  async #joinSignaling() {
+    // Rejoining needs a fresh peer and fresh ICE IDs. Delete children while
+    // the old peer still authorizes us; deleting only its parent leaves ICE
+    // documents behind, whose IDs cannot be overwritten under the rules.
+    await this.#cleanupSignaling();
+    if (!this.started) return;
+    await setDoc(this.peerRef, {
+      viewerUid: this.viewerUid, state: 'JOINING', joinedAt: Date.now(), updatedAt: Date.now()
+    });
   }
 
   async #onPeerDocChange(snapshot) {
     const offer = snapshot.data()?.offerSdp;
-    if (!offer || this.offerApplied || !this.pc) return;
+    const pc = this.pc;
+    if (!this.started || !offer || this.offerApplied || !pc) return;
     this.offerApplied = true;
     try {
-      await this.pc.setRemoteDescription({ type: 'offer', sdp: offer });
+      await pc.setRemoteDescription({ type: 'offer', sdp: offer });
+      if (!this.started || this.pc !== pc) return;
       this.remoteDescriptionSet = true;
       this.#flushCandidates();
       await this.#createAnswer();
@@ -98,9 +109,13 @@ export class LiveViewerController {
   }
 
   async #createAnswer() {
+    const pc = this.pc;
+    if (!this.started || !pc) return;
     try {
-      const answer = await this.pc.createAnswer();
-      await this.pc.setLocalDescription(answer);
+      const answer = await pc.createAnswer();
+      if (!this.started || this.pc !== pc) return;
+      await pc.setLocalDescription(answer);
+      if (!this.started || this.pc !== pc) return;
       // A partial update, not a full set(): the rule requires viewerUid, hostUid,
       // offerSdp and joinedAt to come out unchanged, and only these three keys are
       // allowed to actually change (validLivePeerViewerUpdate's diff().affectedKeys()).
@@ -111,6 +126,7 @@ export class LiveViewerController {
   }
 
   #onHostCandidates(snapshot) {
+    if (!this.started || !this.pc) return;
     for (const change of snapshot.docChanges()) {
       if (change.type === 'removed' || this.seenCandidateDocs.has(change.doc.id)) continue;
       this.seenCandidateDocs.add(change.doc.id);
@@ -127,13 +143,15 @@ export class LiveViewerController {
   }
 
   #sendViewerCandidate(candidate) {
+    if (!this.started) return;
     const candidateId = iceCandidateDocumentId(this.candidateSequence++);
     if (!candidateId) { this.status('Live ICE candidate limit reached for this connection.'); return; }
-    setDoc(doc(this.peerRef, 'viewerCandidates', candidateId), candidateToDoc(candidate)).catch(() => {});
+    setDoc(doc(this.peerRef, 'viewerCandidates', candidateId), candidateToDoc(candidate))
+      .catch(error => this.status(`Could not send live connection details: ${error?.message || 'unknown error'}`));
   }
 
   status(message) {
-    this.onStatus(message);
+    if (this.started) this.onStatus(message);
   }
 
   async stop() {
@@ -145,6 +163,9 @@ export class LiveViewerController {
     this.unsubHostCandidates = null;
     try { this.pc?.close(); } catch {}
     this.pc = null;
+    // If Back was tapped during the join write, remove its eventual document
+    // only after that write settles. start() checks started before subscribing.
+    try { await this.joinPromise; } catch {}
     await this.#cleanupSignaling();
   }
 

@@ -48,6 +48,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
@@ -75,6 +76,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -84,6 +86,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -1509,6 +1514,32 @@ private fun openVideo(context: android.content.Context, attachment: MediaAttachm
 }
 
 @Composable
+private fun CommunityBannerAction(icon: String, label: String, unreadCount: Int = 0, onClick: () -> Unit) {
+    Box {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier.size(48.dp)
+                .background(Color.Black.copy(alpha = 0.58f), CircleShape)
+                .semantics { contentDescription = if (unreadCount > 0) "$label, $unreadCount unread" else label }
+        ) {
+            Text(icon, color = Color.White, style = MaterialTheme.typography.titleMedium, modifier = Modifier.clearAndSetSemantics { })
+        }
+        if (unreadCount > 0) {
+            Text(
+                if (unreadCount > 99) "99+" else unreadCount.toString(),
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.TopEnd)
+                    .background(Color(0xFFD93A22), CircleShape)
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                    .clearAndSetSemantics { }
+            )
+        }
+    }
+}
+
+@Composable
 private fun CommunityScreen(
     communityItems: List<com.chefvoice.app.model.CommunityItem>,
     cloudConfigured: Boolean,
@@ -1560,16 +1591,29 @@ private fun CommunityScreen(
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Community", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp)) {
+            Box(Modifier.fillMaxWidth().height(170.dp)) {
+                Image(
+                    painter = painterResource(R.drawable.chefvoice_community_hero),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color(0xD1190C07), Color(0x33190C07)))))
+                Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
+                    Text("CHEFVOICE COMMUNITY", color = Color(0xFFFFBD9D), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Community", color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                }
+                Row(Modifier.align(Alignment.TopEnd).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CommunityBannerAction(if (searchExpanded) "✕" else "🔍", if (searchExpanded) "Close search" else "Search") {
+                        if (searchExpanded) { searchText = ""; appliedSearch = ""; onSearchChefs("") }
+                        searchExpanded = !searchExpanded
+                    }
+                    CommunityBannerAction("✉", "Messages", unreadMessageCount, onMessages)
+                    CommunityBannerAction("🔔", "Notifications", unreadNotificationCount, onNotifications)
+                }
             }
-            TextButton(onClick = {
-                if (searchExpanded) { searchText = ""; appliedSearch = ""; onSearchChefs("") }
-                searchExpanded = !searchExpanded
-            }) { Text(if (searchExpanded) "✕" else "🔍") }
-            TextButton(onClick = onMessages) { Text(if (unreadMessageCount > 0) "✉ $unreadMessageCount" else "✉", style = MaterialTheme.typography.headlineSmall) }
-            TextButton(onClick = onNotifications) { Text(if (unreadNotificationCount > 0) "🔔 $unreadNotificationCount" else "🔔") }
         }
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

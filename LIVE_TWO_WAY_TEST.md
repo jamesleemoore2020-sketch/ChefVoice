@@ -1,3 +1,5 @@
+> **Current status (2026-09-14):** PWA hosting and viewing are implemented in candidate 0.5.0. Android hosting and the earlier iPhone viewer fix were confirmed by James; new iPhone hosting is locally tested only and needs deployment/device verification. See [PWA Go Live 0.5.0](PWA_GO_LIVE_0.5.0.md) and [current handoff](HANDOFF_2026-09-14.md). Older version claims and viewer-only instructions below are historical and superseded.
+
 > **Correction (PWA_LIVE_VIEWER_0.4.0.md, 2026-09-12):** this document describes a
 > PWA build that was never actually committed to this repository -- there is no
 > "iPhone host" code anywhere in `web/js/` and no evidence one was ever built.

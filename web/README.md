@@ -1,4 +1,4 @@
-# ChefVoice PWA — iPhone/Web candidate 0.3.0
+# ChefVoice PWA — iPhone/Web candidate 0.5.0
 
 This folder is a separate Progressive Web App client. It does not replace or modify the Android APK path.
 
@@ -57,7 +57,7 @@ The parser tests use Node's built-in test runner and require no npm dependencies
 - Recipe publishing/unpublishing: enabled using the same Firestore schema as Android
 - Recipe photo/video and full cooking-session voice upload: enabled through Firebase Storage
 - Likes, bookmarks, follows and comments: enabled against the same Android collections/subcollections
-- Android ↔ iPhone WebRTC Live: intentionally gated pending phone-to-phone signaling/media regression testing
+- Android ↔ iPhone WebRTC Live: host and viewer implemented in candidate 0.5.0; new PWA hosting awaits deployment and real-device media testing. See `../PWA_GO_LIVE_0.5.0.md`.
 - Server/cloud second-pass transcription: hook not enabled until a backend provider/credential strategy is selected; the original audio is retained so this can be added without changing the ingredient parser
 
 Do not put private AI/service credentials in browser JavaScript. Any second-pass AI transcription or ingredient review should be called through a server endpoint.

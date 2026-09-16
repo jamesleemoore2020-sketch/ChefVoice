@@ -1,3 +1,77 @@
+# Current handoff — 2026-09-14
+
+- Android Live 0.11.5 / 65 and PWA viewer 0.4.1 were confirmed working by James.
+- Community patch applied and signed Android 0.11.6 / 66 built successfully. Play rejected already-used code 66; a code 67 rebuild/upload is not yet confirmed.
+- PWA Go Live candidate 0.5.0 implemented locally: explicit preview, hosting, mute, comments/reactions and cleanup. PWA tests 95/95, Firestore emulator tests 53/53, and host DOM checks 16/16 passed. Actual iPhone hosting and deployment remain pending.
+- GitHub connector is read-only; no remote push was performed. The handoff provides commands for James's authorized checkout.
+- See `HANDOFF_2026-09-14.md` and `PWA_GO_LIVE_0.5.0.md`. Older entries below describe their status at the time and are superseded by this update.
+
+---
+
+# ChefVoice — Community layout parity (Android 0.11.6 / 66, PWA 0.4.2)
+
+- James confirmed both the Android 0.11.5 Live crash fix and the PWA 0.4.1
+  iPhone viewer permission fix are working.
+- Android gains the existing PWA Community banner. Both place search,
+  messages, and notification buttons with unread badges inside its top-right
+  corner.
+- PWA posts now match Android's full-photo layout, with chef controls at the
+  top, a dark caption at the bottom, and a vertical like/comment/share/save
+  rail inside the photo. Following/Discover and existing social handlers remain
+  connected.
+- PWA tests 95/95; notification source gates 74/74; 23 local DOM interaction
+  checks with simulated API/navigation endpoints; JavaScript syntax checks pass.
+  Browser preview was blocked by the session URL policy. Signed Android build
+  and final appearance checks on Android/iPhone remain pending on James's devices.
+- Build with `BUILD_PRODUCTION_TRUST_APK.cmd`; deploy the PWA with
+  `DEPLOY_PWA.cmd`. Parser, rules, Functions, billing, App Check, and the working
+  WebRTC fixes are unchanged.
+
+See `COMMUNITY_LAYOUT_PARITY_0.11.6.md` for application and release steps.
+
+---
+
+# ChefVoice PWA — Live signaling join fix (0.4.1)
+
+- James confirmed Android Live starts successfully on signed 0.11.5 / 65.
+  The iPhone viewer then reported "Live signaling error: Missing or
+  insufficient permissions."
+- Confirmed the deployed viewer attaches its private Firestore listeners
+  before creating the peer document that authorizes those listeners. The
+  emulator reproduces the denial under the existing rules.
+- The PWA now awaits the join write before subscribing, cleans up abandoned
+  ICE documents before rejoining, and finishes a previous connection's cleanup
+  before starting its replacement. PWA/cache version: 0.4.1.
+- Real Firestore emulator suite: 42/42, including five new viewer tests that
+  execute the production controller with a simulated media engine. PWA tests:
+  95/95. Actual iPhone audio/video verification remains pending deployment.
+- Deploy only `DEPLOY_PWA.cmd`. Android stays on 0.11.5 / 65; Firestore rules,
+  App Check, Functions, billing, and the cooking parser are unchanged.
+
+See `PWA_LIVE_SIGNALING_FIX_0.4.1.md`.
+
+---
+
+# ChefVoice — Live JNI release fix candidate (0.11.5 / 65)
+
+- The supplied build-64 log contains eight identical ARM64 `SIGTRAP` crashes
+  inside WebRTC's `JNI_OnLoad`. The Maven library's build ID exactly matches
+  the device log: `0cc2410c540e806e`. Its failing initialization path looks up
+  `org/jni_zero/JniInit` by name.
+- Added an R8 keep rule for `org.jni_zero.**`, which the existing
+  `org.webrtc.**` rule does not cover. WebRTC remains at `144.7559.15`.
+- An isolated run of R8 9.3.16 on the actual WebRTC classes removes
+  `JniInit` with the previous rules and preserves its name and native-called
+  methods with the patch. Notification source gates: 74/74; function syntax
+  check passes.
+- Signed app build, final AAB inspection, and Play-installed device/Live
+  verification remain pending on James's machine. No Firebase deployment is
+  needed for this Android packaging change.
+
+See `LIVE_WEBRTC_JNI_KEEP_FIX_0.11.5.md` for evidence and release steps.
+
+---
+
 # ChefVoice PWA — Live viewer (0.4.0)
 
 - The PWA's Live tab was a static "remains intentionally gated" placeholder;

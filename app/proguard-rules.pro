@@ -15,6 +15,12 @@
 -keep class org.webrtc.** { *; }
 -dontwarn org.webrtc.**
 
+# WebRTC's JNI Zero bridge is outside org.webrtc. The native library loads
+# org/jni_zero/JniInit during JNI_OnLoad and calls its methods by name; R8
+# cannot see those references inside the .so. Keep the bridge names/members
+# so a minified release can initialize WebRTC (see the 0.11.5 crash findings).
+-keep class org.jni_zero.** { *; }
+
 # OkHttp / Okio ship their own rules but still warn about optional platform APIs.
 -dontwarn okhttp3.**
 -dontwarn okio.**

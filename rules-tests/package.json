@@ -3,7 +3,7 @@
   "private": true,
   "description": "Behavioral tests for firestore.rules against the Firestore emulator.",
   "scripts": {
-    "test": "firebase emulators:exec --only firestore --project chefvoice-rules-test \"node --test firestore-rules.test.js\""
+    "test": "firebase emulators:exec --only firestore --project chefvoice-rules-test \"node --experimental-vm-modules --test firestore-rules.test.js pwa-live-viewer.test.js pwa-live-host.test.js\""
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",

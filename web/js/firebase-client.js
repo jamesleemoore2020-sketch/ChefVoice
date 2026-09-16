@@ -30,7 +30,7 @@ const storage=getStorage(app);
 // directly (a raw RTCPeerConnection has no natural home in this file's
 // promise-returning-CRUD style) without loading a second copy of the Firebase SDK
 // at a second pinned version.
-export {db,collection,doc,onSnapshot,setDoc,updateDoc,deleteDoc,getDocs,writeBatch};
+export {db,collection,doc,onSnapshot,setDoc,updateDoc,deleteDoc,getDocs,writeBatch,runTransaction};
 
 // Authentication, Firestore and Storage rules were verified in Firebase Console
 // on 2026-08-12. Live/WebRTC remains a separate device-test gate.
@@ -766,6 +766,7 @@ function toCloudMap(recipe){
   return {
     id:recipe.id,
     title:String(recipe.title||''),description:String(recipe.description||''),servings:Math.max(1,Number(recipe.servings||2)),
+    prepTimeMinutes:Math.max(0,Math.min(100000,Math.trunc(Number(recipe.prepTimeMinutes)||0))),cookTimeMinutes:Math.max(0,Math.min(100000,Math.trunc(Number(recipe.cookTimeMinutes)||0))),
     ingredients:(recipe.ingredients||[]).map(i=>({id:String(i.id||crypto.randomUUID()),quantity:String(i.quantity||''),unit:String(i.unit||''),name:String(i.name||'')})),
     steps:(recipe.steps||[]).map(String),
     media:(recipe.media||[]).filter(i=>i?.url).map(i=>({id:String(i.id||crypto.randomUUID()),type:i.type==='VIDEO'?'VIDEO':'IMAGE',url:String(i.url)})),
@@ -779,6 +780,7 @@ function toCloudMap(recipe){
 function normalizeCloudRecipe(id,data={}){
   return {
     id,title:String(data.title||'Untitled recipe'),description:String(data.description||''),servings:Math.max(1,Number(data.servings||2)),
+    prepTimeMinutes:Math.max(0,Math.trunc(Number(data.prepTimeMinutes)||0)),cookTimeMinutes:Math.max(0,Math.trunc(Number(data.cookTimeMinutes)||0)),
     ingredients:Array.isArray(data.ingredients)?data.ingredients.map(item=>({id:String(item?.id||crypto.randomUUID()),quantity:String(item?.quantity||''),unit:String(item?.unit||''),name:String(item?.name||'')})):[],
     steps:Array.isArray(data.steps)?data.steps.map(String):[],
     media:Array.isArray(data.media)?data.media:[],voiceClips:Array.isArray(data.voiceClips)?data.voiceClips:[],

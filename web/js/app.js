@@ -20,6 +20,7 @@ import {
 } from './inbox.js';
 import { parseTagsInput, tagMatchesQuery } from './tag-utils.js';
 import { LiveViewerController } from './webrtc-live-viewer.js';
+import { LiveHostController } from './webrtc-live-host.js';
 
 const main=document.querySelector('#main');
 const tabs=[...document.querySelectorAll('[data-tab]')];
@@ -35,7 +36,11 @@ let recipes=loadRecipes();
 let ingredients=[];let steps=[];let transcript=[];let livePartial='';
 let captureStatus='Talk naturally while you cook. ChefVoice will turn the session into an editable recipe draft.';
 let audioBlob=null;let audioUrl='';let capturing=false;let media=[];
-const form={title:'',description:'',servings:'2',tags:''};
+const form={title:'',description:'',servings:'2',tags:'',prepTime:'',cookTime:''};
+const cookStepLabels=['Capture','Recipe Details','Ingredients/Method','Media','Review'];
+let cookStep=0;let captureBusy=false;let savingRecipe=false;
+const cookEditors={manualIngredient:'',manualStep:'',transcriptEditor:null};
+let mediaStatus='';let recipeSaveError='';
 const cloud={
   state:'connecting',message:'Connecting to ChefVoice Community…',api:null,user:null,profile:null,recipes:[],feedError:'',
   liked:new Set(),bookmarks:new Set(),following:new Set(),entitlement:{...FREE_ENTITLEMENT},blocked:new Set(),
@@ -76,7 +81,7 @@ const shouldRenderCommunity=()=>currentTab==='community'&&!openCommunityRecipeId
 // targeted listeners patch the DOM directly (see openLiveRoom) instead of going
 // through render(), which would tear down and recreate the <video> element and
 // its RTCPeerConnection on every unrelated discovery-list update.
-const shouldRenderLiveList=()=>currentTab==='live'&&!openLiveSession;
+const shouldRenderLiveList=()=>currentTab==='live'&&!openLiveSession&&!liveHostController;
 function startUserObservers(user){
   clearUserObservers();
   if(!user||!cloud.api)return;
@@ -103,7 +108,11 @@ async function initCloud(){
   try{
     const api=await import('./firebase-client.js');
     cloud.api=api;cloud.state='ready';cloud.message='Connected to ChefVoice Firebase. Community writes are enabled.';
-    cloud.unsubAuth=api.observeAuth(user=>{cloud.user=user;startUserObservers(user);if(currentTab==='profile'||currentTab==='recipes'||shouldRenderCommunity())render();});
+    cloud.unsubAuth=api.observeAuth(user=>{
+      if(liveHostController&&user?.uid!==liveHostController.hostUid)closeLiveRoom();
+      cloud.user=user;startUserObservers(user);
+      if(currentTab==='profile'||currentTab==='recipes'||shouldRenderCommunity()||shouldRenderLiveList())render();
+    });
     cloud.unsubFeed=api.observePublicRecipes(items=>{
       cloud.recipes=items;cloud.feedError='';
       // A shared link is only actionable once the feed it points into has
@@ -220,9 +229,9 @@ function requireProfileName(){
 const cloudReady=()=>cloud.state==='ready'&&cloud.api;
 
 const capture=new VoiceCapture({
-  onSegment:s=>{transcript.push(s);renderCookDynamic();},
-  onPartial:s=>{livePartial=s;renderCookDynamic();},
-  onStatus:s=>{captureStatus=s;renderCookDynamic();}
+  onSegment:s=>{transcript.push(s);renderCaptureState();},
+  onPartial:s=>{livePartial=s;renderCaptureState();},
+  onStatus:s=>{captureStatus=s;renderCaptureState();}
 });
 
 function captureForm(){
@@ -230,6 +239,8 @@ function captureForm(){
   const desc=document.querySelector('#description');if(desc)form.description=desc.value;
   const servings=document.querySelector('#servings');if(servings)form.servings=servings.value;
   const tags=document.querySelector('#tags');if(tags)form.tags=tags.value;
+  for(const key of ['prepTime','cookTime']){const input=document.getElementById(key);if(input)form[key]=input.value;}
+  for(const key of Object.keys(cookEditors)){const input=document.getElementById(key);if(input)cookEditors[key]=input.value;}
 }
 
 // Browser/PWA back-button support. Every tab switch and the two multi-screen
@@ -244,14 +255,15 @@ function currentViewState(){
     tab:currentTab,
     conversationId:currentTab==='inbox'?(openConversation?.id||null):null,
     chefUid:currentTab==='community'?(openChefProfile?.uid||null):null,
-    liveSessionId:currentTab==='live'?(openLiveSession?.id||null):null
+    liveSessionId:currentTab==='live'?(openLiveSession?.id||null):null,
+    liveHostSetup:currentTab==='live'&&Boolean(liveHostController)
   };
 }
 function pushViewState(){
   if(restoringHistory)return;
   const state=currentViewState();
   const prev=history.state;
-  if(prev&&prev.tab===state.tab&&(prev.conversationId||null)===state.conversationId&&(prev.chefUid||null)===state.chefUid&&(prev.liveSessionId||null)===state.liveSessionId)return;
+  if(prev&&prev.tab===state.tab&&(prev.conversationId||null)===state.conversationId&&(prev.chefUid||null)===state.chefUid&&(prev.liveSessionId||null)===state.liveSessionId&&Boolean(prev.liveHostSetup)===state.liveHostSetup)return;
   history.pushState(state,'');
 }
 async function restoreViewState(state){
@@ -300,41 +312,95 @@ function cookTemplate(){
   return `
   <section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Voice-first recipe capture</div><h1>Cook naturally.<br>ChefVoice listens.</h1><p>Your original chef voice is recorded while the transcript is structured into editable ingredients and method steps.</p></section>
   <div id="paywall"></div>
-  <section id="captureCard"></section>
-  <section class="card stack">
-    <div class="field"><label for="title">Recipe name</label><input id="title" value="${escapeHtml(form.title)}" placeholder="Sunday tomato pasta"></div>
-    <div class="field"><label for="description">Description / chef note</label><textarea id="description" placeholder="What makes this recipe yours?">${escapeHtml(form.description)}</textarea></div>
-    <div class="field"><label for="servings">Servings</label><input id="servings" inputmode="numeric" value="${escapeHtml(form.servings)}"></div>
-    <div class="field"><label for="tags">Tags</label><input id="tags" value="${escapeHtml(form.tags)}" placeholder="#bbq, camping, weeknight"></div>
-  </section>
-  <div class="section-title"><h2>Ingredients</h2><span class="count" id="ingredientCount"></span></div><div id="ingredientList"></div>
-  <div class="card"><div class="row"><input id="manualIngredient" class="grow" placeholder="e.g. two tablespoons olive oil"><button id="addIngredient" class="secondary">Add</button></div></div>
-  <div class="section-title"><h2>Method</h2><span class="count" id="stepCount"></span></div><div id="stepList"></div>
-  <div class="card"><textarea id="manualStep" placeholder="Add a cooking step"></textarea><button id="addStep" class="secondary wide">Add step</button></div>
-  <div class="section-title"><h2>Transcript recovery</h2><span class="pill">editable safety net</span></div>
-  <section class="card"><p class="hint">If iPhone speech recognition misses something, paste or correct the words here and rebuild the draft. Your recorded audio is kept separately.</p><textarea id="transcriptEditor" placeholder="Paste a transcript or correction here…">${escapeHtml(transcript.map(s=>s.text).join(' '))}</textarea><button id="reanalyze" class="secondary wide">Re-analyze transcript</button></section>
-  <div class="section-title"><h2>Photos & video</h2></div>
-  <section class="card"><input id="mediaInput" type="file" accept="image/*,video/*" capture="environment" multiple><p class="hint">Alpha safety caps: 25 MB per image, 200 MB per video. Files stay local until you explicitly publish.</p><div id="mediaPreview" class="media-preview"></div></section>
-  <button id="saveRecipe" class="primary wide">Save recipe</button>`;
+  <section class="cook-wizard" aria-label="Create recipe">
+    <header class="cook-progress" id="cookProgress" tabindex="-1">
+      <p>Step ${cookStep+1} of ${cookStepLabels.length} · ${cookStepLabels[cookStep]}</p>
+      <progress value="${cookStep+1}" max="5" aria-label="Recipe creation progress">${cookStep+1} of 5</progress>
+    </header>
+    <div id="ongoingCapture"></div>
+    <div class="cook-step">${cookStepTemplate()}</div>
+    <nav class="cook-step-nav" aria-label="Recipe steps">
+      ${cookStep>0?'<button id="cookBack" class="secondary">Back</button>':''}
+      ${cookStep===4?`<button id="saveRecipe" class="primary" aria-describedby="recipeSaveHint" ${canSaveRecipe()?'':'disabled'}>Save recipe</button>`:'<button id="cookNext" class="primary">Next</button>'}
+    </nav>
+  </section>`;
+}
+
+function cookStepTemplate(){
+  switch(cookStep){
+    case 0:return `<h2>Create recipe</h2><p class="status">Cook, talk, and let ChefVoice build the first draft while keeping the creator’s real voice.</p><section id="captureCard"></section>`;
+    case 1:return `<h2>Recipe Details</h2><section class="card stack">
+      <div class="field"><label for="title">Recipe name</label><input id="title" value="${escapeHtml(form.title)}" placeholder="Sunday tomato pasta"></div>
+      <div class="field"><label for="description">Description / chef note</label><textarea id="description" placeholder="What makes this recipe yours?">${escapeHtml(form.description)}</textarea></div>
+      <div class="field"><label for="servings">Servings</label><input id="servings" inputmode="numeric" value="${escapeHtml(form.servings)}"></div>
+      <div class="field"><label for="tags">Tags</label><input id="tags" value="${escapeHtml(form.tags)}" placeholder="#bbq, camping, weeknight"></div>
+      <div class="row"><div class="field grow"><label for="prepTime">Prep min</label><input id="prepTime" inputmode="numeric" maxlength="4" value="${escapeHtml(form.prepTime)}" placeholder="Optional"></div><div class="field grow"><label for="cookTime">Cook min</label><input id="cookTime" inputmode="numeric" maxlength="4" value="${escapeHtml(form.cookTime)}" placeholder="Optional"></div></div>
+    </section>`;
+    case 2:return `<h2>Ingredients/Method</h2>
+      <div class="section-title"><h3>Ingredients</h3><span class="count" id="ingredientCount"></span></div><div id="ingredientList"></div>
+      <div class="card"><div class="row"><input id="manualIngredient" class="grow" aria-label="Add an ingredient" value="${escapeHtml(cookEditors.manualIngredient)}" placeholder="e.g. two tablespoons olive oil"><button id="addIngredient" class="secondary">Add</button></div></div>
+      <div class="section-title"><h3>Method</h3><span class="count" id="stepCount"></span></div><div id="stepList"></div>
+      <div class="card"><textarea id="manualStep" aria-label="Add a cooking step" placeholder="Add a cooking step">${escapeHtml(cookEditors.manualStep)}</textarea><button id="addStep" class="secondary wide">Add step</button></div>
+      <details class="card"><summary>Transcript recovery</summary><p class="hint">If speech recognition misses something, paste or correct the words here and rebuild the draft. Your recorded audio is kept separately.</p><textarea id="transcriptEditor" aria-label="Cooking transcript" placeholder="Paste a transcript or correction here…">${escapeHtml(cookEditors.transcriptEditor??transcript.map(s=>s.text).join(' '))}</textarea><button id="reanalyze" class="secondary wide">Re-analyze transcript</button></details>`;
+    case 3:return `<h2>Media</h2><section class="card"><h3>Chef voice</h3><div id="draftVoice"></div></section>
+      <section class="card"><h3>Photos &amp; video</h3><div class="row"><button id="takeRecipePhoto" class="secondary grow">📷 Take photo</button><button id="recordRecipeVideo" class="secondary grow">🎬 Record video</button></div><input id="recipePhotoInput" type="file" accept="image/*" capture="environment" hidden><input id="recipeVideoInput" type="file" accept="video/*" capture="environment" hidden><label for="mediaInput" class="hint">Choose photos or cooking clips from your phone.</label><input id="mediaInput" type="file" accept="image/*,video/*" multiple><p class="hint">Up to 25 MB per image and 200 MB per video. Files stay local until you explicitly publish.</p><p id="mediaStatus" class="hint" role="status">${escapeHtml(mediaStatus)}</p><div id="mediaPreview" class="media-preview"></div></section>`;
+    case 4:return `<h2>Review</h2><p class="status">Check everything before saving. Use Back to change anything.</p><div id="recipeReview"></div><p id="recipeSaveHint" class="hint" role="status"></p><p id="recipeSaveError" class="notice" role="alert" ${recipeSaveError?'':'hidden'}>${escapeHtml(recipeSaveError)}</p>`;
+  }
+}
+
+function canSaveRecipe(){return !!form.title.trim()&&ingredients.some(i=>i.name.trim())&&!capturing&&!captureBusy&&!savingRecipe;}
+function renderRecipeReview(){
+  const el=document.querySelector('#recipeReview');if(!el)return;
+  const photos=media.filter(m=>m.type.startsWith('image/')).length;
+  const videos=media.filter(m=>m.type.startsWith('video/')).length;
+  el.innerHTML=`<section class="card"><h3>${escapeHtml(form.title.trim()||'Untitled recipe')}</h3>${form.description.trim()?`<p>${escapeHtml(form.description)}</p>`:''}<p>Serves ${Math.max(1,Number(form.servings)||2)}${form.prepTime?` · Prep ${Number(form.prepTime)}m`:''}${form.cookTime?` · Cook ${Number(form.cookTime)}m`:''}</p>${parseTagsInput(form.tags).map(t=>`<span class="pill">#${escapeHtml(t)}</span>`).join(' ')}</section>
+    <section class="card"><h3>${ingredients.length} ingredient${ingredients.length===1?'':'s'}</h3>${ingredients.length?`<ul>${ingredients.map(i=>`<li>${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</li>`).join('')}</ul>`:'<p class="hint">No ingredients yet.</p>'}</section>
+    <section class="card"><h3>${steps.length} method step${steps.length===1?'':'s'}</h3>${steps.length?`<ol>${steps.map(step=>`<li>${escapeHtml(step)}</li>`).join('')}</ol>`:'<p class="hint">No method steps yet.</p>'}</section>
+    <section class="card"><h3>Media</h3><p>${photos} photo${photos===1?'':'s'} · ${videos} video${videos===1?'':'s'} · ${audioBlob?.size?1:0} voice clip</p></section>`;
+  renderCookSaveState();
+}
+function renderCookSaveState(){
+  const save=document.querySelector('#saveRecipe');if(save){save.disabled=!canSaveRecipe();save.textContent=savingRecipe?'Saving…':'Save recipe';}
+  const hint=document.querySelector('#recipeSaveHint');if(hint)hint.textContent=capturing||captureBusy?'Finish cooking capture before saving.':!form.title.trim()?'Add a recipe name before saving.':!ingredients.some(i=>i.name.trim())?'Add at least one ingredient before saving.':'Your recipe will be saved privately on this device.';
+}
+function renderDraftVoice(){
+  const el=document.querySelector('#draftVoice');if(!el)return;
+  el.innerHTML=audioBlob?.size&&audioUrl?`<p class="hint">Your original cooking session stays with this recipe.</p><audio class="audio-player" aria-label="Original chef voice" controls src="${escapeHtml(audioUrl)}"></audio>`:'<p class="hint">Your recorded cooking session will appear here. You can go Back to Capture to record, or continue without audio.</p>';
+}
+function renderCaptureState(){
+  renderCapture();
+  const el=document.querySelector('#ongoingCapture');
+  if(el){
+    el.innerHTML=cookStep!==0&&(capturing||captureBusy)?`<div class="notice"><p>${escapeHtml(captureStatus)}</p><button id="finishCookCapture" class="secondary wide" ${captureBusy?'disabled':''}>${captureBusy?'Please wait…':'Finish &amp; build recipe'}</button></div>`:'';
+    document.querySelector('#finishCookCapture')?.addEventListener('click',toggleCapture);
+  }
+  const video=document.querySelector('#recordRecipeVideo');if(video)video.disabled=capturing||captureBusy;
+  renderCookSaveState();
+}
+function moveCookStep(delta){
+  if(savingRecipe)return;
+  captureForm();cookStep=Math.max(0,Math.min(4,cookStep+delta));render();
+  const heading=document.querySelector('#cookProgress');
+  heading?.focus({preventScroll:true});heading?.scrollIntoView({block:'start'});
 }
 
 function renderCapture(){
   const el=document.querySelector('#captureCard');if(!el)return;
   const live=transcript.length||livePartial;
-  el.innerHTML=`<div class="card capture-card"><div class="capture-head"><div class="capture-title">${capturing?'<span class="live-dot"></span>LIVE COOKING CAPTURE':'🎙 Cook & capture'}</div>${capturing?'<span class="pill">Listening</span>':''}</div><p class="status">${escapeHtml(captureStatus)}</p><p class="hint">Say things like “add two teaspoons of salt,” “half a teaspoon each of salt and pepper,” or “actually make that three cups.” ChefVoice keeps measurement evidence when recognition changes its mind.</p>${live?`<div class="transcript">${transcript.slice(-6).map(s=>`<div class="transcript-line"><time>${fmt(s.elapsedMs)}</time>${escapeHtml(s.text)}</div>`).join('')}${livePartial?`<div class="transcript-line partial">… ${escapeHtml(livePartial)}</div>`:''}</div>`:''}<div class="quality">Original microphone audio is preserved independently of the ingredient parser.</div><button id="captureBtn" class="primary wide" style="margin-top:12px">${capturing?'⏹ Finish & build recipe':'🎙 Start cooking capture'}</button></div>`;
+  el.innerHTML=`<div class="card capture-card"><div class="capture-head"><div class="capture-title">${capturing?'<span class="live-dot"></span>LIVE COOKING CAPTURE':'🎙 Cook & capture'}</div>${capturing?'<span class="pill">Listening</span>':''}</div><p class="status">${escapeHtml(captureStatus)}</p><p class="hint">Say things like “add two teaspoons of salt,” “half a teaspoon each of salt and pepper,” or “actually make that three cups.” ChefVoice keeps measurement evidence when recognition changes its mind.</p>${live?`<div class="transcript">${transcript.slice(-6).map(s=>`<div class="transcript-line"><time>${fmt(s.elapsedMs)}</time>${escapeHtml(s.text)}</div>`).join('')}${livePartial?`<div class="transcript-line partial">… ${escapeHtml(livePartial)}</div>`:''}</div>`:''}<div class="quality">Original microphone audio is preserved independently of the ingredient parser.</div><button id="captureBtn" class="primary wide" style="margin-top:12px" ${captureBusy?'disabled':''}>${captureBusy?'Please wait…':capturing?'⏹ Finish & build recipe':'🎙 Start cooking capture'}</button></div>`;
   document.querySelector('#captureBtn')?.addEventListener('click',toggleCapture);
 }
 function renderIngredients(){
   const el=document.querySelector('#ingredientList');if(!el)return;
   document.querySelector('#ingredientCount').textContent=`${ingredients.length} detected`;
   el.innerHTML=ingredients.length?ingredients.map((i,n)=>`<div class="ingredient" data-ing="${n}"><input aria-label="Quantity" value="${escapeHtml(i.quantity)}" data-k="quantity"><input aria-label="Unit" value="${escapeHtml(i.unit)}" data-k="unit"><input aria-label="Ingredient name" value="${escapeHtml(i.name)}" data-k="name"><button class="icon-btn" data-remove="${n}" aria-label="Remove ingredient">×</button></div>`).join(''):'<div class="empty card">Ingredients detected from your voice will appear here.</div>';
-  el.querySelectorAll('input[data-k]').forEach(input=>input.addEventListener('change',e=>{const row=e.target.closest('[data-ing]');ingredients[Number(row.dataset.ing)][e.target.dataset.k]=e.target.value;}));
+  el.querySelectorAll('input[data-k]').forEach(input=>input.addEventListener('input',e=>{const row=e.target.closest('[data-ing]');ingredients[Number(row.dataset.ing)][e.target.dataset.k]=e.target.value;}));
   el.querySelectorAll('[data-remove]').forEach(b=>b.addEventListener('click',()=>{ingredients.splice(Number(b.dataset.remove),1);renderIngredients();}));
 }
 function renderSteps(){
   const el=document.querySelector('#stepList');if(!el)return;document.querySelector('#stepCount').textContent=`${steps.length} steps`;
-  el.innerHTML=steps.length?steps.map((s,n)=>`<div class="step card"><span class="step-num">${n+1}</span><textarea data-step="${n}">${escapeHtml(s)}</textarea><button class="icon-btn" data-step-remove="${n}">×</button></div>`).join(''):'<div class="empty card">Cooking steps from your narration will appear here.</div>';
-  el.querySelectorAll('[data-step]').forEach(t=>t.addEventListener('change',e=>steps[Number(e.target.dataset.step)]=e.target.value));
+  el.innerHTML=steps.length?steps.map((s,n)=>`<div class="step card"><span class="step-num">${n+1}</span><textarea aria-label="Method step ${n+1}" data-step="${n}">${escapeHtml(s)}</textarea><button class="icon-btn" data-step-remove="${n}" aria-label="Remove method step ${n+1}">×</button></div>`).join(''):'<div class="empty card">Cooking steps from your narration will appear here.</div>';
+  el.querySelectorAll('[data-step]').forEach(t=>t.addEventListener('input',e=>steps[Number(e.target.dataset.step)]=e.target.value));
   el.querySelectorAll('[data-step-remove]').forEach(b=>b.addEventListener('click',()=>{steps.splice(Number(b.dataset.stepRemove),1);renderSteps();}));
 }
 function renderMedia(){
@@ -348,15 +414,20 @@ function renderMedia(){
     renderMedia();
   });
 }
-function renderCookDynamic(){renderCapture();renderIngredients();renderSteps();renderMedia();}
+function renderCookDynamic(){renderCaptureState();renderIngredients();renderSteps();renderMedia();renderDraftVoice();renderRecipeReview();}
 
 async function toggleCapture(){
+  if(captureBusy||savingRecipe)return;
+  captureBusy=true;renderCaptureState();
+  try{
   if(capturing){
     captureStatus='Finishing capture and waiting for the last words…';renderCapture();
     const result=await capture.stop();capturing=false;audioBlob=result.audioBlob;
     if(audioUrl)URL.revokeObjectURL(audioUrl);if(audioBlob?.size)audioUrl=URL.createObjectURL(audioBlob);
     const draft=parseCookingSession(transcript);const merged=mergeDraft(ingredients,steps,draft);ingredients=merged.ingredients;steps=merged.steps;
-    captureStatus=draft.ingredients.length||draft.steps.length?`Draft ready: ${draft.ingredients.length} ingredient${draft.ingredients.length===1?'':'s'} and ${draft.steps.length} step${draft.steps.length===1?'':'s'} detected. Review them below.`:'Audio saved. Review or correct the transcript below if live recognition missed the cooking words.';
+    captureStatus=draft.ingredients.length||draft.steps.length?`Draft ready: ${draft.ingredients.length} ingredient${draft.ingredients.length===1?'':'s'} and ${draft.steps.length} step${draft.steps.length===1?'':'s'} detected. Continue to Ingredients/Method to review the draft.`:'Audio saved. Use Transcript recovery in Ingredients/Method if live recognition missed the cooking words.';
+    cookEditors.transcriptEditor=null;
+    const editor=document.querySelector('#transcriptEditor');if(editor)editor.value=transcript.map(s=>s.text).join(' ');
     renderCookDynamic();
   }else{
     if(isIOS&&speechNeedsReset){captureForm();sessionStorage.setItem('chefvoice.capture.recovery',JSON.stringify({form,ingredients,steps,transcript}));location.reload();return;}
@@ -371,13 +442,24 @@ async function toggleCapture(){
     }
     catch(e){captureStatus=`Microphone could not start: ${e.message}`;renderCapture();}
   }
+  }catch(e){captureStatus=`Capture could not finish: ${e.message||'Please try again.'}`;}
+  finally{captureBusy=false;renderCaptureState();}
 }
 
 function bindCook(){
   renderCookDynamic();
-  document.querySelector('#addIngredient').addEventListener('click',()=>{const x=document.querySelector('#manualIngredient');if(x.value.trim()){ingredients.push({...parseIngredient(x.value),confidence:'manual'});x.value='';renderIngredients();}});
-  document.querySelector('#addStep').addEventListener('click',()=>{const x=document.querySelector('#manualStep');if(x.value.trim()){steps.push(x.value.trim());x.value='';renderSteps();}});
-  document.querySelector('#reanalyze').addEventListener('click',()=>{const text=document.querySelector('#transcriptEditor').value.trim();if(!text)return;transcript=[{id:crypto.randomUUID(),elapsedMs:0,text}];const d=parseCookingSession(transcript);ingredients=d.ingredients;steps=d.steps;captureStatus=`Transcript rebuilt: ${ingredients.length} ingredients and ${steps.length} steps.`;renderCookDynamic();});
+  document.querySelector('#cookBack')?.addEventListener('click',()=>moveCookStep(-1));
+  document.querySelector('#cookNext')?.addEventListener('click',()=>moveCookStep(1));
+  for(const [id,key] of [['title','title'],['description','description'],['servings','servings'],['tags','tags'],['prepTime','prepTime'],['cookTime','cookTime']]){
+    document.getElementById(id)?.addEventListener('input',e=>{
+      if(['servings','prepTime','cookTime'].includes(key))e.target.value=e.target.value.replace(/\D/g,'').slice(0,key==='servings'?3:4);
+      form[key]=e.target.value;
+    });
+  }
+  for(const key of Object.keys(cookEditors))document.getElementById(key)?.addEventListener('input',e=>cookEditors[key]=e.target.value);
+  document.querySelector('#addIngredient')?.addEventListener('click',()=>{const x=document.querySelector('#manualIngredient');if(x.value.trim()){ingredients.push({...parseIngredient(x.value),confidence:'manual'});x.value='';cookEditors.manualIngredient='';renderIngredients();}});
+  document.querySelector('#addStep')?.addEventListener('click',()=>{const x=document.querySelector('#manualStep');if(x.value.trim()){steps.push(x.value.trim());x.value='';cookEditors.manualStep='';renderSteps();}});
+  document.querySelector('#reanalyze')?.addEventListener('click',()=>{const text=document.querySelector('#transcriptEditor').value.trim();if(!text)return;transcript=[{id:crypto.randomUUID(),elapsedMs:0,text}];const d=parseCookingSession(transcript);ingredients=d.ingredients;steps=d.steps;captureStatus=`Transcript rebuilt: ${ingredients.length} ingredients and ${steps.length} steps.`;renderCookDynamic();});
   // Video and per-recipe photo caps are deliberately NOT enforced here. Both limits
   // exist in the tier model on both platforms, but Android raises a paywall only for
   // the Second Pass quota, the cloud-recipe cap and the profile "See Pro" button --
@@ -385,24 +467,35 @@ function bindCook(){
   // on the web alone would give a Free chef a worse deal in Safari than on their
   // phone for the same account. If these should bite, they need to land on both
   // platforms in the same change.
-  document.querySelector('#mediaInput').addEventListener('change',e=>{
+  document.querySelector('#takeRecipePhoto')?.addEventListener('click',()=>document.querySelector('#recipePhotoInput').click());
+  document.querySelector('#recordRecipeVideo')?.addEventListener('click',()=>document.querySelector('#recipeVideoInput').click());
+  for(const inputId of ['mediaInput','recipePhotoInput','recipeVideoInput'])document.getElementById(inputId)?.addEventListener('change',e=>{
+    mediaStatus='';
     for(const f of e.target.files){
+      if(!/^(image|video)\//.test(f.type)){mediaStatus+=`${f.name} was not added: choose an image or video. `;continue;}
       const max=f.type.startsWith('video/')?200*1024*1024:25*1024*1024;
-      if(f.size>max){captureStatus=`${f.name} was not added because it exceeds the ${f.type.startsWith('video/')?'200 MB video':'25 MB image'} alpha limit.`;continue;}
+      if(f.size>max){mediaStatus+=`${f.name} was not added because it exceeds the ${f.type.startsWith('video/')?'200 MB video':'25 MB image'} alpha limit.`;continue;}
       media.push({id:crypto.randomUUID(),name:f.name,type:f.type,url:URL.createObjectURL(f),file:f});
     }
-    renderCookDynamic();
+    e.target.value='';
+    document.querySelector('#mediaStatus').textContent=mediaStatus;renderMedia();
   });
-  document.querySelector('#saveRecipe').addEventListener('click',async()=>{
-    captureForm();const recipeId=crypto.randomUUID();
-    const recipe={id:recipeId,title:form.title.trim()||'Untitled recipe',description:form.description.trim(),servings:Number(form.servings)||2,ingredients:structuredClone(ingredients),steps:[...steps],transcript:structuredClone(transcript),createdAt:Date.now(),updatedAt:Date.now(),isPublic:false,media:[],tags:parseTagsInput(form.tags)};
+  document.querySelector('#saveRecipe')?.addEventListener('click',async()=>{
+    captureForm();if(!canSaveRecipe())return;
+    savingRecipe=true;recipeSaveError='';renderCookSaveState();
+    try{
+    const recipeId=crypto.randomUUID();
+    const recipe={id:recipeId,title:form.title.trim()||'Untitled recipe',description:form.description.trim(),servings:Math.max(1,Number(form.servings)||2),prepTimeMinutes:Number(form.prepTime)||0,cookTimeMinutes:Number(form.cookTime)||0,ingredients:structuredClone(ingredients),steps:[...steps],transcript:structuredClone(transcript),createdAt:Date.now(),updatedAt:Date.now(),isPublic:false,media:[],tags:parseTagsInput(form.tags)};
     if(audioBlob?.size){try{recipe.sessionAudio=await saveAudioBlob(recipe.id,audioBlob);}catch(e){recipe.audioWarning=e.message;}}
     for(const item of media){try{await saveMediaBlob(recipe.id,item.id,item.file);recipe.media.push({id:item.id,name:item.name,type:item.type,size:item.file.size,stored:true});}catch(e){recipe.mediaWarning=e.message;}}
+    const updatedRecipes=[recipe,...recipes];saveRecipes(updatedRecipes);recipes=updatedRecipes;
     for(const item of media)try{URL.revokeObjectURL(item.url)}catch{}
-    recipes.unshift(recipe);saveRecipes(recipes);
+    if(audioUrl)URL.revokeObjectURL(audioUrl);
     // Only a brand-new recipe is a completion. Edits and publishes are not.
     ChefAnalytics.recipeCompleted();
-    captureStatus='Recipe saved on this device.';form.title='';form.description='';form.servings='2';form.tags='';ingredients=[];steps=[];transcript=[];audioBlob=null;audioUrl='';media=[];nav('recipes');
+    captureStatus='Recipe saved on this device.';form.title='';form.description='';form.servings='2';form.tags='';ingredients=[];steps=[];transcript=[];audioBlob=null;audioUrl='';media=[];livePartial='';cookStep=0;form.prepTime='';form.cookTime='';cookEditors.manualIngredient='';cookEditors.manualStep='';cookEditors.transcriptEditor=null;mediaStatus='';nav('recipes');
+    }catch(e){recipeSaveError=`Could not save this recipe: ${e.message||'device storage is unavailable'}. Your draft is still here.`;const error=document.querySelector('#recipeSaveError');if(error){error.hidden=false;error.textContent=recipeSaveError;}}
+    finally{savingRecipe=false;renderCookSaveState();}
   });
 }
 
@@ -605,9 +698,49 @@ function chefProfileTemplate(){
   return `<button id="backCommunity" class="ghost">← Community</button><section class="card"><div class="social-head"><span class="avatar-circle large">${escapeHtml(initial)}</span><div class="chef-id"><strong style="font-size:1.15rem">${escapeHtml(p.displayName)}</strong><span class="meta">${p.followerCount} follower${p.followerCount===1?'':'s'}</span></div>${canModerate?`<button class="follow-btn${following?' following':''}" data-follow="${escapeHtml(p.uid)}">${following?'Following':'Follow'}</button>`:''}${menu}</div>${p.bio?`<p class="status">${escapeHtml(p.bio)}</p>`:''}${p.favoriteThings?.length?`<div class="row wrap" style="margin-top:8px">${p.favoriteThings.map(t=>`<span class="pill">${escapeHtml(t)}</span>`).join('')}</div>`:''}</section><div id="safetyStatus" class="hint"></div>${blocked?'<div class="notice">You blocked this chef. Their recipes stay hidden in your Community feed.</div>':''}<div class="section-title"><h2>Public recipes</h2></div>${recipes}`;
 }
 
+// The feed uses the same full-photo card and over-photo controls as Android.
+function communityPostTemplate(r){
+  const id=escapeHtml(r.id),authorId=escapeHtml(r.authorId||'');
+  const authorName=r.authorName?.trim()||'Chef';
+  const liked=cloud.liked.has(r.id),bookmarked=cloud.bookmarks.has(r.id),following=cloud.following.has(r.authorId);
+  const hero=r.media?.find(m=>m.type!=='VIDEO')?.url;
+  const canModerate=cloud.user&&r.authorId&&cloud.user.uid!==r.authorId;
+  const menu=canModerate?`<div class="community-post-controls">
+    <button class="follow-btn${following?' following':''}" data-follow="${authorId}" aria-pressed="${following}">${following?'Following':'Follow'}</button>
+    <button class="kebab" data-menu-toggle="${id}" aria-label="More options">⋯</button>
+    <div class="card-menu" id="menu-${id}" hidden>
+      <button class="menu-item" data-message="${authorId}" data-message-name="${escapeHtml(authorName)}">✉ Message chef</button>
+      <button class="menu-item danger" data-report="${id}" data-report-uid="${authorId}">⚑ Report</button>
+      <button class="menu-item danger" data-block="${authorId}">🚫 Block chef</button>
+    </div>
+  </div>`:'';
+  return `<article class="community-card">
+    <div class="community-photo thumb-wrap" data-dbl-like="${id}">
+      ${hero?`<img class="community-thumb" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}" loading="lazy">`:'<div class="community-photo-placeholder" role="img" aria-label="Recipe without a photo">🍽️</div>'}
+    </div>
+    <div class="community-post-top">
+      <button class="community-chef" ${authorId?`data-open-chef="${authorId}"`: 'disabled'} aria-label="View ${escapeHtml(authorName)} profile">
+        <span class="avatar-circle" aria-hidden="true">${escapeHtml(authorName.charAt(0).toUpperCase())}</span>
+        <strong>${escapeHtml(authorName)}</strong>
+      </button>
+      ${menu}
+    </div>
+    <button class="community-caption" data-open-community-recipe="${id}" aria-label="Open ${escapeHtml(r.title)}">
+      <strong class="community-post-title">${escapeHtml(r.title)}</strong>
+      <span class="community-post-meta">${r.ingredients.length} ingredients · 💬 ${formatCount(r.commentCount||0)} · ${relativeTime(r.createdAt)}</span>
+      ${r.tags?.length?`<span class="community-post-tags">${r.tags.slice(0,3).map(t=>`#${escapeHtml(t)}`).join(' ')}</span>`:''}
+    </button>
+    <div class="community-actions" aria-label="Post actions">
+      <button class="action-btn${liked?' active':''}" data-like="${id}" aria-label="${liked?'Unlike':'Like'} · ${formatCount(r.likes||0)} likes" aria-pressed="${liked}"><span aria-hidden="true">${liked?'♥':'♡'} ${formatCount(r.likes||0)}</span></button>
+      <button class="action-btn" data-comments="${id}" aria-label="Comments · ${formatCount(r.commentCount||0)} comments">💬</button>
+      <button class="action-btn" data-share="${id}" aria-label="Share">📤</button>
+      <button class="action-btn${bookmarked?' saved':''}" data-bookmark="${id}" aria-label="${bookmarked?'Unsave':'Save'}" aria-pressed="${bookmarked}">${bookmarked?'★':'☆'}</button>
+    </div>
+  </article>`;
+}
+
 function communityTemplate(){
   if(openChefProfile)return chefProfileTemplate();
-  const cloudStatus=cloud.state==='ready'?'<span class="pill">Firebase connected</span>':cloud.state==='connecting'?'<span class="pill">Connecting…</span>':'<span class="pill">Local mode</span>';
   // Blocking has to actually hide the blocked chef's cooking, or the button is a
   // broken promise. Firestore rules already stop writes in both directions between
   // a blocked pair; this is the read half.
@@ -626,24 +759,26 @@ function communityTemplate(){
     :cloud.state==='connecting'?'Connecting to the real ChefVoice Community…'
     :dishTerm?'No dishes matched that search.'
     :'No public Community recipes were returned.';
-  const feed=searched.length?searched.map(r=>{
-    const liked=cloud.liked.has(r.id),bookmarked=cloud.bookmarks.has(r.id),following=cloud.following.has(r.authorId),self=cloud.user?.uid===r.authorId;
-    const hero=r.media?.find(m=>m.type!=='VIDEO')?.url;
-    const initial=(r.authorName||'C').trim().charAt(0).toUpperCase();
-    const canModerate=cloud.user&&!self;
-    const menu=canModerate?`<button class="kebab" data-menu-toggle="${escapeHtml(r.id)}" aria-label="More options">⋯</button><div class="card-menu" id="menu-${escapeHtml(r.id)}" hidden><button class="menu-item" data-message="${escapeHtml(r.authorId)}" data-message-name="${escapeHtml(r.authorName||'')}">✉ Message chef</button><button class="menu-item danger" data-report="${escapeHtml(r.id)}" data-report-uid="${escapeHtml(r.authorId)}">⚑ Report</button><button class="menu-item danger" data-block="${escapeHtml(r.authorId)}">🚫 Block chef</button></div>`:'';
-    return `<article class="card community-card"><div class="social-head"><span class="avatar-circle">${escapeHtml(initial)}</span><div class="chef-id"><strong>${escapeHtml(r.authorName||'Chef')}</strong><span class="meta">${r.ingredients.length} ingredients · ${r.steps.length} steps · ${relativeTime(r.createdAt)}</span></div>${canModerate?`<button class="follow-btn${following?' following':''}" data-follow="${escapeHtml(r.authorId)}">${following?'Following':'Follow'}</button>`:''}${menu}</div>${hero?`<div class="thumb-wrap"><img class="community-thumb" data-dbl-like="${r.id}" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}"></div>`:''}<h3>${escapeHtml(r.title)}</h3>${r.description?`<p class="status">${escapeHtml(r.description)}</p>`:''}${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="action-row"><button class="action-btn${liked?' active':''}" data-like="${r.id}">${liked?'♥':'♡'} ${formatCount(r.likes||0)}</button><button class="action-btn" data-comments="${r.id}">💬 ${formatCount(r.commentCount||0)}</button><button class="action-btn" data-share="${r.id}" aria-label="Share">📤</button><button class="action-btn action-spacer${bookmarked?' saved':''}" data-bookmark="${r.id}" aria-label="${bookmarked?'Saved':'Save'}">${bookmarked?'★':'☆'}</button></div></article>`;
-  }).join(''):`<div class="empty card">${emptyMessage}</div>`;
+  const feed=searched.length?searched.map(communityPostTemplate).join(''):`<div class="empty card">${emptyMessage}</div>`;
   const blockedNote=hiddenCount?`<div class="notice">${hiddenCount} recipe${hiddenCount===1?'':'s'} from chefs you blocked ${hiddenCount===1?'is':'are'} hidden. Manage blocked chefs from your Profile.</div>`:'';
   const searchResults=chefSearchResults.length
     ?`<div class="section-title"><h2>Chefs</h2><span class="count">${chefSearchResults.length} found</span></div>${chefSearchResults.map(p=>`<article class="card"><div class="row between"><div><strong>${escapeHtml(p.displayName)}</strong><p class="status">${escapeHtml(p.bio||'ChefVoice member')}</p></div><span class="pill">${p.followerCount} follower${p.followerCount===1?'':'s'}</span></div><button class="secondary" data-open-chef="${escapeHtml(p.uid)}">View chef</button></article>`).join('')}`
     :'';
-  const searchToggle=cloud.user?`<div class="row" style="margin:6px 2px 0"><button id="communitySearchToggle" class="secondary">${communitySearchOpen?'✕ Close search':'🔍 Search'}</button></div>`:'';
   const search=cloud.user&&communitySearchOpen
-    ?`<section class="card"><div class="row"><input id="chefSearch" class="grow" placeholder="Search chefs, dishes or #tags" value="${escapeHtml(chefSearchTerm)}"><button id="chefSearchBtn" class="secondary">Search</button></div>${chefSearchStatus?`<p class="hint">${escapeHtml(chefSearchStatus)}</p>`:''}</section>${searchResults}`
+    ?`<section id="communitySearchPanel" class="card"><div class="row"><input id="chefSearch" class="grow" aria-label="Search chefs, dishes or tags" placeholder="Search chefs, dishes or #tags" value="${escapeHtml(chefSearchTerm)}"><button id="chefSearchBtn" class="secondary">Search</button></div>${chefSearchStatus?`<p class="hint">${escapeHtml(chefSearchStatus)}</p>`:''}</section>${searchResults}`
     :'';
-  const modeToggle=`<div class="row" style="margin:10px 2px 0"><button class="${communityMode==='following'?'primary':'secondary'} grow" data-community-mode="following">Following</button><button class="${communityMode==='discover'?'primary':'secondary'} grow" data-community-mode="discover">Discover</button></div>`;
-  return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">ChefVoice Community</div><h1>Community</h1></section><div class="row between" style="margin:10px 2px"><strong>Community feed</strong>${cloudStatus}</div><div id="safetyStatus" class="hint"></div>${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${modeToggle}${searchToggle}${search}${blockedNote}${feed}`;
+  const modeToggle=`<div class="community-modes" aria-label="Community feed">
+    <button class="${communityMode==='following'?'primary':'secondary'}" data-community-mode="following" aria-pressed="${communityMode==='following'}">Following</button>
+    <button class="${communityMode==='discover'?'primary':'secondary'}" data-community-mode="discover" aria-pressed="${communityMode==='discover'}">Discover</button>
+  </div>`;
+  return `<section class="hero community-hero" style="--hero:url('../assets/community-hero.webp')">
+    <div class="community-banner-title"><div class="eyebrow">ChefVoice Community</div><h1>Community</h1></div>
+    <div class="community-banner-actions">
+      <button id="communitySearchToggle" class="community-banner-action" aria-label="${communitySearchOpen?'Close search':'Search'}" aria-expanded="${communitySearchOpen}">${communitySearchOpen?'✕':'🔍'}</button>
+      <button id="communityMessages" class="community-banner-action" aria-label="Messages"><span aria-hidden="true">✉</span><small id="communityMessagesBadge" class="community-badge" hidden aria-hidden="true"></small></button>
+      <button id="communityNotifications" class="community-banner-action" aria-label="Notifications"><span aria-hidden="true">🔔</span><small id="communityNotificationsBadge" class="community-badge" hidden aria-hidden="true"></small></button>
+    </div>
+  </section><div id="safetyStatus" class="hint" role="status"></div>${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${modeToggle}${search}${blockedNote}<div class="community-feed">${feed}</div>`;
 }
 function requireCommunitySignIn(){if(cloud.user)return true;nav('profile');return false;}
 function bindCommunity(){
@@ -686,10 +821,20 @@ function bindCommunity(){
 
   const searchToggleBtn=document.querySelector('#communitySearchToggle');
   if(searchToggleBtn)searchToggleBtn.onclick=()=>{
+    if(!requireCommunitySignIn())return;
     if(communitySearchOpen){chefSearchTerm='';chefSearchResults=[];chefSearchStatus='';}
     communitySearchOpen=!communitySearchOpen;
     render();
+    if(communitySearchOpen)document.querySelector('#chefSearch')?.focus();
   };
+  for(const [id,section] of [['communityMessages','messages'],['communityNotifications','activity']]){
+    const button=document.getElementById(id);
+    if(button)button.onclick=()=>{
+      if(!requireCommunitySignIn())return;
+      inboxSection=section;
+      nav('inbox');
+    };
+  }
   const searchBtn=document.querySelector('#chefSearchBtn');
   const searchBox=document.querySelector('#chefSearch');
   const runSearch=async()=>{
@@ -943,12 +1088,18 @@ function bindProfile(){
 const conversationUnread=c=>isConversationUnread(c,cloud.user?.uid,cloud.messageReads);
 const unreadCounts=()=>computeUnreadCounts(cloud.conversations,cloud.notifications,cloud.user?.uid,cloud.messageReads);
 function updateInboxBadge(){
-  const badge=document.querySelector('#inboxBadge');
-  if(!badge)return;
   const {messages,activity}=unreadCounts();
-  const total=messages+activity;
-  badge.hidden=total===0;
-  badge.textContent=total>99?'99+':String(total);
+  for(const [id,count,label] of [
+    ['inboxBadge',messages+activity,'Inbox'],
+    ['communityMessagesBadge',messages,'Messages'],
+    ['communityNotificationsBadge',activity,'Notifications']
+  ]){
+    const badge=document.getElementById(id);
+    if(!badge)continue;
+    badge.hidden=count===0;
+    badge.textContent=count>99?'99+':String(count);
+    badge.parentElement.setAttribute('aria-label',count?`${label}, ${count} unread`:label);
+  }
 }
 
 const otherUid=c=>otherParticipant(c,cloud.user?.uid);
@@ -1088,24 +1239,21 @@ async function shareRecipe(recipe){
   catch{safetyStatus(url);}
 }
 
-// ---- Live: viewing an Android host's broadcast -------------------------------
-// v1 is viewer-only -- PWA chefs watch an Android host, matching the milestone
-// the old placeholder copy already promised. Going Live from an iPhone is a
-// separate, not-yet-built step (it would need getUserMedia + a camera/mic
-// permission flow this tab does not have). The signaling itself is not new
-// protocol: it is the existing liveSessions/{id}/peers/{peerId} contract
-// Android's WebRtcLiveTransport.kt already implements, driven from the browser
-// by webrtc-live-viewer.js. firestore.rules needed no changes for this --
-// peerId is already required to equal request.auth.uid, so a signed-in PWA
-// viewer is already a first-class participant in the existing rules.
+// ---- Live: hosting and watching --------------------------------------------
+// Both roles use the existing Android-compatible session/peer/ICE contract.
 let liveSessions=[];
 let liveSessionsError='';
 let liveSearchTerm='';
 let openLiveSession=null;
 let liveViewerStatus='';
 let liveViewerController=null;
+let liveViewerShutdown=Promise.resolve();
 let liveComments=[];
 let liveReactionBusy=false;
+let liveHostController=null;
+let liveHostSession=null;
+let liveHostingNotice='';
+const liveHostDraft={title:'Live cooking',tags:'',camera:'environment'};
 
 function liveCardTemplate(session){
   const initial=(session.hostName||'C').trim().charAt(0).toUpperCase();
@@ -1121,12 +1269,13 @@ function liveTemplate(){
     ?filtered.map(liveCardTemplate).join('')
     :liveSessionsError?`<div class="notice">${escapeHtml(liveSessionsError)}</div>`
     :liveSessions.length?'<div class="empty card">No matching Lives. Try a different chef name or tag.</div>'
-    :'<div class="empty card">Nobody is live yet. When an Android chef starts cooking Live, it appears here.</div>';
+    :'<div class="empty card">Nobody is live yet. Start a Live and invite other chefs into your kitchen.</div>';
   const signInNote=cloud.user?'':'<div class="notice">Browse active Lives now. Sign in from Profile to watch, chat and react.</div>';
-  return `<section class="hero" style="--hero:url('../assets/live-hero.webp')"><div class="eyebrow">Live kitchen</div><h1>Watch chefs cook, live.</h1><p>Watching an Android host works today. Going Live from an iPhone is next.</p></section>${signInNote}${searchBox}${list}`;
+  return `<section class="hero" style="--hero:url('../assets/live-hero.webp')"><div class="eyebrow">Live kitchen</div><h1>Cook together, live.</h1><p>Share your kitchen or watch another chef cook.</p></section><button id="goLive" class="primary wide">🔴 Go Live</button>${liveHostingNotice?`<p class="notice" role="status">${escapeHtml(liveHostingNotice)}</p>`:''}${signInNote}${searchBox}${list}`;
 }
 
 function bindLive(){
+  document.querySelector('#goLive')?.addEventListener('click',openLiveHostSetup);
   const runSearch=()=>{liveSearchTerm=document.querySelector('#liveSearch').value;render();};
   document.querySelector('#liveSearchBtn')?.addEventListener('click',runSearch);
   document.querySelector('#liveSearch')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();runSearch();}});
@@ -1135,6 +1284,135 @@ function bindLive(){
     const session=liveSessions.find(s=>s.id===b.dataset.watchLive);
     if(session)openLiveRoom(session);
   });
+}
+
+function liveHostTemplate(){
+  return `<button id="backLive" class="ghost">← Back to Live</button>
+    <h2>Your live kitchen</h2>
+    <p class="hint">Preview your camera first. Keep this page open while broadcasting; leaving or locking your phone ends the Live.</p>
+    <fieldset id="liveHostSettings" class="live-host-settings stack">
+      <label class="field">Live title<input id="liveHostTitle" maxlength="120" value="${escapeHtml(liveHostDraft.title)}" placeholder="What are you cooking?"></label>
+      <label class="field">Tags<input id="liveHostTags" maxlength="240" value="${escapeHtml(liveHostDraft.tags)}" placeholder="#pasta #weeknight"></label>
+      <label class="field">Camera<select id="liveHostCamera"><option value="environment"${liveHostDraft.camera==='environment'?' selected':''}>Back camera</option><option value="user"${liveHostDraft.camera==='user'?' selected':''}>Front camera</option></select></label>
+      <button id="previewLiveHost" type="button" class="secondary">Enable camera &amp; microphone</button>
+    </fieldset>
+    <div class="live-video-wrap"><video id="liveHostVideo" class="live-video" playsinline autoplay muted hidden></video><div id="liveHostPlaceholder" class="live-video-placeholder">Your camera preview appears here</div></div>
+    <p id="liveHostStatus" class="status" role="status">Camera and microphone are off.</p>
+    <div class="row wrap live-host-controls">
+      <button id="startLiveHost" class="primary" disabled>Go Live</button>
+      <button id="muteLiveHost" class="secondary" aria-pressed="false" disabled>Mute mic</button>
+      <button id="endLiveHost" class="danger">Cancel</button>
+    </div>
+    <section id="liveHostActivity" hidden>
+      <h3 id="liveHostBroadcastTitle"></h3>
+      <p id="liveHostViewerCount" class="status">0 viewers connected</p>
+      <p>♥ <span id="liveHeartCount">0</span> · 🔥 <span id="liveFireCount">0</span> · 👏 <span id="liveClapCount">0</span></p>
+      <section class="card"><textarea id="liveCommentText" maxlength="500" aria-label="Live comment" placeholder="Say something to your viewers…"></textarea><button id="postLiveComment" class="primary wide">Send</button><div id="liveCommentStatus" class="hint"></div></section>
+      <div id="liveComments"></div>
+    </section>`;
+}
+
+function openLiveHostSetup(){
+  if(!requireCommunitySignIn())return;
+  if(capturing){liveHostingNotice='Finish your cooking recording before opening the Live camera.';render();return;}
+  let name;
+  try{name=requireProfileName();}catch(error){liveHostingNotice=error.message;render();return;}
+  closeLiveRoom();
+  liveHostingNotice='';
+  main.innerHTML=liveHostTemplate();
+  const controller=new LiveHostController({
+    hostUid:cloud.user.uid,hostName:name,
+    onStatus:message=>{if(liveHostController===controller)document.querySelector('#liveHostStatus')?.replaceChildren(document.createTextNode(message));},
+    onStream:stream=>{
+      if(liveHostController!==controller)return;
+      const video=document.querySelector('#liveHostVideo');
+      if(!video)return;
+      video.srcObject=stream;video.muted=true;video.hidden=!stream;
+      document.querySelector('#liveHostPlaceholder').hidden=Boolean(stream);
+      if(stream){
+        video.classList.toggle('mirrored',stream.getVideoTracks()[0]?.getSettings?.().facingMode==='user');
+        video.play().catch(()=>{if(video.isConnected)video.controls=true;});
+      }
+    },
+    onSession:session=>{
+      if(liveHostController!==controller)return;
+      const first=!liveHostSession;
+      liveHostSession=session;
+      document.querySelector('#liveHostSettings').hidden=true;
+      document.querySelector('#startLiveHost').hidden=true;
+      document.querySelector('#liveHostActivity').hidden=false;
+      document.querySelector('#endLiveHost').textContent='End Live';
+      document.querySelector('#liveHostBroadcastTitle').textContent=session.title;
+      for(const [id,key] of [['liveHeartCount','heartCount'],['liveFireCount','fireCount'],['liveClapCount','clapCount']])document.getElementById(id).textContent=formatCount(session[key]||0);
+      if(first){
+        bindLiveRoomChrome(session);
+        cloud.unsubLiveComments=cloud.api.observeLiveComments(session.id,items=>{
+          if(liveHostController===controller){liveComments=items;renderLiveComments();}
+        },()=>{if(liveHostController===controller)document.querySelector('#liveCommentStatus').textContent='Live comments could not load.';});
+      }
+    },
+    onViewerCount:count=>{if(liveHostController===controller)document.querySelector('#liveHostViewerCount').textContent=`${count} viewer${count===1?'':'s'} connected`;},
+    onStopped:message=>{
+      if(liveHostController!==controller)return;
+      liveHostingNotice=message;
+      closeLiveRoom();
+      if(currentTab==='live')render();
+    },
+    onEndError:message=>{
+      if(!liveHostController){liveHostingNotice=message;if(shouldRenderLiveList())render();}
+    }
+  });
+  liveHostController=controller;
+  const title=document.querySelector('#liveHostTitle'),tags=document.querySelector('#liveHostTags'),camera=document.querySelector('#liveHostCamera');
+  title.oninput=()=>{liveHostDraft.title=title.value;};
+  tags.oninput=()=>{liveHostDraft.tags=tags.value;};
+  const prepare=async()=>{
+    if(!['idle','preview'].includes(controller.phase))return;
+    document.querySelector('#previewLiveHost').disabled=true;
+    document.querySelector('#startLiveHost').disabled=true;
+    camera.disabled=true;
+    try{
+      const ready=await controller.prepare(liveHostDraft.camera);
+      if(liveHostController===controller&&ready){
+        document.querySelector('#startLiveHost').disabled=false;
+        document.querySelector('#muteLiveHost').disabled=false;
+        document.querySelector('#previewLiveHost').textContent='Refresh camera preview';
+      }
+    }catch(error){if(liveHostController===controller)document.querySelector('#liveHostStatus').textContent=error.message;}
+    finally{if(liveHostController===controller){document.querySelector('#previewLiveHost').disabled=false;camera.disabled=false;}}
+  };
+  camera.onchange=()=>{liveHostDraft.camera=camera.value;if(controller.phase==='preview')void prepare();};
+  document.querySelector('#previewLiveHost').onclick=prepare;
+  document.querySelector('#startLiveHost').onclick=async()=>{
+    if(controller.phase!=='preview')return;
+    document.querySelector('#startLiveHost').disabled=true;
+    document.querySelector('#liveHostSettings').disabled=true;
+    try{controller.hostName=requireProfileName();await controller.start(liveHostDraft.title,parseTagsInput(liveHostDraft.tags));}
+    catch(error){
+      if(liveHostController===controller){
+        document.querySelector('#liveHostStatus').textContent=error.message;
+        document.querySelector('#startLiveHost').disabled=false;
+        document.querySelector('#liveHostSettings').disabled=false;
+      }
+    }
+  };
+  document.querySelector('#muteLiveHost').onclick=event=>{
+    controller.setMuted(!controller.muted);
+    event.currentTarget.textContent=controller.muted?'Unmute mic':'Mute mic';
+    event.currentTarget.setAttribute('aria-pressed',String(controller.muted));
+  };
+  document.querySelector('#endLiveHost').onclick=()=>{
+    liveHostingNotice=controller.phase==='live'||controller.phase==='starting'?'Live ended. Camera and microphone are off.':'Preview closed. Camera and microphone are off.';
+    nav('live');
+  };
+  document.querySelector('#backLive').onclick=()=>history.back();
+  pushViewState();
+}
+
+function stopLiveHosting(){
+  const controller=liveHostController;
+  liveHostController=null;liveHostSession=null;
+  void controller?.stop();
 }
 
 function liveRoomTemplate(session){
@@ -1195,7 +1473,14 @@ function startLiveViewer(session){
     onStatus:message=>{liveViewerStatus=message;const el=document.querySelector('#liveViewerStatus');if(el)el.textContent=message;},
     onTrack:stream=>{const video=document.querySelector('#liveVideo');if(video){video.srcObject=stream;video.play().catch(()=>{});}}
   });
-  liveViewerController.start();
+  const controller=liveViewerController;
+  // A rapid leave/rejoin can reuse the same session/uid document path. Finish
+  // the previous cleanup before creating the replacement peer on that path.
+  liveViewerShutdown.then(()=>{
+    if(liveViewerController===controller)return controller.start();
+  }).catch(error=>{
+    if(liveViewerController===controller)controller.status(`Could not join Live: ${error?.message||'unknown error'}`);
+  });
 }
 
 function openLiveRoom(session){
@@ -1218,7 +1503,7 @@ function openLiveRoom(session){
     document.querySelector('#liveFireCount')?.replaceChildren(document.createTextNode(String(updated.fireCount)));
     document.querySelector('#liveClapCount')?.replaceChildren(document.createTextNode(String(updated.clapCount)));
     if(justEnded){
-      liveViewerController?.stop();liveViewerController=null;
+      stopLiveViewer();
       main.innerHTML=liveRoomTemplate(updated);
       bindLiveRoomChrome(updated);
       renderLiveComments();
@@ -1229,9 +1514,16 @@ function openLiveRoom(session){
   pushViewState();
 }
 
-function closeLiveRoom(){
-  try{liveViewerController?.stop();}catch{}
+function stopLiveViewer(){
+  const controller=liveViewerController;
   liveViewerController=null;
+  const stopped=controller?.stop();
+  liveViewerShutdown=Promise.all([liveViewerShutdown,stopped]).then(()=>{}).catch(()=>{});
+}
+
+function closeLiveRoom(){
+  stopLiveHosting();
+  stopLiveViewer();
   try{cloud.unsubLiveSessionDoc?.();}catch{}
   try{cloud.unsubLiveComments?.();}catch{}
   cloud.unsubLiveSessionDoc=null;cloud.unsubLiveComments=null;
@@ -1239,7 +1531,7 @@ function closeLiveRoom(){
 }
 
 function render(){
-  if(currentTab==='cook'){main.innerHTML=cookTemplate();bindCook();}
+  if(currentTab==='cook'){captureForm();main.innerHTML=cookTemplate();bindCook();}
   if(currentTab==='recipes'){main.innerHTML=recipesTemplate();bindRecipes();}
   if(currentTab==='community'){main.innerHTML=communityTemplate();bindCommunity();}
   if(currentTab==='inbox'){main.innerHTML=inboxTemplate();bindInbox();}
@@ -1249,8 +1541,19 @@ function render(){
   updateInboxBadge();
 }
 
+// A hidden iPhone PWA can suspend media and timers. End this broadcast rather
+// than leave a room advertised as live without a working camera.
+function stopHiddenLiveHost(){
+  if(!liveHostController)return;
+  liveHostingNotice='Live closed because you left the screen. Camera and microphone are off.';
+  closeLiveRoom();
+  if(currentTab==='live')render();
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopHiddenLiveHost();});
+window.addEventListener('pagehide',stopHiddenLiveHost);
+
 if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
-window.addEventListener('beforeunload',()=>{capture.close();try{liveViewerController?.stop();}catch{}for(const key of ['unsubAuth','unsubFeed','unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubComments','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread','unsubChefRecipes','unsubLiveSessions','unsubLiveSessionDoc','unsubLiveComments'])try{cloud[key]?.();}catch{}});
+window.addEventListener('beforeunload',()=>{stopLiveHosting();capture.close();try{liveViewerController?.stop();}catch{}for(const key of ['unsubAuth','unsubFeed','unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubComments','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread','unsubChefRecipes','unsubLiveSessions','unsubLiveSessionDoc','unsubLiveComments'])try{cloud[key]?.();}catch{}});
 window.addEventListener('popstate',e=>{restoreViewState(e.state);});
 // Closes any open chef "more options" menu on an outside click. A single
 // document-level listener, rather than one per card, since render() throws the

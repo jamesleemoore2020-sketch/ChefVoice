@@ -1,0 +1,22 @@
+/* Five-step Create flow; keep controls clear of the app tabs and safe area. */
+.cook-wizard{display:flex;flex-direction:column;min-height:calc(100dvh - 115px);padding-bottom:10px}
+.cook-progress{scroll-margin-top:90px;padding:6px 2px 12px;outline:none}
+.cook-progress p{font-size:.84rem;font-weight:800;margin:0 0 9px}
+.cook-progress progress{display:block;width:100%;height:5px;border:0;border-radius:99px;overflow:hidden;background:var(--line);accent-color:var(--orange)}
+.cook-progress progress::-webkit-progress-bar{background:var(--line);border-radius:99px}
+.cook-progress progress::-webkit-progress-value{background:var(--orange);border-radius:99px}
+.cook-progress progress::-moz-progress-bar{background:var(--orange);border-radius:99px}
+.cook-step{flex:1;min-width:0}
+.cook-step h2{font-size:1.35rem;margin:10px 0 6px}
+.cook-step h3{font-size:1.02rem;margin:0 0 8px}
+.cook-step .section-title h3{margin:0}
+.cook-step p,.cook-step li{overflow-wrap:anywhere;line-height:1.5}
+.cook-step li+li{margin-top:8px}
+.cook-step ul,.cook-step ol{padding-left:22px}
+.cook-step summary{font-weight:700;cursor:pointer;padding:4px 0}
+.cook-step-nav{position:sticky;bottom:calc(70px + env(safe-area-inset-bottom));z-index:15;display:flex;gap:10px;padding:12px 0;margin-top:16px;background:var(--paper);border-top:1px solid var(--line)}
+.cook-step-nav button{flex:1;min-width:0;border-radius:999px}
+.cook-wizard button:disabled{opacity:.5;cursor:default}
+.cook-wizard button:focus-visible,.cook-step summary:focus-visible{outline:3px solid var(--orange);outline-offset:3px}
+.cook-step input[type=file]{font-size:.85rem;margin-top:8px}
+@media(max-width:380px){.cook-step .ingredient{grid-template-columns:52px 62px minmax(0,1fr) 34px;gap:5px}.cook-step .ingredient .icon-btn{width:34px}.cook-step .ingredient input{font-size:.85rem;padding:9px 5px}}
