@@ -611,7 +611,7 @@ function bindCook(){
 
 function recipesTemplate(){
   const cloudNote=cloud.user?`<div class="quality">Signed in as ${escapeHtml(cloud.user.email||'ChefVoice member')}. Publishing now uses the verified ChefVoice Firebase project.</div>`:`<div class="notice">Local recipes stay private on this device. Sign in from Profile to publish to Community.</div>`;
-  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${recipes.length?recipes.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps · serves ${r.servings||2}</p>${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">Delete local</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>'}`;
+  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${recipes.length?recipes.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps · serves ${r.servings||2}</p>${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">${r.isPublic||r.authorId?'Delete':'Delete local'}</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>'}`;
 }
 async function publishLocalRecipe(id,button){
   const r=recipes.find(x=>x.id===id);if(!r||!cloud.api||!cloud.user)return;
@@ -644,12 +644,35 @@ function bindRecipes(){
   main.querySelectorAll('[data-unpublish]').forEach(b=>b.onclick=()=>unpublishLocalRecipe(b.dataset.unpublish,b));
   main.querySelectorAll('[data-delete-recipe]').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.deleteRecipe;const r=recipes.find(x=>x.id===id);
-    // ChefVoice Review can upload the original cooking audio to private Cloud Storage
-    // before this recipe is ever published (post-save Review, or the Cook wizard's
-    // capture-time Review, which reuses draftRecipeId as the saved recipe id) -- so an
-    // unpublished recipe that was reviewed can leave audio orphaned under this id.
-    // Best-effort cleanup only: it must never block or fail the local delete below.
-    if(r&&!r.isPublic&&r.sessionAudio?.stored&&cloud.api&&cloud.user)cloud.api.deleteChefVoiceRecipe(id).catch(()=>{});
+    const status=document.querySelector(`[data-recipe-status="${id}"]`);
+    // A recipe that is public now, or was ever published (Unpublish clears isPublic
+    // but never authorId), has a Firestore doc and possibly Storage media under this
+    // id -- mirrors Android's ChefAppState.deleteRecipe hasCloudCopy check. Deleting
+    // it for real requires the ownership-preflight-then-delete flow below; a plain
+    // local recipe was never in the cloud, so local cleanup alone is still correct.
+    if(r&&(r.isPublic||r.authorId)){
+      if(!cloud.api||!cloud.user){if(status)status.textContent='Sign in with the ChefVoice account that owns this recipe before deleting it.';return;}
+      if(!confirm('Delete this recipe from ChefVoice Community and this device? This cannot be undone.'))return;
+      b.disabled=true;if(status)status.textContent='Checking Community/cloud recipe…';
+      try{
+        const check=await cloud.api.inspectRecipeForMutation(id);
+        if(check.exists&&check.authorId&&check.authorId!==cloud.user.uid){
+          b.disabled=false;if(status)status.textContent='This recipe belongs to a different ChefVoice account, so it was not deleted.';
+          return;
+        }
+        if(check.exists){if(status)status.textContent='Deleting recipe from Community/cloud…';await cloud.api.deleteChefVoiceRecipe(id);}
+      }catch(e){
+        b.disabled=false;if(status)status.textContent=e?.message||'Could not verify or delete the cloud recipe. The copy on this device was kept.';
+        return;
+      }
+    }else if(r&&r.sessionAudio?.stored&&cloud.api&&cloud.user){
+      // ChefVoice Review can upload the original cooking audio to private Cloud
+      // Storage before this recipe is ever published (post-save Review, or the Cook
+      // wizard's capture-time Review, which reuses draftRecipeId as the saved recipe
+      // id) -- so a never-cloud-backed recipe that was reviewed can leave audio
+      // orphaned under this id. Best-effort only: must never block the local delete.
+      cloud.api.deleteChefVoiceRecipe(id).catch(()=>{});
+    }
     recipes=recipes.filter(x=>x.id!==id);saveRecipes(recipes);await deleteAudioBlob(id);await deleteRecipeMedia(r);render();
   });
 }

@@ -198,7 +198,6 @@ export async function unpublishRecipe(recipeId){
   const user=requireUser('Sign in first.');
   await updateDoc(doc(db,'recipes',recipeId),{isPublic:false,updatedAt:Date.now(),authorId:user.uid});
 }
-export async function deleteCloudRecipe(recipeId){assertWrites();requireUser('Sign in first.');await deleteDoc(doc(db,'recipes',recipeId));}
 
 export async function toggleLike(recipeId){
   assertWrites();
@@ -374,13 +373,26 @@ export async function transcribePrivateChefVoice(recipeId,audioBlob){
 }
 
 /**
+ * Read-only ownership/existence check before a destructive recipe mutation.
+ * Mirrors Android's FirebaseSocialRepository.inspectRecipeForMutation: lets a
+ * caller tell "this id never made it to the cloud" apart from "a cloud doc
+ * exists and belongs to someone else" before deleteChefVoiceRecipe runs.
+ */
+export async function inspectRecipeForMutation(recipeId){
+  requireUser('Sign in first.');
+  const snap=await getDoc(doc(db,'recipes',recipeId));
+  return snap.exists()?{exists:true,authorId:String(snap.data()?.authorId||'')}:{exists:false,authorId:''};
+}
+
+/**
  * Server-side cleanup counterpart to transcribePrivateChefVoice: deletes the
  * privateVoice/{uid}/{recipeId}/ and recipes/{uid}/{recipeId}/ Storage prefixes
  * (plus the Firestore doc/likes/comments, if any exist). Already idempotent and
  * safe to call for a recipe id with no Firestore doc -- deleteRecipeArtifacts
  * only conditionally deletes the doc, so this is also correct for a recipe that
- * was never published. Unlike deleteCloudRecipe (a raw client-side Firestore
- * delete with no Storage cleanup), this always reaches Cloud Storage.
+ * was never published. This is also the only way to remove the Firestore doc at
+ * all: firestore.rules sets `allow delete: if false` on recipes/{recipeId}, so a
+ * client can never delete it directly and must always go through this callable.
  */
 export async function deleteChefVoiceRecipe(recipeId){
   assertWrites();
