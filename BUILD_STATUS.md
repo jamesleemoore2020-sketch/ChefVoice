@@ -35,6 +35,17 @@
   instruction). PWA cache/package version 0.5.7, Android versionCode 69 /
   versionName 0.11.8. No rules/Functions/Live/App Check/billing changes. See
   `RUNON_TRANSCRIPT_DUPLICATION_0.5.7_0.11.8.md`.
+- Chased two more defects out of the same real ramen capture. A spoken "cook
+  for 2 minutes" never reached Recipe Details on the PWA: the parser had it
+  right all along, but a capture finished while the Recipe Details inputs were
+  mounted wrote the detected value only to `form`, and the next wizard
+  navigation read the still-empty input back over it. Android was unaffected
+  (Compose state, no DOM read-back). Separately, a plain present-tense "and
+  you let it cook for 2 minutes" bled into the last ingredient on both
+  platforms (`1 tsp Pepper, and you let it`, plus a phantom `1 tsp You let
+  it`) because the existing dangling-tail rule only covered "going to let
+  it". Android versionCode 70 / versionName 0.11.9. No rules/Functions/Live/
+  App Check/billing changes. See `COOK_TIME_AND_LET_IT_TAIL_0.11.9.md`.
 
 # Current handoff — 2026-09-15
 

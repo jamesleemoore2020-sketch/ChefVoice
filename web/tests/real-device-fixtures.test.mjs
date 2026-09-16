@@ -190,3 +190,29 @@ test('real nachos fixture keeps ingredient declarations out of method steps', ()
   assert.ok(!draft.steps.some((s) => s.toLowerCase().includes('need some')), `no method step may absorb an ingredient declaration, got: ${JSON.stringify(draft.steps)}`);
   assert.equal(draft.title, 'Nachos', 'title announcement is split across segments 0 and 1 by ASR -- must not run on into "One pack should feed..."');
 });
+
+// Real Android Chrome capture, 2026-09-16. A plain present-tense "and you let
+// it cook for 2 minutes" bled into the preceding ingredient name ("1 tsp
+// Pepper, and you let it") and, in the multi-segment form, also minted a
+// phantom ingredient that inherited that quantity ("1 tsp You let it").
+test('real top ramen capture does not bleed a plain "and you let it" clause into the last ingredient', () => {
+  const text = "So today we going to make my famous top ramen meal. What you going to need to start with is one top ramen, " +
+    "1 tsp of salt, 1 tsp of pepper, and you let it cook for 2 minutes, then it's finished.";
+
+  const draft = parseCookingSession([{ elapsedMs: 0, text }]);
+
+  assert.deepEqual(
+    draft.ingredients.map((i) => [i.quantity, i.unit, i.name]),
+    [
+      ['1', '', 'Top ramen'],
+      ['1', 'tsp', 'Salt'],
+      ['1', 'tsp', 'Pepper']
+    ]
+  );
+  assert.ok(
+    !draft.ingredients.some((i) => /let it/i.test(i.name)),
+    `no ingredient may keep a "let it" narration tail, got: ${JSON.stringify(draft.ingredients.map((i) => i.name))}`
+  );
+  assert.equal(draft.cookMinutes, 2, 'spoken "cook for 2 minutes" is the cook time');
+  assert.equal(draft.prepMinutes, null);
+});

@@ -107,5 +107,28 @@ check(get('#captureSecondPass').textContent.includes('used all'),'quota-exhauste
 next();fill('#title','Second pass draft');next();next();next();
 click('#saveRecipe');await tick();
 check(stored.some(r=>r.id===mintedDraftId&&r.title==='Second pass draft'),'save reuses the pre-save draft id');
+// A capture can be finished from any wizard step, so the Recipe Details inputs
+// may already be mounted when detection runs. Navigation re-reads those inputs
+// into `form`, so a detected value written only to state was wiped right back
+// out -- the chef saw an empty Cook min despite saying "cook for 2 minutes".
+const resetCook=()=>run("main.innerHTML='';form.title='';form.prepTime='';form.cookTime='';ingredients=[];steps=[];transcript=[];cookStep=0;capturing=false;captureBusy=false;audioBlob=null;render();");
+const spoken="Add one top ramen and one teaspoon of salt, then let it cook for 2 minutes.";
+resetCook();
+click('#captureBtn');permissionResolve();await tick();
+next();check(get('#cookTime').value==='','cook time starts empty on Recipe Details');
+run(`transcript.push({id:'d1',elapsedMs:0,text:${JSON.stringify(spoken)}})`);
+click('#finishCookCapture');await tick();
+check(get('#cookTime').value==='2','detected cook time reaches the mounted Recipe Details input');
+next();back();
+check(get('#cookTime').value==='2'&&run('form.cookTime')==='2','detected cook time survives navigation');
+// ...and a time the chef typed during that same capture is a manual edit that
+// detection must not overwrite.
+resetCook();
+click('#captureBtn');permissionResolve();await tick();
+next();fill('#cookTime','30');
+run(`transcript.push({id:'d2',elapsedMs:0,text:${JSON.stringify(spoken)}})`);
+click('#finishCookCapture');await tick();
+next();back();
+check(get('#cookTime').value==='30'&&run('form.cookTime')==='30','a manually typed cook time still wins over detection');
 console.log(`${checks} Cook wizard DOM checks passed.`);
 dom.window.close();

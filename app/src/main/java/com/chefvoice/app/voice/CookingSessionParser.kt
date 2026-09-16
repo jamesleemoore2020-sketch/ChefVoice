@@ -679,8 +679,10 @@ object CookingSessionParser {
             // "and": "...salt and you're going to let it [simmer]" -- the verb itself
             // often lands in its own clause via the action-word boundary above,
             // leaving this shell with nothing left to match on. Strip it as its own
-            // dangling unit.
-            .replace(Regex("(?i)\\s+and\\s+(?:(?:i|you|we)(?:'m|'re| am| are)?\\s+)?(?:going\\s+to|gonna)\\s+let\\s+(?:it|them)\\s*$"), "")
+            // dangling unit. The "going to"/"gonna" is optional because chefs equally
+            // say the plain present tense, "...1 tsp of pepper, and you let it cook
+            // for 2 minutes".
+            .replace(Regex("(?i)\\s+and\\s+(?:(?:i|you|we)(?:'m|'re| am| are)?\\s+)?(?:(?:going\\s+to|gonna)\\s+)?let\\s+(?:it|them)\\s*$"), "")
             // "salt or" said just before a segment break leaves a dangling "or" with
             // its second option in the next segment; never a real ingredient tail.
             .replace(Regex("(?i)\\s+or\\s*$"), "")

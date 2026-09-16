@@ -58,7 +58,7 @@ class GoldenCookingCorpusTest {
             }
         }
 
-        assertEquals("Golden corpus row count changed unexpectedly", 58, rows.size)
+        assertEquals("Golden corpus row count changed unexpectedly", 59, rows.size)
         assertTrue("Android golden corpus failures:\n${failures.joinToString("\n")}", failures.isEmpty())
     }
 
@@ -447,5 +447,31 @@ class GoldenCookingCorpusTest {
             "got: ${draft.ingredients}",
             draft.ingredients.none { Regex("(?i)going to let it").containsMatchIn(it.name) }
         )
+    }
+
+    // Real Android Chrome capture, 2026-09-16. A plain present-tense "and you let
+    // it cook for 2 minutes" bled into the preceding ingredient name ("1 tsp
+    // Pepper, and you let it"); the earlier rule only covered "going to let it".
+    @Test
+    fun realTopRamenCaptureDoesNotBleedPlainLetItClauseIntoLastIngredient() {
+        val text = "So today we going to make my famous top ramen meal. What you going to need to start with is one top ramen, " +
+            "1 tsp of salt, 1 tsp of pepper, and you let it cook for 2 minutes, then it's finished."
+
+        val draft = CookingSessionParser.parse(listOf(TranscriptSegment(elapsedMs = 0L, text = text)))
+
+        assertEquals(
+            listOf(
+                listOf("1", "", "Top ramen"),
+                listOf("1", "tsp", "Salt"),
+                listOf("1", "tsp", "Pepper")
+            ),
+            draft.ingredients.map { listOf(it.quantity, it.unit, it.name) }
+        )
+        assertTrue(
+            "got: ${draft.ingredients}",
+            draft.ingredients.none { Regex("(?i)let it").containsMatchIn(it.name) }
+        )
+        assertEquals(2, draft.cookMinutes)
+        assertEquals(null, draft.prepMinutes)
     }
 }

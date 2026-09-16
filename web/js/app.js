@@ -530,11 +530,18 @@ function renderCookDynamic(){renderCaptureState();renderCaptureSecondPass();rend
 // parser detected in this capture -- never overwrites a manual edit, and a
 // field the parser found no evidence for (prepMinutes/cookMinutes/title all
 // stay empty/'' when unset) is simply left for the chef to type, same as always.
+// The chef can finish a capture from any wizard step, so the Recipe Details
+// inputs may already be mounted. captureForm() first, so anything typed into
+// them during the capture counts as a manual edit; write the detected values
+// back into them after, because the next navigation re-reads those inputs into
+// `form` and would otherwise wipe the detection right back out.
 function applyDetectedRecipeMeta(draft){
+  captureForm();
   const notes=[];
   if(draft.title&&!form.title.trim()){form.title=draft.title;notes.push(`title "${draft.title}"`);}
   if(draft.prepMinutes!=null&&!form.prepTime){form.prepTime=String(draft.prepMinutes);notes.push(`${draft.prepMinutes}m prep`);}
   if(draft.cookMinutes!=null&&!form.cookTime){form.cookTime=String(draft.cookMinutes);notes.push(`${draft.cookMinutes}m cook`);}
+  for(const key of ['title','prepTime','cookTime']){const input=document.getElementById(key);if(input)input.value=form[key];}
   return notes.length?` Detected ${notes.join(', ')} -- review in Recipe Details.`:'';
 }
 
