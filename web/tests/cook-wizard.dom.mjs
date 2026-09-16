@@ -7,15 +7,29 @@ import vm from 'node:vm';
 import {parseIngredient} from '../js/ingredient-parser.js';
 import {parseCookingSession,mergeDraft} from '../js/cooking-session-parser.js';
 import {parseTagsInput} from '../js/tag-utils.js';
+import {applySuggestion,applyMethodSuggestion,fromCloudTranscript} from '../js/second-pass-reviewer.js';
+import {secondPassRemaining,secondPassMonthlyLimit,recordSecondPassUse,PaywallTrigger} from '../js/entitlement.js';
+// entitlement.js's monthly quota bookkeeping reads/writes the browser localStorage
+// global, which plain Node does not provide; a tiny in-memory stand-in lets that
+// real code run as written instead of being re-mocked here.
+if(typeof globalThis.localStorage==='undefined'){
+  const store=new Map();
+  globalThis.localStorage={getItem:k=>store.has(k)?store.get(k):null,setItem:(k,v)=>store.set(k,String(v)),removeItem:k=>store.delete(k)};
+}
 const require=createRequire(import.meta.url);
 const {JSDOM}=require(process.env.COOK_TEST_MODULES?`${process.env.COOK_TEST_MODULES}/jsdom`:'jsdom');
 const source=readFileSync(new URL('../js/app.js',import.meta.url),'utf8');
 const dom=new JSDOM('<main id="main"></main>',{url:'http://localhost',runScripts:'outside-only'});
 const w=dom.window;const document=w.document;w.HTMLElement.prototype.scrollIntoView=()=>{};
 let stored=[];let mediaWrites=0;let voiceWrites=0;let saveFails=false;let starts=0;let stops=0;let permissionResolve;
+let transcribeCalls=[];let transcribeResult=null;let paywallCalls=[];let secondPassAcceptedCalls=[];
 Object.assign(w,{parseIngredient,parseCookingSession,mergeDraft,parseTagsInput,structuredClone,
+  applySuggestion,applyMethodSuggestion,fromCloudTranscript,secondPassRemaining,secondPassMonthlyLimit,recordSecondPassUse,PaywallTrigger,
+  isPro:()=>false,safetyStatus:()=>{},showPaywall:t=>{paywallCalls.push(t)},
+  cloud:{user:null,entitlement:null,api:{transcribePrivateChefVoice:async(id,blob)=>{transcribeCalls.push({id,blob});return transcribeResult;}}},
   capture:{start:async()=>{starts++;await new Promise(resolve=>permissionResolve=resolve)},stop:async()=>{stops++;return {audioBlob:new Blob(['voice'])}}},
-  saveAudioBlob:async()=>{voiceWrites++;return {stored:true}},saveMediaBlob:async()=>{mediaWrites++;return {stored:true}},saveRecipes:x=>{if(saveFails)throw Error('Storage full');stored=x;},ChefAnalytics:{recipeCaptureStarted(){},recipeCompleted(){}}
+  saveAudioBlob:async()=>{voiceWrites++;return {stored:true}},saveMediaBlob:async()=>{mediaWrites++;return {stored:true}},saveRecipes:x=>{if(saveFails)throw Error('Storage full');stored=x;},
+  ChefAnalytics:{recipeCaptureStarted(){},recipeCompleted(){},secondPassOpened(){},secondPassAccepted(k){secondPassAcceptedCalls.push(k)},KIND_INGREDIENT:'ingredient',KIND_METHOD:'method'}
 });
 w.URL.createObjectURL=()=> 'blob:test';w.URL.revokeObjectURL=()=>{};
 const initial=source.slice(source.indexOf('let ingredients=[];'),source.indexOf('const cloud={'));
@@ -51,5 +65,47 @@ const converters=firebase.slice(firebase.indexOf('function toCloudMap('),firebas
 const cloudContext=vm.createContext({crypto:{randomUUID:()=> 'test-id'}});vm.runInContext(converters,cloudContext);cloudContext.recipe=stored[0];
 check(vm.runInContext('normalizeCloudRecipe(recipe.id,toCloudMap({...recipe,prepTimeMinutes:15,cookTimeMinutes:25})).cookTimeMinutes',cloudContext)===25,'cloud conversion retains time metadata');
 check(vm.runInContext('toCloudMap({...recipe,prepTimeMinutes:-5,cookTimeMinutes:2.7}).prepTimeMinutes===0 && toCloudMap({...recipe,cookTimeMinutes:2.7}).cookTimeMinutes===2',cloudContext),'cloud times meet integer/non-negative rules');
+// Second Pass can now run against the just-recorded draft before the recipe is
+// ever saved, prefilling Ingredients/Method instead of the chef re-typing them.
+back();back();back();back();
+run("ingredients=[];steps=[];audioBlob=new Blob(['voice']);draftRecipeId='';captureSecondPass={busy:false,message:'',result:null};cloud.user=null;renderCookDynamic();");
+check(get('#cookProgress').textContent.includes('Step 1 of 5'),'back at Capture for the pre-save review scenario');
+check(get('#captureSecondPass').textContent.includes(`${secondPassRemaining(false)} of ${secondPassMonthlyLimit(false)} reviews left`),'capture review shows the free quota');
+click('#runCaptureSecondPass');
+check(run("currentTab")==='profile','signed-out capture review redirects to sign in');
+check(transcribeCalls.length===0,'no upload attempted while signed out');
+run("nav('cook')");run("cloud.user={uid:'chef-1'}");
+transcribeResult={transcript:'Add two cups of flour. Stir the batter well.',segments:['Add two cups of flour.','Stir the batter well.'],provider:'google-cloud-speech-v2',model:'chirp_3'};
+click('#runCaptureSecondPass');await tick();
+const mintedDraftId=run("draftRecipeId");
+check(!!mintedDraftId,'a draft id is minted for the private upload');
+check(transcribeCalls.length===1&&transcribeCalls[0].id===mintedDraftId,'audio uploaded under the minted draft id');
+check(!!get('#closeCaptureSecondPass'),'review result replaces the run button');
+check(!get('#captureSecondPass').textContent.includes('reviews left'),'quota card is replaced by results');
+click('[data-accept-capture-ingredient]');
+check(run("ingredients.some(i=>i.name.toLowerCase().includes('flour'))"),'accepted ingredient suggestion fills the draft');
+check(secondPassAcceptedCalls.includes('ingredient'),'ingredient acceptance is tracked');
+// "Add two cups of flour" is itself a valid method step as well as an ingredient
+// declaration, so more than one card can offer a method suggestion here -- find
+// the one that actually adds the missing "stir" step rather than assuming order.
+const batterButton=[...document.querySelectorAll('[data-accept-capture-method]')].find(b=>b.closest('article').textContent.toLowerCase().includes('batter'));
+assert.ok(batterButton,'a method suggestion for the batter step exists');
+batterButton.click();
+check(run("steps.some(s=>s.toLowerCase().includes('batter'))"),'accepted method suggestion fills the draft');
+check(secondPassAcceptedCalls.includes('method'),'method acceptance is tracked');
+click('#closeCaptureSecondPass');
+check(secondPassRemaining(false)===secondPassMonthlyLimit(false)-1,'a successful capture-time review counts against the monthly quota');
+// Exhausting the quota blocks another run and raises the same paywall as the
+// saved-recipe review, without spending another upload.
+run("recordSecondPassUse();captureSecondPass={busy:false,message:'',result:null};renderCookDynamic();");
+click('#runCaptureSecondPass');
+check(transcribeCalls.length===1,'no upload attempted once the monthly quota is used up');
+check(paywallCalls.includes(PaywallTrigger.SECOND_PASS),'quota exhaustion raises the Second Pass paywall');
+check(get('#captureSecondPass').textContent.includes('used all'),'quota-exhausted message is shown inline');
+// Saving reuses the same draft id, so the already-uploaded private audio stays
+// attached to the saved recipe instead of being orphaned under a new id.
+next();fill('#title','Second pass draft');next();next();next();
+click('#saveRecipe');await tick();
+check(stored.some(r=>r.id===mintedDraftId&&r.title==='Second pass draft'),'save reuses the pre-save draft id');
 console.log(`${checks} Cook wizard DOM checks passed.`);
 dom.window.close();

@@ -1,3 +1,20 @@
+# Current handoff — 2026-09-15
+
+- The five-patch stack described in the entries below (PWA Live viewer
+  0.4.1, PWA Go Live hosting 0.5.0, Cook wizard 0.5.1, Android Live JNI keep
+  fix 0.11.5, Community layout parity 0.11.6 / code 67) is committed and
+  pushed: `80652e4` on `claude/chefvoice-2026-09-11-handoff-be3999`. Android
+  `:app:testDebugUnitTest` is green. Play's acceptance of the code 67 upload
+  is still unconfirmed -- nothing in this session re-checked the Play Console.
+- New on top of that stack: the Cook wizard's Capture step can now run
+  ChefVoice Review (Second Pass) against the just-recorded audio before the
+  recipe is saved, prefilling Ingredients/Method instead of the chef
+  re-typing them by hand. PWA cache/package version 0.5.2. See
+  `PWA_CAPTURE_SECOND_PASS_0.5.2.md`.
+- See `HANDOFF_2026-09-14.md`, `PWA_GO_LIVE_0.5.0.md` and
+  `PWA_CAPTURE_SECOND_PASS_0.5.2.md`. Older entries below describe their
+  status at the time and are superseded by this update.
+
 # Current handoff — 2026-09-14
 
 - Android Live 0.11.5 / 65 and PWA viewer 0.4.1 were confirmed working by James.

@@ -39,6 +39,12 @@ let audioBlob=null;let audioUrl='';let capturing=false;let media=[];
 const form={title:'',description:'',servings:'2',tags:'',prepTime:'',cookTime:''};
 const cookStepLabels=['Capture','Recipe Details','Ingredients/Method','Media','Review'];
 let cookStep=0;let captureBusy=false;let savingRecipe=false;
+// A stable id for this in-progress draft's private audio, minted on first Second
+// Pass use during Capture (before the recipe itself exists) and reused as the
+// real recipe id on save, so the uploaded privateVoice/ object stays attached to
+// the recipe it was reviewed for -- see privateRecipeOwnedBy in storage.rules.
+let draftRecipeId='';
+let captureSecondPass={busy:false,message:'',result:null};
 const cookEditors={manualIngredient:'',manualStep:'',transcriptEditor:null};
 let mediaStatus='';let recipeSaveError='';
 const cloud={
@@ -328,7 +334,7 @@ function cookTemplate(){
 
 function cookStepTemplate(){
   switch(cookStep){
-    case 0:return `<h2>Create recipe</h2><p class="status">Cook, talk, and let ChefVoice build the first draft while keeping the creator’s real voice.</p><section id="captureCard"></section>`;
+    case 0:return `<h2>Create recipe</h2><p class="status">Cook, talk, and let ChefVoice build the first draft while keeping the creator’s real voice.</p><section id="captureCard"></section><section id="captureSecondPass"></section>`;
     case 1:return `<h2>Recipe Details</h2><section class="card stack">
       <div class="field"><label for="title">Recipe name</label><input id="title" value="${escapeHtml(form.title)}" placeholder="Sunday tomato pasta"></div>
       <div class="field"><label for="description">Description / chef note</label><textarea id="description" placeholder="What makes this recipe yours?">${escapeHtml(form.description)}</textarea></div>
@@ -348,7 +354,7 @@ function cookStepTemplate(){
   }
 }
 
-function canSaveRecipe(){return !!form.title.trim()&&ingredients.some(i=>i.name.trim())&&!capturing&&!captureBusy&&!savingRecipe;}
+function canSaveRecipe(){return !!form.title.trim()&&ingredients.some(i=>i.name.trim())&&!capturing&&!captureBusy&&!captureSecondPass.busy&&!savingRecipe;}
 function renderRecipeReview(){
   const el=document.querySelector('#recipeReview');if(!el)return;
   const photos=media.filter(m=>m.type.startsWith('image/')).length;
@@ -361,7 +367,7 @@ function renderRecipeReview(){
 }
 function renderCookSaveState(){
   const save=document.querySelector('#saveRecipe');if(save){save.disabled=!canSaveRecipe();save.textContent=savingRecipe?'Saving…':'Save recipe';}
-  const hint=document.querySelector('#recipeSaveHint');if(hint)hint.textContent=capturing||captureBusy?'Finish cooking capture before saving.':!form.title.trim()?'Add a recipe name before saving.':!ingredients.some(i=>i.name.trim())?'Add at least one ingredient before saving.':'Your recipe will be saved privately on this device.';
+  const hint=document.querySelector('#recipeSaveHint');if(hint)hint.textContent=capturing||captureBusy?'Finish cooking capture before saving.':captureSecondPass.busy?'Finish ChefVoice Review before saving.':!form.title.trim()?'Add a recipe name before saving.':!ingredients.some(i=>i.name.trim())?'Add at least one ingredient before saving.':'Your recipe will be saved privately on this device.';
 }
 function renderDraftVoice(){
   const el=document.querySelector('#draftVoice');if(!el)return;
@@ -390,6 +396,110 @@ function renderCapture(){
   el.innerHTML=`<div class="card capture-card"><div class="capture-head"><div class="capture-title">${capturing?'<span class="live-dot"></span>LIVE COOKING CAPTURE':'🎙 Cook & capture'}</div>${capturing?'<span class="pill">Listening</span>':''}</div><p class="status">${escapeHtml(captureStatus)}</p><p class="hint">Say things like “add two teaspoons of salt,” “half a teaspoon each of salt and pepper,” or “actually make that three cups.” ChefVoice keeps measurement evidence when recognition changes its mind.</p>${live?`<div class="transcript">${transcript.slice(-6).map(s=>`<div class="transcript-line"><time>${fmt(s.elapsedMs)}</time>${escapeHtml(s.text)}</div>`).join('')}${livePartial?`<div class="transcript-line partial">… ${escapeHtml(livePartial)}</div>`:''}</div>`:''}<div class="quality">Original microphone audio is preserved independently of the ingredient parser.</div><button id="captureBtn" class="primary wide" style="margin-top:12px" ${captureBusy?'disabled':''}>${captureBusy?'Please wait…':capturing?'⏹ Finish & build recipe':'🎙 Start cooking capture'}</button></div>`;
   document.querySelector('#captureBtn')?.addEventListener('click',toggleCapture);
 }
+// ---- Second Pass on the just-recorded draft (before save) -------------------
+// Same explicit opt-in review as the saved-recipe "ChefVoice Review" above, run
+// against the in-memory draft instead of a persisted recipe: it diffs the cloud
+// re-transcription against whatever Capture already parsed and lets the chef pull
+// suggestions straight into the wizard's ingredients/steps, rather than typing
+// corrections by hand once they reach Ingredients/Method. Recipe Details (title,
+// servings, prep/cook time, etc.) stay manual -- Second Pass only ever classifies
+// ingredient and method text, never durations, so there is nothing to prefill there.
+function captureSecondPassTemplate(){
+  if(!audioBlob?.size||capturing||captureBusy)return '';
+  const pro=isPro();
+  const remaining=secondPassRemaining(pro);
+  const limit=secondPassMonthlyLimit(pro);
+  if(!captureSecondPass.result){
+    return `<section class="card"><h2>ChefVoice Review</h2><p class="hint">Re-transcribes this cooking audio in the cloud right now, before you save, so a cleaner draft can fill in Ingredients/Method for you. Nothing changes until you accept a suggestion.</p><p class="status">${remaining} of ${limit} reviews left this month.</p><button id="runCaptureSecondPass" class="secondary wide"${captureSecondPass.busy?' disabled':''}>${captureSecondPass.busy?'Running…':'Run ChefVoice Review'}</button>${captureSecondPass.message?`<p class="hint">${escapeHtml(captureSecondPass.message)}</p>`:''}</section>`;
+  }
+  const result=captureSecondPass.result;
+  const card=(issue,kind)=>{
+    const suggestion=kind==='ingredient'
+      ?(issue.suggested?[issue.suggested.quantity,issue.suggested.unit,issue.suggested.name].filter(Boolean).join(' '):'')
+      :(issue.suggestedStep||'');
+    const canApply=kind==='ingredient'?issue.type!=='live-only-low-confidence':issue.type!=='live-only-step';
+    return `<article class="card"><div class="row between"><strong>${escapeHtml(issue.title)}</strong><span class="pill">${Math.round(issue.confidence*100)}%</span></div><p class="status">${escapeHtml(issue.detail)}</p>${canApply?`<div class="row wrap"><button class="secondary" data-accept-capture-${kind}="${escapeHtml(issue.id)}">${issue.type.startsWith('remove')?'Remove':'Use second pass'}</button><button class="ghost" data-dismiss-capture-issue="${escapeHtml(issue.id)}">Keep current</button></div>`:''}${suggestion?`<p class="hint">Suggested: ${escapeHtml(suggestion)}</p>`:''}</article>`;
+  };
+  const issues=[...result.issues.map(i=>card(i,'ingredient')),...result.methodIssues.map(i=>card(i,'method'))].join('');
+  return `<section class="card"><h2>ChefVoice Review</h2><p class="status">${result.confirmedCount+result.methodConfirmedCount} confirmed · ${result.issues.length+result.methodIssues.length} to review.</p><p class="hint">Provider: ${escapeHtml(result.provider)} · ${escapeHtml(result.model)}. Your original audio is unchanged.</p><button id="closeCaptureSecondPass" class="ghost wide">Close review</button>${captureSecondPass.message?`<p class="hint">${escapeHtml(captureSecondPass.message)}</p>`:''}</section>${issues||'<div class="empty card">The second pass agreed with everything. Nothing to review.</div>'}<section class="card"><h3>Second pass transcript</h3><p class="hint">${escapeHtml(result.transcript||'No transcript returned.')}</p></section>`;
+}
+function renderCaptureSecondPass(){
+  const el=document.querySelector('#captureSecondPass');if(!el)return;
+  el.innerHTML=captureSecondPassTemplate();
+  bindCaptureSecondPass();
+}
+function rebuildCaptureSecondPass(){
+  captureSecondPass.result=fromCloudTranscript({
+    liveIngredients:ingredients,
+    liveSteps:steps,
+    transcript:captureSecondPass.result.transcript,
+    rawSegments:captureSecondPass.result.rawSegments||[],
+    provider:captureSecondPass.result.provider,
+    model:captureSecondPass.result.model
+  });
+  captureSecondPass.message='Applied. Ingredients/Method updated below.';
+  renderCookDynamic();
+}
+function bindCaptureSecondPass(){
+  const run=document.querySelector('#runCaptureSecondPass');
+  if(run)run.onclick=runCaptureSecondPass;
+  const close=document.querySelector('#closeCaptureSecondPass');
+  if(close)close.onclick=()=>{captureSecondPass={busy:false,message:'',result:null};renderCookDynamic();};
+  main.querySelectorAll('[data-accept-capture-ingredient]').forEach(b=>b.onclick=()=>{
+    const issue=captureSecondPass.result.issues.find(i=>i.id===b.dataset.acceptCaptureIngredient);
+    if(!issue)return;
+    ingredients=applySuggestion(ingredients,issue);
+    ChefAnalytics.secondPassAccepted(ChefAnalytics.KIND_INGREDIENT);
+    rebuildCaptureSecondPass();
+  });
+  main.querySelectorAll('[data-accept-capture-method]').forEach(b=>b.onclick=()=>{
+    const issue=captureSecondPass.result.methodIssues.find(i=>i.id===b.dataset.acceptCaptureMethod);
+    if(!issue)return;
+    steps=applyMethodSuggestion(steps,issue);
+    ChefAnalytics.secondPassAccepted(ChefAnalytics.KIND_METHOD);
+    rebuildCaptureSecondPass();
+  });
+  main.querySelectorAll('[data-dismiss-capture-issue]').forEach(b=>b.onclick=()=>{
+    captureSecondPass.result={
+      ...captureSecondPass.result,
+      issues:captureSecondPass.result.issues.filter(i=>i.id!==b.dataset.dismissCaptureIssue),
+      methodIssues:captureSecondPass.result.methodIssues.filter(i=>i.id!==b.dataset.dismissCaptureIssue)
+    };
+    renderCookDynamic();
+  });
+}
+async function runCaptureSecondPass(){
+  if(!cloud.user){safetyStatus('Sign in to run ChefVoice Review.');nav('profile');return;}
+  const pro=isPro();
+  if(secondPassRemaining(pro)<=0){
+    captureSecondPass.message=`You have used all ${secondPassMonthlyLimit(pro)} ChefVoice Reviews this month.`;
+    showPaywall(PaywallTrigger.SECOND_PASS);
+    renderCookDynamic();
+    return;
+  }
+  if(!draftRecipeId)draftRecipeId=crypto.randomUUID();
+  captureSecondPass={busy:true,message:'Uploading the private original audio and running Chirp 3. This can take a few minutes.',result:null};
+  renderCookDynamic();
+  try{
+    const cloudResult=await cloud.api.transcribePrivateChefVoice(draftRecipeId,audioBlob);
+    // Counted only on success: a failed review must not burn an allowance.
+    recordSecondPassUse();
+    ChefAnalytics.secondPassOpened();
+    const result=fromCloudTranscript({
+      liveIngredients:ingredients,
+      liveSteps:steps,
+      transcript:cloudResult.transcript,
+      rawSegments:cloudResult.segments,
+      provider:cloudResult.provider,
+      model:cloudResult.model
+    });
+    result.rawSegments=cloudResult.segments;
+    captureSecondPass={busy:false,message:'',result};
+  }catch(e){
+    captureSecondPass={busy:false,message:e?.message||'ChefVoice Review could not finish. Your local recipe and audio are unchanged.',result:null};
+  }
+  renderCookDynamic();
+}
 function renderIngredients(){
   const el=document.querySelector('#ingredientList');if(!el)return;
   document.querySelector('#ingredientCount').textContent=`${ingredients.length} detected`;
@@ -414,7 +524,7 @@ function renderMedia(){
     renderMedia();
   });
 }
-function renderCookDynamic(){renderCaptureState();renderIngredients();renderSteps();renderMedia();renderDraftVoice();renderRecipeReview();}
+function renderCookDynamic(){renderCaptureState();renderCaptureSecondPass();renderIngredients();renderSteps();renderMedia();renderDraftVoice();renderRecipeReview();}
 
 async function toggleCapture(){
   if(captureBusy||savingRecipe)return;
@@ -432,7 +542,7 @@ async function toggleCapture(){
   }else{
     if(isIOS&&speechNeedsReset){captureForm();sessionStorage.setItem('chefvoice.capture.recovery',JSON.stringify({form,ingredients,steps,transcript}));location.reload();return;}
     try{
-      transcript=[];livePartial='';audioBlob=null;if(audioUrl)URL.revokeObjectURL(audioUrl);audioUrl='';voiceEngineUsed=true;
+      transcript=[];livePartial='';audioBlob=null;if(audioUrl)URL.revokeObjectURL(audioUrl);audioUrl='';voiceEngineUsed=true;captureSecondPass={busy:false,message:'',result:null};
       await capture.start();
       capturing=true;
       // Only once capture is actually running: a denied microphone permission or a
@@ -484,7 +594,7 @@ function bindCook(){
     captureForm();if(!canSaveRecipe())return;
     savingRecipe=true;recipeSaveError='';renderCookSaveState();
     try{
-    const recipeId=crypto.randomUUID();
+    const recipeId=draftRecipeId||crypto.randomUUID();
     const recipe={id:recipeId,title:form.title.trim()||'Untitled recipe',description:form.description.trim(),servings:Math.max(1,Number(form.servings)||2),prepTimeMinutes:Number(form.prepTime)||0,cookTimeMinutes:Number(form.cookTime)||0,ingredients:structuredClone(ingredients),steps:[...steps],transcript:structuredClone(transcript),createdAt:Date.now(),updatedAt:Date.now(),isPublic:false,media:[],tags:parseTagsInput(form.tags)};
     if(audioBlob?.size){try{recipe.sessionAudio=await saveAudioBlob(recipe.id,audioBlob);}catch(e){recipe.audioWarning=e.message;}}
     for(const item of media){try{await saveMediaBlob(recipe.id,item.id,item.file);recipe.media.push({id:item.id,name:item.name,type:item.type,size:item.file.size,stored:true});}catch(e){recipe.mediaWarning=e.message;}}
@@ -493,7 +603,7 @@ function bindCook(){
     if(audioUrl)URL.revokeObjectURL(audioUrl);
     // Only a brand-new recipe is a completion. Edits and publishes are not.
     ChefAnalytics.recipeCompleted();
-    captureStatus='Recipe saved on this device.';form.title='';form.description='';form.servings='2';form.tags='';ingredients=[];steps=[];transcript=[];audioBlob=null;audioUrl='';media=[];livePartial='';cookStep=0;form.prepTime='';form.cookTime='';cookEditors.manualIngredient='';cookEditors.manualStep='';cookEditors.transcriptEditor=null;mediaStatus='';nav('recipes');
+    captureStatus='Recipe saved on this device.';form.title='';form.description='';form.servings='2';form.tags='';ingredients=[];steps=[];transcript=[];audioBlob=null;audioUrl='';media=[];livePartial='';cookStep=0;form.prepTime='';form.cookTime='';cookEditors.manualIngredient='';cookEditors.manualStep='';cookEditors.transcriptEditor=null;mediaStatus='';draftRecipeId='';captureSecondPass={busy:false,message:'',result:null};nav('recipes');
     }catch(e){recipeSaveError=`Could not save this recipe: ${e.message||'device storage is unavailable'}. Your draft is still here.`;const error=document.querySelector('#recipeSaveError');if(error){error.hidden=false;error.textContent=recipeSaveError;}}
     finally{savingRecipe=false;renderCookSaveState();}
   });
