@@ -373,6 +373,21 @@ export async function transcribePrivateChefVoice(recipeId,audioBlob){
   };
 }
 
+/**
+ * Server-side cleanup counterpart to transcribePrivateChefVoice: deletes the
+ * privateVoice/{uid}/{recipeId}/ and recipes/{uid}/{recipeId}/ Storage prefixes
+ * (plus the Firestore doc/likes/comments, if any exist). Already idempotent and
+ * safe to call for a recipe id with no Firestore doc -- deleteRecipeArtifacts
+ * only conditionally deletes the doc, so this is also correct for a recipe that
+ * was never published. Unlike deleteCloudRecipe (a raw client-side Firestore
+ * delete with no Storage cleanup), this always reaches Cloud Storage.
+ */
+export async function deleteChefVoiceRecipe(recipeId){
+  assertWrites();
+  requireUser('Sign in first.');
+  return callFunction('deleteChefVoiceRecipe',{recipeId});
+}
+
 // ---- Chef discovery ---------------------------------------------------------
 // `allow get: if true` keeps single profile reads open for recipe cards, but
 // listing requires sign-in: "read: if true" would let anyone holding the API key

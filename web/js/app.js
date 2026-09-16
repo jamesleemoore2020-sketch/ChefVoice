@@ -642,7 +642,16 @@ function bindRecipes(){
   main.querySelectorAll('[data-open-recipe]').forEach(b=>b.onclick=()=>openRecipe(b.dataset.openRecipe));
   main.querySelectorAll('[data-publish]').forEach(b=>b.onclick=()=>publishLocalRecipe(b.dataset.publish,b));
   main.querySelectorAll('[data-unpublish]').forEach(b=>b.onclick=()=>unpublishLocalRecipe(b.dataset.unpublish,b));
-  main.querySelectorAll('[data-delete-recipe]').forEach(b=>b.onclick=async()=>{const id=b.dataset.deleteRecipe;const r=recipes.find(x=>x.id===id);recipes=recipes.filter(x=>x.id!==id);saveRecipes(recipes);await deleteAudioBlob(id);await deleteRecipeMedia(r);render();});
+  main.querySelectorAll('[data-delete-recipe]').forEach(b=>b.onclick=async()=>{
+    const id=b.dataset.deleteRecipe;const r=recipes.find(x=>x.id===id);
+    // ChefVoice Review can upload the original cooking audio to private Cloud Storage
+    // before this recipe is ever published (post-save Review, or the Cook wizard's
+    // capture-time Review, which reuses draftRecipeId as the saved recipe id) -- so an
+    // unpublished recipe that was reviewed can leave audio orphaned under this id.
+    // Best-effort cleanup only: it must never block or fail the local delete below.
+    if(r&&!r.isPublic&&r.sessionAudio?.stored&&cloud.api&&cloud.user)cloud.api.deleteChefVoiceRecipe(id).catch(()=>{});
+    recipes=recipes.filter(x=>x.id!==id);saveRecipes(recipes);await deleteAudioBlob(id);await deleteRecipeMedia(r);render();
+  });
 }
 // ---- Second Pass (ChefVoice Review) ----------------------------------------
 // Explicit, opt-in review. The result is held here until the chef accepts a
