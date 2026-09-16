@@ -235,7 +235,7 @@ function requireProfileName(){
 const cloudReady=()=>cloud.state==='ready'&&cloud.api;
 
 const capture=new VoiceCapture({
-  onSegment:s=>{transcript.push(s);renderCaptureState();},
+  onSegment:s=>{const i=transcript.findIndex(t=>t.id===s.id);if(i>=0)transcript[i]=s;else transcript.push(s);renderCaptureState();},
   onPartial:s=>{livePartial=s;renderCaptureState();},
   onStatus:s=>{captureStatus=s;renderCaptureState();}
 });

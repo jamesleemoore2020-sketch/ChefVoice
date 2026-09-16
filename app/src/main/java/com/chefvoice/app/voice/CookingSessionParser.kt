@@ -107,8 +107,11 @@ object CookingSessionParser {
         "(?i)^(?:ground|diced|sliced|chopped|minced|grated|shredded|crushed|boneless|skinless|peeled|cubed)$"
     )
 
+    // ASR frequently drops the leading pronoun off "you're going to let it cook"
+    // -- leaving a bare "going to let the X" fragment that still needs to be
+    // rejected as a dangling instruction, not just the pronoun-led form.
     private val narrationNoiseName = Regex(
-        "(?i)^(?:today|so|what|you|we|i)\\b.*\\b(?:gonna|going|need|make|do)\\b"
+        "(?i)^(?:(?:today|so|what|you|we|i)\\b.*\\b(?:gonna|going|need|make|do)\\b|(?:gonna|going\\s+to)\\b)"
     )
 
     private val cookingOnlyNames = Regex(
@@ -476,7 +479,7 @@ object CookingSessionParser {
             .replace(Regex("(?i)^(?:(?:okay|ok|so|now|alright|all right|then|next|and)[, ]+)+"), "")
             .replace(
                 Regex(
-                    "(?i)^(?:(?:i|you|we)(?:'m|'re|'ll| am| are| will)?\\s+)?(?:(?:am|are)\\s+)?(?:going\\s+to\\s+|gonna\\s+|want\\s+to\\s+|will\\s+)?(?:add|adding|use|using|pour(?:ing)?(?:\\s+in)?|stir(?:ring)?\\s+in|mix(?:ing)?\\s+in|put(?:ting)?\\s+in|throw(?:ing)?\\s+in|drop(?:ping)?\\s+in|fold(?:ing)?\\s+in|need|take|season(?:ing)?\\s+with|sprinkle|top(?:ping)?\\s+with|combine)\\s+"
+                    "(?i)^(?:(?:i|you|we)(?:'m|'re|'ll| am| are| will)?\\s+)?(?:(?:am|are)\\s+)?(?:going\\s+to\\s+|gonna\\s+|want\\s+to\\s+|will\\s+)?(?:add(?:ing)?(?:\\s+in)?|use|using|pour(?:ing)?(?:\\s+in)?|stir(?:ring)?\\s+in|mix(?:ing)?\\s+in|put(?:ting)?\\s+in|throw(?:ing)?\\s+in|drop(?:ping)?\\s+in|fold(?:ing)?\\s+in|need|take|season(?:ing)?\\s+with|sprinkle|top(?:ping)?\\s+with|combine)\\s+"
                 ),
                 ""
             )

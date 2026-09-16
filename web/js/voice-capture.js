@@ -1,10 +1,29 @@
 import { containsMeasurementEvidence, measurementEvidenceCount, normalizeSpeechText } from './ingredient-parser.js';
 
+// Continuous recognition often re-finalizes the same in-progress utterance
+// several times as it grows (or as ASR revises earlier words) before the
+// chef actually pauses. Each of those would otherwise land as its own
+// transcript segment -- and a run-on sentence with no natural pause can turn
+// into a dozen overlapping segments that all get parsed independently,
+// producing duplicated/garbled ingredients. When a newly committed segment
+// is textually a continuation or revision of the immediately previous one
+// (either one contains the other), it should replace that segment instead of
+// appending a new one, keeping whichever version carries more measurement
+// evidence -- the same "changes its mind" guarantee interim updates already
+// get, extended to cross-commit revisions. previousKey/newKey are normalized
+// (lowercased, whitespace-collapsed) text keys, not display text.
+export function reconcileTranscriptSegment(previousKey, newKey) {
+  if (!previousKey || previousKey === newKey) return previousKey === newKey ? 'skip' : 'append';
+  const isRevision = newKey.includes(previousKey) || previousKey.includes(newKey);
+  if (!isRevision) return 'append';
+  return measurementEvidenceCount(previousKey) > measurementEvidenceCount(newKey) ? 'skip' : 'replace';
+}
+
 export class VoiceCapture {
   constructor({onSegment=()=>{},onPartial=()=>{},onStatus=()=>{}}={}) {
     this.onSegment=onSegment; this.onPartial=onPartial; this.onStatus=onStatus;
     this.stream=null; this.recorder=null; this.chunks=[]; this.recognition=null; this.running=false;
-    this.startedAt=0; this.lastPartial=''; this.lastFinal=''; this.restartTimer=null; this.audioBlob=null;
+    this.startedAt=0; this.lastPartial=''; this.lastFinal=''; this.currentSegmentId=null; this.restartTimer=null; this.audioBlob=null;
   }
 
   get recognitionSupported(){return !!(window.SpeechRecognition||window.webkitSpeechRecognition);}
@@ -14,7 +33,7 @@ export class VoiceCapture {
     if(this.running) return true;
     if(!this.recordingSupported) throw new Error('This browser cannot record microphone audio.');
     this.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
-    this.chunks=[]; this.audioBlob=null; this.startedAt=Date.now(); this.running=true; this.lastPartial=''; this.lastFinal='';
+    this.chunks=[]; this.audioBlob=null; this.startedAt=Date.now(); this.running=true; this.lastPartial=''; this.lastFinal=''; this.currentSegmentId=null;
     const preferred=['audio/mp4','audio/webm;codecs=opus','audio/webm'].find(t=>MediaRecorder.isTypeSupported?.(t));
     this.recorder=new MediaRecorder(this.stream,preferred?{mimeType:preferred}:undefined);
     this.recorder.ondataavailable=e=>{if(e.data?.size)this.chunks.push(e.data);};
@@ -76,8 +95,12 @@ export class VoiceCapture {
 
   #commit(raw){
     const text=normalizeSpeechText(raw).trim(); if(!text)return;
-    const key=text.toLowerCase().replace(/\s+/g,' '); if(key===this.lastFinal)return;
-    this.lastFinal=key; this.onSegment({id:crypto.randomUUID(),elapsedMs:Math.max(0,Date.now()-this.startedAt),text:text[0].toUpperCase()+text.slice(1)});
+    const key=text.toLowerCase().replace(/\s+/g,' ');
+    const decision=this.currentSegmentId?reconcileTranscriptSegment(this.lastFinal,key):'append';
+    if(decision==='skip')return;
+    if(decision==='append') this.currentSegmentId=crypto.randomUUID();
+    this.lastFinal=key;
+    this.onSegment({id:this.currentSegmentId,elapsedMs:Math.max(0,Date.now()-this.startedAt),text:text[0].toUpperCase()+text.slice(1)});
   }
 
   close(){ clearTimeout(this.restartTimer); this.running=false; try{this.recognition?.abort();}catch{} this.stream?.getTracks().forEach(t=>t.stop()); }

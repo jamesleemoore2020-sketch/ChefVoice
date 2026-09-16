@@ -23,6 +23,18 @@
   existing `sendVerificationEmail()`/`refreshEmailVerification()` and Profile
   UI to the PWA. PWA cache/package version 0.5.6. See
   `PWA_EMAIL_VERIFICATION_0.5.6.md`.
+- Found live cooking a real ramen recipe through the PWA: a run-on sentence
+  with no pause made Chrome's continuous SpeechRecognition re-finalize the
+  same utterance ~20 times, and each overlapping fragment got parsed
+  independently into duplicate/garbled ingredients. Fixed the capture-layer
+  duplication (`voice-capture.js` now collapses a re-finalized revision into
+  the existing transcript segment instead of appending a new one) plus two
+  narrow deterministic-parser bugs it exposed on both platforms (bare
+  "add in" leaving a stray "In" ingredient; "going to let the X" with its
+  leading pronoun dropped by ASR not being rejected as a dangling
+  instruction). PWA cache/package version 0.5.7, Android versionCode 69 /
+  versionName 0.11.8. No rules/Functions/Live/App Check/billing changes. See
+  `RUNON_TRANSCRIPT_DUPLICATION_0.5.7_0.11.8.md`.
 
 # Current handoff — 2026-09-15
 

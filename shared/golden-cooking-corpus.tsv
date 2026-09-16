@@ -55,3 +55,5 @@ real-android-need-some-unquantified-0909	real-device	then you're going to need s
 real-android-serving-yield-not-ingredient-0909	real-device	one pack should feed at least two people, maybe three	-	-
 real-android-sprinkle-on-top-not-ingredient-0909	real-device	then you take your ground beef and you sprinkle it on top of your nachos	-	sprinkle it on top
 real-android-need-your-trailing-quantity-0909	real-device	you're going to need your favorite Dorito chips, one bag	1^bag^Favorite Dorito chips	-
+real-bare-add-in-not-ingredient-0916	real-device	Add in a teaspoon of salt and pepper and you're going to let the top ramen cook for two minutes and it's ready.	1^tsp^Salt ;; 1^tsp^Pepper	Add in a teaspoon of salt and pepper ;; Cook for two minutes and it's ready
+real-pwa-pronoun-dropped-going-to-0916	real-device	One pack of top ramen add a teaspoon of salt and pepper and going to let the top ramen cook for 2 minutes and it's ready	1^^Pack of top ramen ;; 1^tsp^Salt ;; 1^tsp^Pepper	Add a teaspoon of salt and pepper and going to let the top ramen ;; Cook for 2 minutes and it's ready

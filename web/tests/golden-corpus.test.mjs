@@ -51,6 +51,6 @@ test('shared golden cooking corpus passes on the PWA parser', () => {
 
   // Golden corpus row count changed unexpectedly -- keep in sync with
   // GoldenCookingCorpusTest.kt's row-count guard on the Android side.
-  assert.equal(rows.length, 56, 'Golden corpus row count changed unexpectedly');
+  assert.equal(rows.length, 58, 'Golden corpus row count changed unexpectedly');
   assert.equal(failures.length, 0, `PWA golden corpus failures:\n${failures.join('\n')}`);
 });

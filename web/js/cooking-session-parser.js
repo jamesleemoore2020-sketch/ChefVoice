@@ -53,7 +53,10 @@ const ingredientDeclarationSegment = /^\s*(?:(?:then|next|and|now|so|okay|ok|alr
 
 const ingredientNoiseName = /^(?:to|of|the|it|this|that|some|what|today|tomorrow|we|you|i|and|or|then|so|um|uh)$/i;
 const ingredientArtifactName = /^(?:grab|stuff|tasteful)$/i;
-const narrationNoiseName = /^(?:today|so|what|you|we|i)\b.*\b(?:gonna|going|need|make|do)\b/i;
+// ASR frequently drops the leading pronoun off "you're going to let it cook" --
+// leaving a bare "going to let the X" fragment that still needs to be rejected
+// as a dangling instruction, not just the pronoun-led form.
+const narrationNoiseName = /^(?:(?:today|so|what|you|we|i)\b.*\b(?:gonna|going|need|make|do)\b|(?:gonna|going\s+to)\b)/i;
 const cookingOnlyNames = /^(?:(?:minute|minutes|second|seconds|hour|hours|degree|degrees)\b.*|fahrenheit|celsius|pan|pot|bowl|skillet|oven|tray|dish|mixture|heat|medium heat|high heat|low heat)$/i;
 const temperatureOnlyName = /^\d+(?:\.\d+)?\s*(?:°(?:\s*[fc])?|degrees?(?:\s+(?:fahrenheit|celsius))?)$/i;
 const preparationOutputName = /^(?:\d+\s+)?(?:patties?|portions?|servings?)$/i;
@@ -282,7 +285,7 @@ function extractIngredients(raw, allowUnmeasured) {
 
   let source = normalizedRaw
     .replace(/^(?:(?:okay|ok|so|now|alright|all right|then|next|and)[, ]+)+/i, '')
-    .replace(/^(?:(?:i|you|we)(?:'m|'re|'ll| am| are| will)?\s+)?(?:(?:am|are)\s+)?(?:going\s+to\s+|gonna\s+|want\s+to\s+|will\s+)?(?:add|adding|use|using|pour(?:ing)?(?:\s+in)?|stir(?:ring)?\s+in|mix(?:ing)?\s+in|put(?:ting)?\s+in|throw(?:ing)?\s+in|drop(?:ping)?\s+in|fold(?:ing)?\s+in|need|take|season(?:ing)?\s+with|sprinkle|top(?:ping)?\s+with|combine)\s+/i, '')
+    .replace(/^(?:(?:i|you|we)(?:'m|'re|'ll| am| are| will)?\s+)?(?:(?:am|are)\s+)?(?:going\s+to\s+|gonna\s+|want\s+to\s+|will\s+)?(?:add(?:ing)?(?:\s+in)?|use|using|pour(?:ing)?(?:\s+in)?|stir(?:ring)?\s+in|mix(?:ing)?\s+in|put(?:ting)?\s+in|throw(?:ing)?\s+in|drop(?:ping)?\s+in|fold(?:ing)?\s+in|need|take|season(?:ing)?\s+with|sprinkle|top(?:ping)?\s+with|combine)\s+/i, '')
     .trim();
 
   source = trimIngredientTail(source);

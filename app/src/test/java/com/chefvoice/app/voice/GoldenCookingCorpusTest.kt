@@ -58,7 +58,7 @@ class GoldenCookingCorpusTest {
             }
         }
 
-        assertEquals("Golden corpus row count changed unexpectedly", 56, rows.size)
+        assertEquals("Golden corpus row count changed unexpectedly", 58, rows.size)
         assertTrue("Android golden corpus failures:\n${failures.joinToString("\n")}", failures.isEmpty())
     }
 
