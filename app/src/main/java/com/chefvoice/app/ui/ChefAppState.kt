@@ -1129,6 +1129,13 @@ class ChefAppState(context: Context) {
             cloudMessage = message ?: if (hasCloudCopy) "Recipe deleted from Community/cloud and this phone." else "Local recipe deleted."
         }
         if (!hasCloudCopy) {
+            // ChefVoice Review can upload the original cooking audio to private Cloud
+            // Storage before this recipe is ever published (even before it is saved).
+            // Best-effort cleanup only: it must not block or fail the local delete when
+            // offline or signed out, since account deletion also sweeps this prefix.
+            if (recipe.secondPass != null && cloudConfigured && isSignedIn) {
+                cloud.deleteCloudRecipe(recipe.id)
+            }
             removeLocalAfterCloudSuccess()
             return
         }
