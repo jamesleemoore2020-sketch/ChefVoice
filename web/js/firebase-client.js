@@ -340,7 +340,22 @@ function audioDurationMs(blob){
       probe.preload='metadata';
       probe.onloadedmetadata=()=>{
         const seconds=probe.duration;
-        done(Number.isFinite(seconds)&&seconds>0?Math.round(seconds*1000):0);
+        if(Number.isFinite(seconds)&&seconds>0){done(Math.round(seconds*1000));return;}
+        // Chrome's MediaRecorder output has no duration in its header (it's built
+        // for live playback, not seeking), so loadedmetadata reports Infinity for
+        // a real recording. Seeking past the end forces Chrome to scan the file
+        // and resolve the true duration -- the standard workaround for this
+        // long-standing Chromium quirk.
+        if(!Number.isFinite(seconds)){
+          probe.currentTime=1e101;
+          probe.ontimeupdate=()=>{
+            probe.ontimeupdate=null;
+            const fixed=probe.duration;
+            done(Number.isFinite(fixed)&&fixed>0?Math.round(fixed*1000):0);
+          };
+          return;
+        }
+        done(0);
       };
       probe.onerror=()=>done(0);
       // A browser that never fires either event must not hang the review.

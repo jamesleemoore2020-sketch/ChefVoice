@@ -566,7 +566,12 @@ async function toggleCapture(){
     catch(e){captureStatus=`Microphone could not start: ${e.message}`;renderCapture();}
   }
   }catch(e){captureStatus=`Capture could not finish: ${e.message||'Please try again.'}`;}
-  finally{captureBusy=false;renderCaptureState();}
+  // captureBusy flipping false right here is what unhides the ChefVoice Review
+  // card (captureSecondPassTemplate gates on it) -- renderCaptureState() alone
+  // never touches #captureSecondPass, only renderCookDynamic() does, so without
+  // this the card stayed invisible until something else forced a full re-render
+  // (e.g. Next then Back).
+  finally{captureBusy=false;renderCookDynamic();}
 }
 
 function bindCook(){
