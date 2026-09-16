@@ -46,6 +46,17 @@
   it`) because the existing dangling-tail rule only covered "going to let
   it". Android versionCode 70 / versionName 0.11.9. No rules/Functions/Live/
   App Check/billing changes. See `COOK_TIME_AND_LET_IT_TAIL_0.11.9.md`.
+- Closed the recipe-title gap left open by 0.11.9. The title was blank because
+  the chef dropped the copula ("we going to make", not "we're going to make"),
+  which the title pattern required. Making the auxiliary optional outright
+  regressed a fixture -- "we going to cook our ground beef for 10 mins" became
+  a title and its step was then deleted, halving cookMinutes -- so the
+  auxiliary-free path additionally requires "going to"/"gonna" and the verb
+  "make". A leading "my" is now stripped from titles, with a matching optional
+  "my" in the title-announcement step filter so the announcement still does not
+  survive as a bogus first method step. Android versionCode 71 / versionName
+  0.11.10. No rules/Functions/Live/App Check/billing changes. See
+  `TITLE_DROPPED_COPULA_0.11.10.md`.
 
 # Current handoff — 2026-09-15
 

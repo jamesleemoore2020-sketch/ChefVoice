@@ -669,8 +669,15 @@ export function canonicalizeIngredients(items) {
 // thoughts together ("today I'm making chili and we're gonna start chopping")
 // still stops at the right place.
 const titleStopBoundary = '(?=[,.!?]|\\s+(?:and\\s+)?(?:i|you|we)(?:\'m|\'re| am| are)\\b|$)';
+// Chefs and ASR both drop the copula ("so today we going to make my famous top
+// ramen meal"), so the auxiliary is optional -- but only on a much narrower
+// path: "going to"/"gonna" must carry the sentence instead, and the verb must
+// be "make"/"making". Without the auxiliary, "we going to cook our ground beef
+// for 10 mins" is an ordinary instruction, not an announcement, and claiming it
+// as the title would also delete that step and its duration. The pronoun stays
+// mandatory on both paths, so a bare imperative is still rejected.
 const titleMakingPattern = new RegExp(
-  `(?:today[, ]*)?(?:i|we)(?:'m|'re| am| are)\\s+(?:going\\s+to\\s+|gonna\\s+)?(?:making|make|cooking|cook)\\s+(.{1,60}?)${titleStopBoundary}`,
+  `(?:today[, ]*)?(?:i|we)(?:(?:'m|'re| am| are)\\s+(?:going\\s+to\\s+|gonna\\s+)?(?:making|make|cooking|cook)|\\s+(?:going\\s+to\\s+|gonna\\s+)(?:making|make))\\s+(.{1,60}?)${titleStopBoundary}`,
   'i'
 );
 const titleRecipeForPattern = new RegExp(`this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+(.{1,60}?)${titleStopBoundary}`, 'i');
@@ -679,7 +686,7 @@ const titleThisRecipeIsPattern = new RegExp(`this\\s+recipe\\s+is\\s+(?:for\\s+)
 function cleanRecipeTitle(captured) {
   const cleaned = captured
     .split(',')[0]
-    .replace(/^(?:a|an|the|some)\s+/i, '')
+    .replace(/^(?:a|an|the|some|my)\s+/i, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (!cleaned || cleaned.length > 60) return '';
@@ -805,7 +812,7 @@ function isTitleAnnouncementStep(step, title) {
   const stripped = step.replace(/[.!?]+$/, '').trim();
   const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const restatementPattern = new RegExp(
-    `^(?:(?:making|make|cooking|cook)\\s+|this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+|this\\s+recipe\\s+is\\s+(?:for\\s+)?)${escapedTitle}$`,
+    `^(?:(?:making|make|cooking|cook)\\s+(?:my\\s+)?|this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+|this\\s+recipe\\s+is\\s+(?:for\\s+)?)${escapedTitle}$`,
     'i'
   );
   if (restatementPattern.test(stripped)) return true;

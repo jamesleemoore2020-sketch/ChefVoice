@@ -293,7 +293,23 @@ class GoldenCookingCorpusTest {
     @Test
     fun extractsTitleFromTodayImMakingX() {
         val draft = CookingSessionParser.parse(listOf(TranscriptSegment(elapsedMs = 0L, text = "today I'm making my famous chili")))
-        assertEquals("My famous chili", draft.title)
+        assertEquals("Famous chili", draft.title)
+    }
+
+    // A chef dropping the copula ("we going to make") still announces a title, but
+    // only for "make": without the auxiliary, "we going to cook X for 10 mins" is an
+    // ordinary instruction, and taking it as the title would delete that step too.
+    @Test
+    fun droppedCopulaAnnouncesATitleOnlyForMake() {
+        val announced = CookingSessionParser.parse(
+            listOf(TranscriptSegment(elapsedMs = 0L, text = "so today we going to make my famous top ramen meal"))
+        )
+        assertEquals("Famous top ramen meal", announced.title)
+
+        val instruction = CookingSessionParser.parse(
+            listOf(TranscriptSegment(elapsedMs = 0L, text = "we going to cook our ground beef for 10 mins"))
+        )
+        assertEquals("", instruction.title)
     }
 
     @Test
@@ -473,5 +489,10 @@ class GoldenCookingCorpusTest {
         )
         assertEquals(2, draft.cookMinutes)
         assertEquals(null, draft.prepMinutes)
+        assertEquals("Famous top ramen meal", draft.title)
+        assertTrue(
+            "the title announcement must not also stand as a method step, got: ${draft.steps}",
+            draft.steps.none { it.contains("famous top ramen meal", ignoreCase = true) }
+        )
     }
 }

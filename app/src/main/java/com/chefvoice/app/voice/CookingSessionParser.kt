@@ -191,8 +191,15 @@ object CookingSessionParser {
     // sentences a chef would not say mid-step, so those are allowed in any
     // unit.
     private const val titleStopBoundary = "(?=[,.!?]|\\s+(?:and\\s+)?(?:i|you|we)(?:'m|'re| am| are)\\b|$)"
+    // Chefs and ASR both drop the copula ("so today we going to make my famous top
+    // ramen meal"), so the auxiliary is optional -- but only on a much narrower
+    // path: "going to"/"gonna" must carry the sentence instead, and the verb must
+    // be "make"/"making". Without the auxiliary, "we going to cook our ground beef
+    // for 10 mins" is an ordinary instruction, not an announcement, and claiming it
+    // as the title would also delete that step and its duration. The pronoun stays
+    // mandatory on both paths, so a bare imperative is still rejected.
     private val titleMakingPattern = Regex(
-        "(?i)(?:today[, ]*)?(?:i|we)(?:'m|'re| am| are)\\s+(?:going\\s+to\\s+|gonna\\s+)?(?:making|make|cooking|cook)\\s+(.{1,60}?)$titleStopBoundary"
+        "(?i)(?:today[, ]*)?(?:i|we)(?:(?:'m|'re| am| are)\\s+(?:going\\s+to\\s+|gonna\\s+)?(?:making|make|cooking|cook)|\\s+(?:going\\s+to\\s+|gonna\\s+)(?:making|make))\\s+(.{1,60}?)$titleStopBoundary"
     )
     private val titleRecipeForPattern = Regex(
         "(?i)this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+(.{1,60}?)$titleStopBoundary"
@@ -204,7 +211,7 @@ object CookingSessionParser {
     private fun cleanRecipeTitle(captured: String): String {
         val cleaned = captured
             .split(",").first()
-            .replace(Regex("(?i)^(?:a|an|the|some)\\s+"), "")
+            .replace(Regex("(?i)^(?:a|an|the|some|my)\\s+"), "")
             .replace(Regex("\\s+"), " ")
             .trim()
         if (cleaned.isBlank() || cleaned.length > 60) return ""
@@ -254,7 +261,7 @@ object CookingSessionParser {
         val stripped = step.trimEnd('.', '!', '?').trim()
         val escapedTitle = Regex.escape(title)
         val restatementPattern = Regex(
-            "(?i)^(?:(?:making|make|cooking|cook)\\s+|this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+|this\\s+recipe\\s+is\\s+(?:for\\s+)?)$escapedTitle$"
+            "(?i)^(?:(?:making|make|cooking|cook)\\s+(?:my\\s+)?|this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+|this\\s+recipe\\s+is\\s+(?:for\\s+)?)$escapedTitle$"
         )
         return restatementPattern.matches(stripped)
     }

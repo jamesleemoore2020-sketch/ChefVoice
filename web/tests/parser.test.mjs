@@ -30,7 +30,11 @@ test('three ingredient sentence is separated',()=>assert.deepEqual(session('add 
 test('captures method steps while ingredients remain separate',()=>{const d=parseCookingSession([{text:'add two tablespoons olive oil then sauté the garlic'}]);assert.equal(d.ingredients[0].name,'Olive oil');assert.ok(d.steps.some(s=>/sauté/i.test(s)));});
 
 // ---- Recipe title -----------------------------------------------------------
-test('extracts title from "today I\'m making X"',()=>assert.equal(parseCookingSession([{text:"today I'm making my famous chili"}]).title,"My famous chili"));
+test('extracts title from "today I\'m making X"',()=>assert.equal(parseCookingSession([{text:"today I'm making my famous chili"}]).title,"Famous chili"));
+test('a dropped copula still announces a title, but only for "make"',()=>{
+  assert.equal(parseCookingSession([{text:'so today we going to make my famous top ramen meal'}]).title,'Famous top ramen meal');
+  assert.equal(parseCookingSession([{text:'we going to cook our ground beef for 10 mins'}]).title,'');
+});
 test('extracts title from "this is my recipe for X"',()=>assert.equal(parseCookingSession([{text:'we took one pound of beef'},{text:'this is my recipe for spicy chili'}]).title,'Spicy chili'));
 test('extracts title from "this recipe is X"',()=>assert.equal(parseCookingSession([{text:"this recipe is grandma's meatloaf"}]).title,"Grandma's meatloaf"));
 test('does not mistake a bare imperative "make X" for a title',()=>assert.equal(parseCookingSession([{text:'take one pound of ground beef'},{text:'make four burger patties'}]).title,''));

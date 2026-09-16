@@ -215,4 +215,9 @@ test('real top ramen capture does not bleed a plain "and you let it" clause into
   );
   assert.equal(draft.cookMinutes, 2, 'spoken "cook for 2 minutes" is the cook time');
   assert.equal(draft.prepMinutes, null);
+  assert.equal(draft.title, 'Famous top ramen meal', 'the copula is dropped ("we going to make"), which still announces a title');
+  assert.ok(
+    !draft.steps.some((s) => /famous top ramen meal/i.test(s)),
+    `the title announcement must not also stand as a method step, got: ${JSON.stringify(draft.steps)}`
+  );
 });
