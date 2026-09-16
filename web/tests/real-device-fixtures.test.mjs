@@ -28,6 +28,9 @@ test('real burger fixture preserves temperature/durations and chronological meth
     ]
   );
   assert.ok(draft.ingredients.every((i) => !`${i.quantity} ${i.unit} ${i.name}`.includes('375') && !i.name.includes('°')));
+  assert.equal(draft.title, 'Hamburgers');
+  assert.equal(draft.cookMinutes, 20);
+  assert.equal(draft.prepMinutes, null);
 
   const expected = [
     'make four different burger patties',
@@ -86,6 +89,8 @@ test('real timestamped burger capture keeps method boundaries and normalizes tem
     'Let them rest with five we feel serving.'
   ]);
   assert.ok(!draft.steps.some((s) => /20 minutes.*(?:foot|rest)|foot.*rest/i.test(s)));
+  assert.equal(draft.title, '', 'no opening announcement in this fixture -- must not invent one from "Make four burger patties"');
+  assert.equal(draft.cookMinutes, 20);
 });
 
 test('real intra-segment burger capture splits unknown predicates and trims ingredient narration tail', () => {
@@ -183,4 +188,5 @@ test('real nachos fixture keeps ingredient declarations out of method steps', ()
   );
   assert.ok(draft.steps.includes('Sprinkle it on top of your nachos.'), `sprinkle step should stand alone, got: ${JSON.stringify(draft.steps)}`);
   assert.ok(!draft.steps.some((s) => s.toLowerCase().includes('need some')), `no method step may absorb an ingredient declaration, got: ${JSON.stringify(draft.steps)}`);
+  assert.equal(draft.title, 'Nachos', 'title announcement is split across segments 0 and 1 by ASR -- must not run on into "One pack should feed..."');
 });

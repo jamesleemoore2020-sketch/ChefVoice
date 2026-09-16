@@ -526,6 +526,18 @@ function renderMedia(){
 }
 function renderCookDynamic(){renderCaptureState();renderCaptureSecondPass();renderIngredients();renderSteps();renderMedia();renderDraftVoice();renderRecipeReview();}
 
+// Fills Recipe Details fields the chef hasn't already touched from what the
+// parser detected in this capture -- never overwrites a manual edit, and a
+// field the parser found no evidence for (prepMinutes/cookMinutes/title all
+// stay empty/'' when unset) is simply left for the chef to type, same as always.
+function applyDetectedRecipeMeta(draft){
+  const notes=[];
+  if(draft.title&&!form.title.trim()){form.title=draft.title;notes.push(`title "${draft.title}"`);}
+  if(draft.prepMinutes!=null&&!form.prepTime){form.prepTime=String(draft.prepMinutes);notes.push(`${draft.prepMinutes}m prep`);}
+  if(draft.cookMinutes!=null&&!form.cookTime){form.cookTime=String(draft.cookMinutes);notes.push(`${draft.cookMinutes}m cook`);}
+  return notes.length?` Detected ${notes.join(', ')} -- review in Recipe Details.`:'';
+}
+
 async function toggleCapture(){
   if(captureBusy||savingRecipe)return;
   captureBusy=true;renderCaptureState();
@@ -535,7 +547,8 @@ async function toggleCapture(){
     const result=await capture.stop();capturing=false;audioBlob=result.audioBlob;
     if(audioUrl)URL.revokeObjectURL(audioUrl);if(audioBlob?.size)audioUrl=URL.createObjectURL(audioBlob);
     const draft=parseCookingSession(transcript);const merged=mergeDraft(ingredients,steps,draft);ingredients=merged.ingredients;steps=merged.steps;
-    captureStatus=draft.ingredients.length||draft.steps.length?`Draft ready: ${draft.ingredients.length} ingredient${draft.ingredients.length===1?'':'s'} and ${draft.steps.length} step${draft.steps.length===1?'':'s'} detected. Continue to Ingredients/Method to review the draft.`:'Audio saved. Use Transcript recovery in Ingredients/Method if live recognition missed the cooking words.';
+    const metaNote=applyDetectedRecipeMeta(draft);
+    captureStatus=(draft.ingredients.length||draft.steps.length?`Draft ready: ${draft.ingredients.length} ingredient${draft.ingredients.length===1?'':'s'} and ${draft.steps.length} step${draft.steps.length===1?'':'s'} detected. Continue to Ingredients/Method to review the draft.`:'Audio saved. Use Transcript recovery in Ingredients/Method if live recognition missed the cooking words.')+metaNote;
     cookEditors.transcriptEditor=null;
     const editor=document.querySelector('#transcriptEditor');if(editor)editor.value=transcript.map(s=>s.text).join(' ');
     renderCookDynamic();
@@ -569,7 +582,7 @@ function bindCook(){
   for(const key of Object.keys(cookEditors))document.getElementById(key)?.addEventListener('input',e=>cookEditors[key]=e.target.value);
   document.querySelector('#addIngredient')?.addEventListener('click',()=>{const x=document.querySelector('#manualIngredient');if(x.value.trim()){ingredients.push({...parseIngredient(x.value),confidence:'manual'});x.value='';cookEditors.manualIngredient='';renderIngredients();}});
   document.querySelector('#addStep')?.addEventListener('click',()=>{const x=document.querySelector('#manualStep');if(x.value.trim()){steps.push(x.value.trim());x.value='';cookEditors.manualStep='';renderSteps();}});
-  document.querySelector('#reanalyze')?.addEventListener('click',()=>{const text=document.querySelector('#transcriptEditor').value.trim();if(!text)return;transcript=[{id:crypto.randomUUID(),elapsedMs:0,text}];const d=parseCookingSession(transcript);ingredients=d.ingredients;steps=d.steps;captureStatus=`Transcript rebuilt: ${ingredients.length} ingredients and ${steps.length} steps.`;renderCookDynamic();});
+  document.querySelector('#reanalyze')?.addEventListener('click',()=>{const text=document.querySelector('#transcriptEditor').value.trim();if(!text)return;transcript=[{id:crypto.randomUUID(),elapsedMs:0,text}];const d=parseCookingSession(transcript);ingredients=d.ingredients;steps=d.steps;const metaNote=applyDetectedRecipeMeta(d);captureStatus=`Transcript rebuilt: ${ingredients.length} ingredients and ${steps.length} steps.`+metaNote;renderCookDynamic();});
   // Video and per-recipe photo caps are deliberately NOT enforced here. Both limits
   // exist in the tier model on both platforms, but Android raises a paywall only for
   // the Second Pass quota, the cloud-recipe cap and the profile "See Pro" button --

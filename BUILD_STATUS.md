@@ -1,3 +1,18 @@
+# Current handoff — 2026-09-16
+
+- On top of the 0.5.3 (orphaned-audio cleanup) and 0.5.4 (cloud recipe
+  delete) commits already on this branch: the Cook wizard now fills Recipe
+  name, Prep min and Cook min from the cooking narration itself when the
+  chef says them (an explicit "today I'm making X" announcement; prep/cook
+  time from a direct "prep time N minutes" statement or otherwise estimated
+  from chop/cook-verb durations already in the parsed steps), without ever
+  overwriting a manual edit. Also fixes three real ingredient-extraction
+  bugs (a bare cut-state modifier like "Ground" left standalone by a segment
+  break, a dangling bare "Or", and an ingredient name running on into the
+  next sentence) found from a real chili-recipe capture. PWA cache/package
+  version 0.5.5, PWA-only -- Android parser/rules/Functions/Live/App Check
+  unchanged. See `PWA_TITLE_PREP_COOK_ESTIMATE_0.5.5.md`.
+
 # Current handoff — 2026-09-15
 
 - The five-patch stack described in the entries below (PWA Live viewer

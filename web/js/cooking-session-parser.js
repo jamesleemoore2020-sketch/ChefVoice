@@ -51,12 +51,18 @@ const backReferenceName = /^(?:it|its|them|they|this|that|those|these)\b/i;
 // ingredient line, never the tail of the previous method step.
 const ingredientDeclarationSegment = /^\s*(?:(?:then|next|and|now|so|okay|ok|alright|all\s+right)[, ]+)*(?:(?:i|you|we)(?:'m|'re|'ll| am| are| will)?\s+)?(?:(?:am|are)\s+)?(?:going\s+to\s+|gonna\s+|want\s+to\s+|will\s+)?need\s+(?:some|an?|your)\b/i;
 
-const ingredientNoiseName = /^(?:to|of|the|it|this|that|some|what|today|tomorrow|we|you|i|and|then|so|um|uh)$/i;
+const ingredientNoiseName = /^(?:to|of|the|it|this|that|some|what|today|tomorrow|we|you|i|and|or|then|so|um|uh)$/i;
 const ingredientArtifactName = /^(?:grab|stuff|tasteful)$/i;
 const narrationNoiseName = /^(?:today|so|what|you|we|i)\b.*\b(?:gonna|going|need|make|do)\b/i;
 const cookingOnlyNames = /^(?:(?:minute|minutes|second|seconds|hour|hours|degree|degrees)\b.*|fahrenheit|celsius|pan|pot|bowl|skillet|oven|tray|dish|mixture|heat|medium heat|high heat|low heat)$/i;
 const temperatureOnlyName = /^\d+(?:\.\d+)?\s*(?:°(?:\s*[fc])?|degrees?(?:\s+(?:fahrenheit|celsius))?)$/i;
 const preparationOutputName = /^(?:\d+\s+)?(?:patties?|portions?|servings?)$/i;
+// A segment boundary sometimes falls right after a prep modifier and before
+// the noun it describes ("one pound of ground" | "beef" as two ASR chunks),
+// so the per-segment pass sees "ground" alone and it reads as a syntactically
+// fine unmeasured ingredient. None of these words is ever a complete
+// ingredient on its own.
+const bareModifierName = /^(?:ground|diced|sliced|chopped|minced|grated|shredded|crushed|boneless|skinless|peeled|cubed)$/i;
 
 const methodOutputCountContext = /^\s*(?:and\s+)?(?:(?:i|you|we)(?:'m|'re| am| are)?\s+)?(?:going\s+to\s+|gonna\s+)?(?:make|form|shape|split|divide|pat)\b/i;
 
@@ -135,6 +141,14 @@ function trimIngredientTail(value) {
     .replace(/\s+(?:it|that|this)\s+(?:took|takes)\s*$/i, '')
     .replace(/\s+(?:like|wait|actually|sorry|no)\s*$/i, '')
     .replace(/\s+(?:(?:i|you|we)(?:'m|'re| am| are)?\s+)?(?:gonna|going\s+to)\s*$/i, '')
+    // A window join can attach a whole next sentence after "and": "...salt and
+    // you're going to let it [simmer]" -- the verb itself often lands in its
+    // own clause via the action-word boundary above, leaving this shell with
+    // nothing left to match on. Strip it as its own dangling unit.
+    .replace(/\s+and\s+(?:(?:i|you|we)(?:'m|'re| am| are)?\s+)?(?:going\s+to|gonna)\s+let\s+(?:it|them)\s*$/i, '')
+    // "salt or" said just before a segment break leaves a dangling "or" with
+    // its second option in the next segment; never a real ingredient tail.
+    .replace(/\s+or\s*$/i, '')
     .replace(/\s+(?:on|in|at|to|into|with|for)\s*$/i, '')
     .replace(/^[\s,.;]+|[\s,.;]+$/g, '');
 }
@@ -155,6 +169,7 @@ function isValidIngredientName(name, maxLength = 80) {
   if (narrationNoiseName.test(clean)) return false;
   if (looksLikeOnlyCookingInstruction(clean)) return false;
   if (preparationOutputName.test(clean)) return false;
+  if (bareModifierName.test(clean)) return false;
   return true;
 }
 
@@ -615,12 +630,192 @@ export function canonicalizeIngredients(items) {
   return result;
 }
 
+// ---- Recipe title from an opening announcement -------------------------------
+// Only fires on an explicit "here's what I'm making" announcement, never
+// inferred from ambient narration -- an unmatched transcript leaves the title
+// for the chef to type, same as it always has.
+//
+// Matched per sentence-like unit (each raw segment, further split only on
+// hard punctuation) rather than through splitNarration's clause splitting or
+// the flattened whole transcript: splitNarration's verb-boundary splitting
+// (needed elsewhere to isolate method instructions) can separate a leading
+// pronoun from its verb -- "Today I'm going to make chili" becomes "Today
+// I'm going to" | "make chili" -- which would silently defeat a pattern that
+// needs both in the same piece of text. And a live ASR segment is itself a
+// natural, pause-delimited sentence boundary: the capture below runs to the
+// end of whichever unit it matched in, which is a far more reliable stop
+// point than trying to guess one from scratch in a blindly rejoined string
+// (see the real nachos fixture, where segment 2 -- "One pack should feed at
+// least two people" -- starts with none of the recognizable signals below).
+//
+// The pronoun+auxiliary ("I'm"/"we're"/"I am"/"we are") is mandatory, not
+// optional: a bare imperative like "make four burger patties" is a real,
+// common mid-recipe instruction (see the burger fixtures in
+// real-device-fixtures.test.mjs), and without a required pronoun it reads as
+// a title announcement just as easily as "we're making hamburgers" does.
+// "Making/make/cooking/cook" is further gated to the first two units (chefs
+// say the name at the very beginning) so a later "we're going to cook the
+// beef now" mid-recipe line can't be mistaken for it. The "recipe for"/"this
+// recipe is" phrasings are distinctive framing sentences a chef would not say
+// mid-step, so those are allowed in any unit.
+//
+// Within a unit, the capture additionally stops at the first comma or a
+// following pronoun+auxiliary, so one long comma-less unit that runs two
+// thoughts together ("today I'm making chili and we're gonna start chopping")
+// still stops at the right place.
+const titleStopBoundary = '(?=[,.!?]|\\s+(?:and\\s+)?(?:i|you|we)(?:\'m|\'re| am| are)\\b|$)';
+const titleMakingPattern = new RegExp(
+  `(?:today[, ]*)?(?:i|we)(?:'m|'re| am| are)\\s+(?:going\\s+to\\s+|gonna\\s+)?(?:making|make|cooking|cook)\\s+(.{1,60}?)${titleStopBoundary}`,
+  'i'
+);
+const titleRecipeForPattern = new RegExp(`this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+(.{1,60}?)${titleStopBoundary}`, 'i');
+const titleThisRecipeIsPattern = new RegExp(`this\\s+recipe\\s+is\\s+(?:for\\s+)?(.{1,60}?)${titleStopBoundary}`, 'i');
+
+function cleanRecipeTitle(captured) {
+  const cleaned = captured
+    .split(',')[0]
+    .replace(/^(?:a|an|the|some)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned || cleaned.length > 60) return '';
+  return capitalize(cleaned);
+}
+
+function titleSearchUnits(normalizedSegments) {
+  const units = [];
+  for (const segment of normalizedSegments) {
+    for (const sentence of segment.split(/[.!?]+/)) {
+      const trimmed = sentence.trim();
+      if (trimmed) units.push(trimmed);
+    }
+  }
+  return units;
+}
+
+export function extractRecipeTitle(normalizedSegments) {
+  const units = titleSearchUnits(normalizedSegments);
+
+  for (const unit of units.slice(0, 2)) {
+    const match = titleMakingPattern.exec(unit);
+    if (match) {
+      const title = cleanRecipeTitle(match[1]);
+      if (title) return title;
+    }
+  }
+
+  for (const unit of units) {
+    const match = titleRecipeForPattern.exec(unit) || titleThisRecipeIsPattern.exec(unit);
+    if (match) {
+      const title = cleanRecipeTitle(match[1]);
+      if (title) return title;
+    }
+  }
+  return '';
+}
+
+// ---- Prep/cook time estimate -------------------------------------------------
+// Sums minute/hour durations already present in the finished method steps,
+// bucketed by an unambiguous prep verb (before heat -- chop/dice/slice/peel/
+// mince) or an unambiguous cook verb (heat applied -- cook/bake/roast/simmer/
+// boil/fry/sear/saute/brown/toast/preheat/melt/reduce). A step naming both
+// kinds of verb, or neither, contributes to neither total: this is an
+// estimate from durations the chef actually said, never a guess, matching the
+// rest of this parser.
+const prepPhaseVerb = /\b(?:chop|chopping|chopped|dice|dicing|diced|slice|slicing|sliced|peel|peeling|peeled|mince|mincing|minced)\b/i;
+const cookPhaseVerb = /\b(?:cook|cooking|cooked|bake|baking|baked|roast|roasting|roasted|simmer|simmering|simmered|boil|boiling|boiled|fry|frying|fried|sear|searing|seared|saut[ée](?:ing|ed)?|brown|browning|browned|toast|toasting|toasted|preheat|preheating|preheated|melt|melting|melted|reduce|reducing|reduced)\b/i;
+const durationNumberWords = new Map([
+  ['one', 1], ['two', 2], ['three', 3], ['four', 4], ['five', 5], ['six', 6], ['seven', 7],
+  ['eight', 8], ['nine', 9], ['ten', 10], ['eleven', 11], ['twelve', 12], ['thirteen', 13],
+  ['fourteen', 14], ['fifteen', 15], ['sixteen', 16], ['seventeen', 17], ['eighteen', 18],
+  ['nineteen', 19], ['twenty', 20]
+]);
+const stepDurationPattern = /(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+(hours?|minutes?|mins?)\b/i;
+
+function durationToMinutes(numberToken, unitToken) {
+  const token = numberToken.toLowerCase();
+  const amount = durationNumberWords.has(token) ? durationNumberWords.get(token) : Number.parseFloat(token);
+  if (!Number.isFinite(amount)) return null;
+  return /^hour/i.test(unitToken) ? amount * 60 : amount;
+}
+
+function stepDurationMinutes(step) {
+  const match = stepDurationPattern.exec(step);
+  return match ? durationToMinutes(match[1], match[2]) : null;
+}
+
+export function estimatePrepCookMinutes(steps) {
+  let prepMinutes = null;
+  let cookMinutes = null;
+  for (const step of steps) {
+    const minutes = stepDurationMinutes(step);
+    if (minutes === null) continue;
+    const isPrep = prepPhaseVerb.test(step);
+    const isCook = cookPhaseVerb.test(step);
+    if (isPrep && !isCook) prepMinutes = (prepMinutes ?? 0) + minutes;
+    else if (isCook && !isPrep) cookMinutes = (cookMinutes ?? 0) + minutes;
+  }
+  return {
+    prepMinutes: prepMinutes === null ? null : Math.round(prepMinutes),
+    cookMinutes: cookMinutes === null ? null : Math.round(cookMinutes)
+  };
+}
+
+// A chef stating "prep time five minutes, cook time twenty minutes" outright
+// is stronger evidence than inferring it from a verb elsewhere, and "cook
+// time" alone has no ingredient/method content -- left in place it either
+// vanishes silently (no recognized unit, "prep" isn't a method verb) or turns
+// into a meaningless "Cook time." step (bare "cook" is a method verb). Both
+// statements are pulled out of the transcript before any other parsing runs.
+const prepTimeStatement = /\bprep\s*time\s*(?:is\s*|for\s*|of\s*)?(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s*(hours?|minutes?|mins?)\b/i;
+const cookTimeStatement = /\bcook\s*time\s*(?:is\s*|for\s*|of\s*)?(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s*(hours?|minutes?|mins?)\b/i;
+
+function extractStatedTimes(normalizedSegments) {
+  let prepMinutes = null;
+  let cookMinutes = null;
+  const remainingSegments = normalizedSegments.map((segment) => {
+    let text = segment;
+    const prepMatch = prepTimeStatement.exec(text);
+    if (prepMatch) {
+      prepMinutes = durationToMinutes(prepMatch[1], prepMatch[2]);
+      text = text.slice(0, prepMatch.index) + text.slice(prepMatch.index + prepMatch[0].length);
+    }
+    const cookMatch = cookTimeStatement.exec(text);
+    if (cookMatch) {
+      cookMinutes = durationToMinutes(cookMatch[1], cookMatch[2]);
+      text = text.slice(0, cookMatch.index) + text.slice(cookMatch.index + cookMatch[0].length);
+    }
+    return text.replace(/\s+/g, ' ').trim();
+  });
+  return { prepMinutes, cookMinutes, remainingSegments };
+}
+
+// A step that is itself the opening title announcement ("Make my famous
+// chili.") is not a cooking instruction -- without this it would show up
+// both as the recipe title and as a redundant first Method step. Checked
+// against the already-extracted title text directly (cleanStep has already
+// stripped the leading pronoun that titleMakingPattern requires, so that
+// pattern itself can no longer match here).
+function isTitleAnnouncementStep(step, title) {
+  if (!title) return false;
+  const stripped = step.replace(/[.!?]+$/, '').trim();
+  const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const restatementPattern = new RegExp(
+    `^(?:(?:making|make|cooking|cook)\\s+|this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+|this\\s+recipe\\s+is\\s+(?:for\\s+)?)${escapedTitle}$`,
+    'i'
+  );
+  if (restatementPattern.test(stripped)) return true;
+  return false;
+}
+
 export function parseCookingSession(segments = []) {
   if (!segments.length) return { ingredients: [], steps: [] };
 
-  const normalized = segments
+  const rawNormalized = segments
     .map((s) => normalizeSpeechText(typeof s === 'string' ? s : s.text).trim())
     .filter(Boolean);
+
+  const statedTimes = extractStatedTimes(rawNormalized);
+  const normalized = statedTimes.remainingSegments.filter(Boolean);
 
   const ingredients = [];
   const steps = [];
@@ -652,9 +847,16 @@ export function parseCookingSession(segments = []) {
   const fullTranscript = normalized.join(' ');
   const correctedIngredients = dedupeIngredients(applyCorrections(fullTranscript, dedupeIngredients(ingredients)));
 
+  const title = extractRecipeTitle(normalized);
+  const finalSteps = dedupeSteps(steps).filter((step) => !isTitleAnnouncementStep(step, title));
+  const inferredTimes = estimatePrepCookMinutes(finalSteps);
+
   return {
     ingredients: canonicalizeIngredients(correctedIngredients),
-    steps: dedupeSteps(steps)
+    steps: finalSteps,
+    title,
+    prepMinutes: statedTimes.prepMinutes ?? inferredTimes.prepMinutes,
+    cookMinutes: statedTimes.cookMinutes ?? inferredTimes.cookMinutes
   };
 }
 
