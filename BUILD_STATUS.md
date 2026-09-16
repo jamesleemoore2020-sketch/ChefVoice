@@ -10,8 +10,13 @@
   bugs (a bare cut-state modifier like "Ground" left standalone by a segment
   break, a dangling bare "Or", and an ingredient name running on into the
   next sentence) found from a real chili-recipe capture. PWA cache/package
-  version 0.5.5, PWA-only -- Android parser/rules/Functions/Live/App Check
-  unchanged. See `PWA_TITLE_PREP_COOK_ESTIMATE_0.5.5.md`.
+  version 0.5.5. See `PWA_TITLE_PREP_COOK_ESTIMATE_0.5.5.md`.
+- Same-day follow-up: ported that whole change to Android's
+  `CookingSessionParser.kt`/`ChefVoiceApp.kt` for parity -- identical title/
+  prep-cook-time detection and the same three ingredient-bug fixes, wired
+  into `CreateRecipeScreen`'s capture-stop merge the same way. Android
+  versionCode 68 / versionName 0.11.7. No rules/Functions/Live/App Check/
+  billing changes. See `TITLE_PREP_COOK_ANDROID_PARITY_0.11.7.md`.
 
 # Current handoff — 2026-09-15
 

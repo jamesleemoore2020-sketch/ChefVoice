@@ -5,7 +5,10 @@ import com.chefvoice.app.model.TranscriptSegment
 
 data class CookingDraft(
     val ingredients: List<Ingredient>,
-    val steps: List<String>
+    val steps: List<String>,
+    val title: String = "",
+    val prepMinutes: Int? = null,
+    val cookMinutes: Int? = null
 )
 
 /**
@@ -90,10 +93,19 @@ object CookingSessionParser {
     )
 
     private val ingredientNoiseName = Regex(
-        "(?i)^(?:to|of|the|it|this|that|some|what|today|tomorrow|we|you|i|and|then|so|um|uh)$"
+        "(?i)^(?:to|of|the|it|this|that|some|what|today|tomorrow|we|you|i|and|or|then|so|um|uh)$"
     )
 
     private val ingredientArtifactName = Regex("(?i)^(?:grab|stuff|tasteful)$")
+
+    // 0.5.5 PWA parity: a segment boundary sometimes falls right after a prep
+    // modifier and before the noun it describes ("one pound of ground" | "beef"
+    // as two ASR chunks), so the per-segment pass sees "ground" alone and it
+    // reads as a syntactically fine unmeasured ingredient. None of these words
+    // is ever a complete ingredient on its own.
+    private val bareModifierName = Regex(
+        "(?i)^(?:ground|diced|sliced|chopped|minced|grated|shredded|crushed|boneless|skinless|peeled|cubed)$"
+    )
 
     private val narrationNoiseName = Regex(
         "(?i)^(?:today|so|what|you|we|i)\\b.*\\b(?:gonna|going|need|make|do)\\b"
@@ -149,12 +161,207 @@ object CookingSessionParser {
         "(?i)\\b(cook|bake|roast|heat|preheat|sear|fry|broil)\\b([^.!?]{0,80}?)\\bfor\\s+(\\d+(?:\\.\\d+)?\\s*(?:°(?:\\s*[fc])?|degrees?(?:\\s+(?:fahrenheit|celsius))?))(?=\\s|$|[,.!?])"
     )
 
+    // ---- Recipe title from an opening announcement ---------------------------
+    // Ported from cooking-session-parser.js (0.5.5). Only fires on an explicit
+    // "here's what I'm making" announcement, never inferred from ambient
+    // narration -- an unmatched transcript leaves the title for the chef to
+    // type, same as it always has.
+    //
+    // Matched per sentence-like unit (each raw segment, further split only on
+    // hard punctuation) rather than through splitNarration's clause splitting:
+    // splitNarration's verb-boundary splitting (needed elsewhere to isolate
+    // method instructions) can separate a leading pronoun from its verb --
+    // "Today I'm going to make chili" becomes "Today I'm going to" | "make
+    // chili" -- which would silently defeat a pattern that needs both in the
+    // same piece of text. A live ASR segment is itself a natural,
+    // pause-delimited sentence boundary: the capture below runs to the end of
+    // whichever unit it matched in.
+    //
+    // The pronoun+auxiliary ("I'm"/"we're"/"I am"/"we are") is mandatory, not
+    // optional: a bare imperative like "make four burger patties" is a real,
+    // common mid-recipe instruction, and without a required pronoun it reads
+    // as a title announcement just as easily as "we're making hamburgers"
+    // does. "Making/make/cooking/cook" is further gated to the first two
+    // units (chefs say the name at the very beginning) so a later "we're
+    // going to cook the beef now" mid-recipe line can't be mistaken for it.
+    // The "recipe for"/"this recipe is" phrasings are distinctive framing
+    // sentences a chef would not say mid-step, so those are allowed in any
+    // unit.
+    private const val titleStopBoundary = "(?=[,.!?]|\\s+(?:and\\s+)?(?:i|you|we)(?:'m|'re| am| are)\\b|$)"
+    private val titleMakingPattern = Regex(
+        "(?i)(?:today[, ]*)?(?:i|we)(?:'m|'re| am| are)\\s+(?:going\\s+to\\s+|gonna\\s+)?(?:making|make|cooking|cook)\\s+(.{1,60}?)$titleStopBoundary"
+    )
+    private val titleRecipeForPattern = Regex(
+        "(?i)this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+(.{1,60}?)$titleStopBoundary"
+    )
+    private val titleThisRecipeIsPattern = Regex(
+        "(?i)this\\s+recipe\\s+is\\s+(?:for\\s+)?(.{1,60}?)$titleStopBoundary"
+    )
+
+    private fun cleanRecipeTitle(captured: String): String {
+        val cleaned = captured
+            .split(",").first()
+            .replace(Regex("(?i)^(?:a|an|the|some)\\s+"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (cleaned.isBlank() || cleaned.length > 60) return ""
+        return capitalizeIngredient(cleaned)
+    }
+
+    private fun titleSearchUnits(normalizedSegments: List<String>): List<String> {
+        val units = mutableListOf<String>()
+        normalizedSegments.forEach { segment ->
+            segment.split(Regex("[.!?]+")).forEach { sentence ->
+                val trimmed = sentence.trim()
+                if (trimmed.isNotBlank()) units.add(trimmed)
+            }
+        }
+        return units
+    }
+
+    private fun extractRecipeTitle(normalizedSegments: List<String>): String {
+        val units = titleSearchUnits(normalizedSegments)
+
+        units.take(2).forEach { unit ->
+            val match = titleMakingPattern.find(unit)
+            if (match != null) {
+                val title = cleanRecipeTitle(match.groupValues[1])
+                if (title.isNotBlank()) return title
+            }
+        }
+
+        units.forEach { unit ->
+            val match = titleRecipeForPattern.find(unit) ?: titleThisRecipeIsPattern.find(unit)
+            if (match != null) {
+                val title = cleanRecipeTitle(match.groupValues[1])
+                if (title.isNotBlank()) return title
+            }
+        }
+        return ""
+    }
+
+    // A step that is itself the opening title announcement ("Make my famous
+    // chili.") is not a cooking instruction -- without this it would show up
+    // both as the recipe title and as a redundant first Method step. Checked
+    // against the already-extracted title text directly (cleanStep has
+    // already stripped the leading pronoun that titleMakingPattern requires,
+    // so that pattern itself can no longer match here).
+    private fun isTitleAnnouncementStep(step: String, title: String): Boolean {
+        if (title.isBlank()) return false
+        val stripped = step.trimEnd('.', '!', '?').trim()
+        val escapedTitle = Regex.escape(title)
+        val restatementPattern = Regex(
+            "(?i)^(?:(?:making|make|cooking|cook)\\s+|this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+|this\\s+recipe\\s+is\\s+(?:for\\s+)?)$escapedTitle$"
+        )
+        return restatementPattern.matches(stripped)
+    }
+
+    // ---- Prep/cook time estimate ----------------------------------------------
+    // Sums minute/hour durations already present in the finished method steps,
+    // bucketed by an unambiguous prep verb (before heat -- chop/dice/slice/
+    // peel/mince) or an unambiguous cook verb (heat applied -- cook/bake/
+    // roast/simmer/boil/fry/sear/saute/brown/toast/preheat/melt/reduce). A
+    // step naming both kinds of verb, or neither, contributes to neither
+    // total: this is an estimate from durations the chef actually said, never
+    // a guess, matching the rest of this parser.
+    private val prepPhaseVerb = Regex(
+        "(?i)\\b(?:chop|chopping|chopped|dice|dicing|diced|slice|slicing|sliced|peel|peeling|peeled|mince|mincing|minced)\\b"
+    )
+    private val cookPhaseVerb = Regex(
+        "(?i)\\b(?:cook|cooking|cooked|bake|baking|baked|roast|roasting|roasted|simmer|simmering|simmered|boil|boiling|boiled|fry|frying|fried|sear|searing|seared|saut[ée](?:ing|ed)?|brown|browning|browned|toast|toasting|toasted|preheat|preheating|preheated|melt|melting|melted|reduce|reducing|reduced)\\b"
+    )
+    private val durationNumberWords = mapOf(
+        "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5, "six" to 6, "seven" to 7,
+        "eight" to 8, "nine" to 9, "ten" to 10, "eleven" to 11, "twelve" to 12, "thirteen" to 13,
+        "fourteen" to 14, "fifteen" to 15, "sixteen" to 16, "seventeen" to 17, "eighteen" to 18,
+        "nineteen" to 19, "twenty" to 20
+    )
+    private val stepDurationPattern = Regex(
+        "(?i)(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\\s+(hours?|minutes?|mins?)\\b"
+    )
+
+    private fun durationToMinutes(numberToken: String, unitToken: String): Double? {
+        val token = numberToken.lowercase()
+        val amount = durationNumberWords[token]?.toDouble() ?: token.toDoubleOrNull() ?: return null
+        return if (unitToken.startsWith("hour", ignoreCase = true)) amount * 60 else amount
+    }
+
+    private fun stepDurationMinutes(step: String): Double? {
+        val match = stepDurationPattern.find(step) ?: return null
+        return durationToMinutes(match.groupValues[1], match.groupValues[2])
+    }
+
+    private data class PrepCookEstimate(val prepMinutes: Int?, val cookMinutes: Int?)
+
+    private fun estimatePrepCookMinutes(steps: List<String>): PrepCookEstimate {
+        var prepMinutes: Double? = null
+        var cookMinutes: Double? = null
+        steps.forEach stepLoop@{ step ->
+            val minutes = stepDurationMinutes(step) ?: return@stepLoop
+            val isPrep = prepPhaseVerb.containsMatchIn(step)
+            val isCook = cookPhaseVerb.containsMatchIn(step)
+            if (isPrep && !isCook) prepMinutes = (prepMinutes ?: 0.0) + minutes
+            else if (isCook && !isPrep) cookMinutes = (cookMinutes ?: 0.0) + minutes
+        }
+        return PrepCookEstimate(
+            prepMinutes = prepMinutes?.let { Math.round(it).toInt() },
+            cookMinutes = cookMinutes?.let { Math.round(it).toInt() }
+        )
+    }
+
+    // A chef stating "prep time five minutes, cook time twenty minutes"
+    // outright is stronger evidence than inferring it from a verb elsewhere,
+    // and "cook time" alone has no ingredient/method content -- left in place
+    // it either vanishes silently (no recognized unit, "prep" isn't a method
+    // verb) or turns into a meaningless "Cook time." step (bare "cook" is a
+    // method verb). Both statements are pulled out of the transcript before
+    // any other parsing runs.
+    private val prepTimeStatement = Regex(
+        "(?i)\\bprep\\s*time\\s*(?:is\\s*|for\\s*|of\\s*)?(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\\s*(hours?|minutes?|mins?)\\b"
+    )
+    private val cookTimeStatement = Regex(
+        "(?i)\\bcook\\s*time\\s*(?:is\\s*|for\\s*|of\\s*)?(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\\s*(hours?|minutes?|mins?)\\b"
+    )
+
+    private data class StatedTimes(
+        val prepMinutes: Int?,
+        val cookMinutes: Int?,
+        val remainingSegments: List<String>
+    )
+
+    private fun extractStatedTimes(normalizedSegments: List<String>): StatedTimes {
+        var prepMinutes: Double? = null
+        var cookMinutes: Double? = null
+        val remaining = normalizedSegments.map { segment ->
+            var text = segment
+            val prepMatch = prepTimeStatement.find(text)
+            if (prepMatch != null) {
+                prepMinutes = durationToMinutes(prepMatch.groupValues[1], prepMatch.groupValues[2])
+                text = text.removeRange(prepMatch.range.first, prepMatch.range.last + 1)
+            }
+            val cookMatch = cookTimeStatement.find(text)
+            if (cookMatch != null) {
+                cookMinutes = durationToMinutes(cookMatch.groupValues[1], cookMatch.groupValues[2])
+                text = text.removeRange(cookMatch.range.first, cookMatch.range.last + 1)
+            }
+            text.replace(Regex("\\s+"), " ").trim()
+        }
+        return StatedTimes(
+            prepMinutes = prepMinutes?.let { Math.round(it).toInt() },
+            cookMinutes = cookMinutes?.let { Math.round(it).toInt() },
+            remainingSegments = remaining
+        )
+    }
+
     fun parse(segments: List<TranscriptSegment>): CookingDraft {
         if (segments.isEmpty()) return CookingDraft(emptyList(), emptyList())
 
-        val normalized = segments
+        val rawNormalized = segments
             .map { IngredientParser.normalizeSpeechText(it.text).trim() }
             .filter { it.isNotBlank() }
+
+        val statedTimes = extractStatedTimes(rawNormalized)
+        val normalized = statedTimes.remainingSegments.filter { it.isNotBlank() }
 
         val ingredients = mutableListOf<Ingredient>()
         val steps = mutableListOf<String>()
@@ -192,12 +399,20 @@ object CookingSessionParser {
         val correctedIngredients = dedupeIngredients(
             applyCorrections(fullTranscript, dedupeIngredients(ingredients))
         )
+
+        val title = extractRecipeTitle(normalized)
+        val finalSteps = dedupeSteps(steps).filterNot { isTitleAnnouncementStep(it, title) }
+        val inferredTimes = estimatePrepCookMinutes(finalSteps)
+
         return CookingDraft(
             // Canonicalization is part of the parsed recipe boundary. The UI and
             // later review passes should never receive obvious ASR tails as
             // ingredient identity.
             ingredients = RecipeCanonicalizer.canonicalizeIngredients(correctedIngredients),
-            steps = dedupeSteps(steps)
+            steps = finalSteps,
+            title = title,
+            prepMinutes = statedTimes.prepMinutes ?: inferredTimes.prepMinutes,
+            cookMinutes = statedTimes.cookMinutes ?: inferredTimes.cookMinutes
         )
     }
 
@@ -457,6 +672,15 @@ object CookingSessionParser {
             .replace(Regex("(?i)\\s+(?:it|that|this)\\s+(?:took|takes)\\s*$"), "")
             .replace(Regex("(?i)\\s+(?:like|wait|actually|sorry|no)\\s*$"), "")
             .replace(Regex("(?i)\\s+(?:(?:i|you|we)(?:'m|'re| am| are)?\\s+)?(?:gonna|going\\s+to)\\s*$"), "")
+            // 0.5.5 PWA parity: a window join can attach a whole next sentence after
+            // "and": "...salt and you're going to let it [simmer]" -- the verb itself
+            // often lands in its own clause via the action-word boundary above,
+            // leaving this shell with nothing left to match on. Strip it as its own
+            // dangling unit.
+            .replace(Regex("(?i)\\s+and\\s+(?:(?:i|you|we)(?:'m|'re| am| are)?\\s+)?(?:going\\s+to|gonna)\\s+let\\s+(?:it|them)\\s*$"), "")
+            // "salt or" said just before a segment break leaves a dangling "or" with
+            // its second option in the next segment; never a real ingredient tail.
+            .replace(Regex("(?i)\\s+or\\s*$"), "")
             .replace(Regex("(?i)\\s+(?:on|in|at|to|into|with|for)\\s*$"), "")
             .trim(' ', ',', '.', ';')
     }
@@ -476,6 +700,7 @@ object CookingSessionParser {
         if (backReferenceName.containsMatchIn(clean)) return false
         if (narrationNoiseName.containsMatchIn(clean)) return false
         if (looksLikeOnlyCookingInstruction(clean)) return false
+        if (bareModifierName.matches(clean)) return false
         // v8.5: bare prep nouns are method outputs, not ingredients.
         if (Regex("(?i)^(?:\\d+\\s+)?(?:patties?|portions?|servings?)$").matches(clean)) return false
         return true

@@ -83,6 +83,9 @@ class GoldenCookingCorpusTest {
             draft.ingredients.map { listOf(it.quantity, it.unit, it.name) }
         )
         assertTrue(draft.ingredients.none { "${it.quantity} ${it.unit} ${it.name}".contains("375") || it.name.contains("°") })
+        assertEquals("Hamburgers", draft.title)
+        assertEquals(20, draft.cookMinutes)
+        assertEquals(null, draft.prepMinutes)
 
         val expected = listOf(
             "make four different burger patties",
@@ -150,6 +153,12 @@ class GoldenCookingCorpusTest {
             draft.steps
         )
         assertTrue(draft.steps.none { Regex("(?i)20 minutes.*(?:foot|rest)|foot.*rest").containsMatchIn(it) })
+        assertEquals(
+            "no opening announcement in this fixture -- must not invent one from \"Make four burger patties\"",
+            "",
+            draft.title
+        )
+        assertEquals(20, draft.cookMinutes)
     }
 
 
@@ -272,6 +281,171 @@ class GoldenCookingCorpusTest {
             "no method step may absorb an ingredient declaration, got: ${draft.steps}",
             draft.steps.none { it.contains("need some", ignoreCase = true) }
         )
+        assertEquals(
+            "title announcement is split across segments 0 and 1 by ASR -- must not run on into \"One pack should feed...\"",
+            "Nachos",
+            draft.title
+        )
     }
 
+    // ---- Recipe title ---------------------------------------------------------
+
+    @Test
+    fun extractsTitleFromTodayImMakingX() {
+        val draft = CookingSessionParser.parse(listOf(TranscriptSegment(elapsedMs = 0L, text = "today I'm making my famous chili")))
+        assertEquals("My famous chili", draft.title)
+    }
+
+    @Test
+    fun extractsTitleFromThisIsMyRecipeForX() {
+        val draft = CookingSessionParser.parse(
+            listOf(
+                TranscriptSegment(elapsedMs = 0L, text = "we took one pound of beef"),
+                TranscriptSegment(elapsedMs = 3_000L, text = "this is my recipe for spicy chili")
+            )
+        )
+        assertEquals("Spicy chili", draft.title)
+    }
+
+    @Test
+    fun extractsTitleFromThisRecipeIsX() {
+        val draft = CookingSessionParser.parse(listOf(TranscriptSegment(elapsedMs = 0L, text = "this recipe is grandma's meatloaf")))
+        assertEquals("Grandma's meatloaf", draft.title)
+    }
+
+    @Test
+    fun doesNotMistakeABareImperativeMakeXForATitle() {
+        val draft = CookingSessionParser.parse(
+            listOf(
+                TranscriptSegment(elapsedMs = 0L, text = "take one pound of ground beef"),
+                TranscriptSegment(elapsedMs = 3_000L, text = "make four burger patties")
+            )
+        )
+        assertEquals("", draft.title)
+    }
+
+    @Test
+    fun doesNotMistakeALaterWereGoingToCookXForATitle() {
+        val draft = CookingSessionParser.parse(
+            listOf(
+                "we took one pound of ground beef",
+                "we chopped some onions",
+                "we mixed the onions with the beef",
+                "we're going to cook the beef now"
+            ).mapIndexed { index, text -> TranscriptSegment(elapsedMs = index * 3_000L, text = text) }
+        )
+        assertEquals("", draft.title)
+    }
+
+    @Test
+    fun noAnnouncementLeavesTitleEmpty() {
+        val draft = CookingSessionParser.parse(listOf(TranscriptSegment(elapsedMs = 0L, text = "add two cups flour")))
+        assertEquals("", draft.title)
+    }
+
+    @Test
+    fun titleDoesNotSwallowTheNextInstructionInTheSameSegment() {
+        val draft = CookingSessionParser.parse(
+            listOf(TranscriptSegment(elapsedMs = 0L, text = "today I'm making chili and we're going to start with the veggies"))
+        )
+        assertEquals("Chili", draft.title)
+    }
+
+    // ---- Prep/cook time estimate -----------------------------------------------
+
+    @Test
+    fun estimatesPrepAndCookMinutesFromChopCookVerbsWithStatedDurations() {
+        val draft = CookingSessionParser.parse(
+            listOf(
+                "we going to chop up our veggies thats going to be 5 mins",
+                "we going to cook our ground beef for 10 mins",
+                "than stir and cook for another 10 mins and serve"
+            ).mapIndexed { index, text -> TranscriptSegment(elapsedMs = index * 3_000L, text = text) }
+        )
+        assertEquals(5, draft.prepMinutes)
+        assertEquals(20, draft.cookMinutes)
+    }
+
+    @Test
+    fun aStepNamingNoDurationLeavesBothTimesUnknown() {
+        val draft = CookingSessionParser.parse(
+            listOf(
+                TranscriptSegment(elapsedMs = 0L, text = "chop the onions"),
+                TranscriptSegment(elapsedMs = 3_000L, text = "cook the beef")
+            )
+        )
+        assertEquals(null, draft.prepMinutes)
+        assertEquals(null, draft.cookMinutes)
+    }
+
+    @Test
+    fun convertsAnHourDurationToMinutes() {
+        val draft = CookingSessionParser.parse(listOf(TranscriptSegment(elapsedMs = 0L, text = "simmer for one hour")))
+        assertEquals(60, draft.cookMinutes)
+    }
+
+    @Test
+    fun aSpokenPrepTimeCookTimeStatementIsTakenDirectlyAndNeverBecomesAStep() {
+        val draft = CookingSessionParser.parse(
+            listOf(
+                TranscriptSegment(elapsedMs = 0L, text = "prep time five minutes"),
+                TranscriptSegment(elapsedMs = 3_000L, text = "cook time twenty minutes")
+            )
+        )
+        assertEquals(5, draft.prepMinutes)
+        assertEquals(20, draft.cookMinutes)
+        assertEquals(emptyList<String>(), draft.steps)
+    }
+
+    @Test
+    fun aStatedCookTimeOverridesTheInferredVerbBasedEstimate() {
+        val draft = CookingSessionParser.parse(
+            listOf(
+                TranscriptSegment(elapsedMs = 0L, text = "cook time five minutes"),
+                TranscriptSegment(elapsedMs = 3_000L, text = "cook the beef for twenty minutes")
+            )
+        )
+        assertEquals(5, draft.cookMinutes)
+    }
+
+    // ---- Real bugs from a live chili capture (see PWA_TITLE_PREP_COOK_ESTIMATE_0.5.5.md) ---
+
+    @Test
+    fun aBareCutStateModifierSplitFromItsNounIsNotItsOwnIngredient() {
+        val draft = CookingSessionParser.parse(
+            listOf(
+                TranscriptSegment(elapsedMs = 0L, text = "we need one pound of ground"),
+                TranscriptSegment(elapsedMs = 3_000L, text = "beef")
+            )
+        )
+        assertEquals(
+            listOf(listOf("1", "lb", "Ground beef")),
+            draft.ingredients.map { listOf(it.quantity, it.unit, it.name) }
+        )
+    }
+
+    @Test
+    fun aBareOrLeftDanglingBySegmentBreakIsNotItsOwnIngredient() {
+        val draft = CookingSessionParser.parse(
+            listOf(
+                TranscriptSegment(elapsedMs = 0L, text = "we need one teaspoon of salt or"),
+                TranscriptSegment(elapsedMs = 3_000L, text = "pepper")
+            )
+        )
+        assertTrue(draft.ingredients.none { it.name.equals("or", ignoreCase = true) })
+    }
+
+    @Test
+    fun aRunOnIntoTheNextSentenceIsTrimmedOffAnIngredientName() {
+        val draft = CookingSessionParser.parse(
+            listOf(
+                TranscriptSegment(elapsedMs = 0L, text = "we need one teaspoon of salt or"),
+                TranscriptSegment(elapsedMs = 3_000L, text = "pepper and you're going to let it cook")
+            )
+        )
+        assertTrue(
+            "got: ${draft.ingredients}",
+            draft.ingredients.none { Regex("(?i)going to let it").containsMatchIn(it.name) }
+        )
+    }
 }

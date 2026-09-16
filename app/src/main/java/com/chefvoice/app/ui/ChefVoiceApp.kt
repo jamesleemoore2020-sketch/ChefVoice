@@ -886,11 +886,34 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
             if (key.isNotBlank() && stepKeys.add(key)) steps.add(step)
         }
 
+        // Fills Recipe Details fields the chef hasn't already touched from what the
+        // parser detected in this capture -- never overwrites a manual edit, and a
+        // field the parser found no evidence for is simply left for the chef to
+        // type, same as always.
+        val detectedNotes = mutableListOf<String>()
+        if (draft.title.isNotBlank() && title.isBlank()) {
+            title = draft.title
+            detectedNotes.add("title \"${draft.title}\"")
+        }
+        if (draft.prepMinutes != null && prepTimeText.isBlank()) {
+            prepTimeText = draft.prepMinutes.toString()
+            detectedNotes.add("${draft.prepMinutes}m prep")
+        }
+        if (draft.cookMinutes != null && cookTimeText.isBlank()) {
+            cookTimeText = draft.cookMinutes.toString()
+            detectedNotes.add("${draft.cookMinutes}m cook")
+        }
+        val detectedSuffix = if (detectedNotes.isNotEmpty()) {
+            " Detected ${detectedNotes.joinToString(", ")} -- review in Recipe Details."
+        } else {
+            ""
+        }
+
         captureStatus = when {
             sessionTranscript.isEmpty() -> "No transcript was returned. Your saved chef voice can still be kept with the recipe."
             draft.ingredients.isEmpty() && draft.steps.isEmpty() -> "Transcript captured. Review it below and add any ingredients or steps ChefVoice missed."
             else -> "Draft ready: ${draft.ingredients.size} ingredient${if (draft.ingredients.size == 1) "" else "s"} and ${draft.steps.size} step${if (draft.steps.size == 1) "" else "s"} detected. Review them below."
-        }
+        } + detectedSuffix
     }
 
     fun finishCookingCapture() {
