@@ -1,5 +1,12 @@
 # ChefVoice session handoff — 2026-09-16 (session 3: ChefVoice Review live-bug chase)
 
+> **RESOLVED in session 4** — sections 7 and 8 below are done; do not re-chase them.
+> The unconfirmed Android compile (section 2) is green. Cook time was never a parser
+> bug: the PWA wizard wiped the detected value on navigation. The "and you let it"
+> ingredient tail and the blank recipe title were both real parser bugs, fixed on
+> both platforms. See `COOK_TIME_AND_LET_IT_TAIL_0.11.9.md` and
+> `TITLE_DROPPED_COPULA_0.11.10.md`; shipped live via `DEPLOY_PWA.cmd`.
+
 ## 1. TASK
 Chase down why ChefVoice Review (Second Pass) kept failing for a real user on live Android Chrome, fix root causes rather than symptoms, deploy, and confirm live.
 
