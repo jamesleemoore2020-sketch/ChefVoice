@@ -788,6 +788,11 @@ export function fromCloudTranscript({
     steps: parsed.steps,
     methodIssues: methodReview.issues,
     methodConfirmedCount: methodReview.confirmedCount,
+    // Carried so the caller can offer Recipe Details what this transcript said
+    // without parsing it a second time. Detection only, applied by the caller.
+    title: parsed.title,
+    prepMinutes: parsed.prepMinutes,
+    cookMinutes: parsed.cookMinutes,
     ranAt
   };
 }

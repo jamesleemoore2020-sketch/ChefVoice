@@ -437,7 +437,13 @@ function rebuildCaptureSecondPass(){
     provider:captureSecondPass.result.provider,
     model:captureSecondPass.result.model
   });
-  captureSecondPass.message='Applied. Ingredients/Method updated below.';
+  // The chef just accepted second-pass content, so that transcript is the better
+  // record of what was said and Recipe Details should follow it. Capture-time
+  // detection ran against the live transcript, which can have missed the spoken
+  // recipe name and cook time entirely -- a review that confirms nothing is
+  // exactly that case. Still only fills fields the chef has left empty.
+  const metaNote=applyDetectedRecipeMeta(captureSecondPass.result);
+  captureSecondPass.message='Applied. Ingredients/Method updated below.'+metaNote;
   renderCookDynamic();
 }
 function bindCaptureSecondPass(){

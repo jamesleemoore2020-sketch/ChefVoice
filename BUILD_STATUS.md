@@ -57,6 +57,19 @@
   survive as a bogus first method step. Android versionCode 71 / versionName
   0.11.10. No rules/Functions/Live/App Check/billing changes. See
   `TITLE_DROPPED_COPULA_0.11.10.md`.
+- Reported live that cook time and recipe name were *still* blank after the
+  above. Both earlier fixes were real but addressed other paths: this capture
+  went through ChefVoice Review with "0 confirmed - 5 to review", so
+  capture-time detection had a near-empty transcript to work with and
+  correctly filled nothing. Accepting review suggestions only ever updated
+  Ingredients/Method -- `applyDetectedRecipeMeta()` was never called on the
+  review path -- so Recipe Details stayed blank exactly when the review was
+  most needed. `fromCloudTranscript()` now returns the title/prep/cook it
+  already parses internally, and accepting review content applies them (on
+  accept, not on results, keeping the review opt-in; still fills only empty
+  fields). PWA cache/package version 0.5.8. No parser change, and no Android
+  change (pre-save review is PWA-only). See
+  `REVIEW_FILLS_RECIPE_DETAILS_0.5.8.md`.
 
 # Current handoff — 2026-09-15
 

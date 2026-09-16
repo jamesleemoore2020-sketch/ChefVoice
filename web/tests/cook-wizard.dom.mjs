@@ -130,5 +130,21 @@ run(`transcript.push({id:'d2',elapsedMs:0,text:${JSON.stringify(spoken)}})`);
 click('#finishCookCapture');await tick();
 next();back();
 check(get('#cookTime').value==='30'&&run('form.cookTime')==='30','a manually typed cook time still wins over detection');
+// Real 2026-09-16 report: live recognition caught almost nothing ("0 confirmed ·
+// 5 to review"), so capture-time detection found no recipe name or cook time.
+// ChefVoice Review then returned the real transcript, but accepting its
+// suggestions only ever filled Ingredients/Method -- Recipe Details stayed blank.
+resetCook();
+// The quota was deliberately exhausted above; this scenario needs a run left.
+globalThis.localStorage.removeItem('chefvoice.secondPass.usage');
+run("audioBlob=new Blob(['v']);transcript=[{id:'x',elapsedMs:0,text:'uh'}];captureSecondPass={busy:false,message:'',result:null};cloud.user={uid:'chef-1'};renderCookDynamic();");
+transcribeResult={transcript:"Okay, so today we're going to cook my famous top ramen meal. We start with one pack of top ramen, 1 tbsp of salt, 1 tbsp of pepper, and then you're going to let it cook for 2 minutes and you serve it up.",segments:[],provider:'google-cloud-speech-v2',model:'chirp_3'};
+click('#runCaptureSecondPass');await tick();
+check(run('form.title')===''&&run('form.cookTime')==='','review results alone do not touch Recipe Details');
+[...document.querySelectorAll('[data-accept-capture-ingredient]')].forEach(b=>b.click());
+check(run("form.title")==='Famous top ramen meal','accepting review content fills the spoken recipe name');
+check(run("form.cookTime")==='2','accepting review content fills the spoken cook time');
+next();
+check(get('#title').value==='Famous top ramen meal'&&get('#cookTime').value==='2','review-detected details reach the mounted Recipe Details inputs');
 console.log(`${checks} Cook wizard DOM checks passed.`);
 dom.window.close();
