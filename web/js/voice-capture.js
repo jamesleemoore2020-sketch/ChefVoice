@@ -1,4 +1,5 @@
 import { containsMeasurementEvidence, measurementEvidenceCount, normalizeSpeechText } from './ingredient-parser.js';
+import { fixWebmDuration } from './webm-duration-fix.js';
 
 // Continuous recognition often re-finalizes the same in-progress utterance
 // several times as it grows (or as ASR revises earlier words) before the
@@ -59,7 +60,18 @@ export class VoiceCapture {
       this.recorder.addEventListener('stop',()=>resolve(new Blob(this.chunks,{type:this.recorder.mimeType||'audio/webm'})),{once:true});
       this.recorder.stop();
     });
-    this.audioBlob=await blobPromise;
+    let recorded=await blobPromise;
+    // Chrome's MediaRecorder writes WebM with no real duration in its header
+    // (see webm-duration-fix.js) -- confirmed server-side (Cloud Function logs)
+    // as the cause of both a client/server duration mismatch and an outright
+    // "unsupported encoding" rejection from the Chirp 3 backend. Patch it here,
+    // once, so every downstream consumer (local playback, ChefVoice Review
+    // upload, publish-time voice clip upload) sees a normal, statically-valid
+    // WebM file instead of one only the recording browser can make sense of.
+    if(String(recorded.type||'').includes('webm')){
+      recorded=await fixWebmDuration(recorded,Date.now()-this.startedAt,{logger:false});
+    }
+    this.audioBlob=recorded;
     this.stream?.getTracks().forEach(t=>t.stop()); this.stream=null;
     this.onPartial(''); this.onStatus('Capture complete. Building the recipe draft…');
     return {audioBlob:this.audioBlob};
