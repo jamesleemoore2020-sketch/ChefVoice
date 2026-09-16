@@ -94,6 +94,19 @@
   the secondPassAccepted analytic. PWA cache/package version 0.5.10. No parser
   change, no Android change. See
   `REVIEW_AUTOAPPLIES_MISSED_INGREDIENTS_0.5.10.md`.
+- Built the signed Play artifact for 0.11.11 / versionCode 72 via
+  `BUILD_PRODUCTION_TRUST_APK.cmd`: `ChefVoice-v0.11.11-Production.aab`,
+  SHA-256 `a0a4366618c8267bc8d42cb238f3f4dfbb22dee37a8d64844a0de0d3bc2614f9`,
+  plus the sideload `.apk` and `ChefVoice-v0.11.11-mapping.txt` (upload the
+  mapping with the release). APK verified under signature scheme v2. **Not yet
+  uploaded** -- Play Console is a browser task. Two things to check before
+  promoting: codes 68-72 have never been uploaded and code 67's acceptance was
+  never confirmed, so the Console may be several versions behind; and R8
+  minify/shrink is on while this release build has not been smoke-tested on a
+  device (no device was attached), which is exactly the failure mode the
+  buildTypes comment warns about. Sideload the `.apk` first. Note the
+  ChefVoice Review autofill/auto-apply work in 0.5.8-0.5.10 is PWA-only, so
+  this Android build carries the parser fixes but none of that review UX.
 
 # Current handoff — 2026-09-15
 
