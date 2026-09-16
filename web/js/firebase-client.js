@@ -14,7 +14,7 @@ const [appSdk,authSdk,firestoreSdk,storageSdk]=await Promise.all([
 ]);
 
 const {initializeApp}=appSdk;
-const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut}=authSdk;
+const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,sendEmailVerification,reload}=authSdk;
 const {
   getFirestore,collection,doc,increment,limit,onSnapshot,query,setDoc,where,orderBy,
   getDoc,getDocs,deleteDoc,updateDoc,runTransaction,writeBatch,documentId,startAfter
@@ -51,6 +51,30 @@ export async function signUp(email,password,displayName){
   return user;
 }
 export async function signOutUser(){await signOut(auth);}
+
+// Ported from FirebaseSocialRepository.kt's sendVerificationEmail/
+// refreshEmailVerification -- the PWA had the emailVerified *enforcement*
+// (transcribePrivateChefVoice, below) but never got the matching flow to
+// actually send or recheck one, leaving a signed-up chef with no way to
+// clear the gate at all.
+export async function sendVerificationEmail(){
+  const user=auth.currentUser;
+  if(!user)throw new Error('Sign in to verify your ChefVoice email.');
+  if(user.emailVerified)return;
+  await sendEmailVerification(user);
+}
+
+// Auth's cached current-user object only picks up a server-side
+// emailVerified flip via reload() -- onAuthStateChanged does not fire just
+// because verification status changed, so without this the chef stays
+// stuck showing "not verified" until the next sign-in even after clicking
+// the emailed link.
+export async function refreshEmailVerification(){
+  const user=auth.currentUser;
+  if(!user)return false;
+  try{await reload(user);}catch{/* stale network/session; report last-known status below */}
+  return user.emailVerified;
+}
 
 export function observeProfile(uid,onChange,onError=()=>{}){
   return onSnapshot(doc(db,'users',uid),snap=>onChange(snap.exists()?normalizeProfile(uid,snap.data()):null),onError);

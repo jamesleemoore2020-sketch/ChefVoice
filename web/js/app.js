@@ -50,7 +50,7 @@ let mediaStatus='';let recipeSaveError='';
 const cloud={
   state:'connecting',message:'Connecting to ChefVoice Community…',api:null,user:null,profile:null,recipes:[],feedError:'',
   liked:new Set(),bookmarks:new Set(),following:new Set(),entitlement:{...FREE_ENTITLEMENT},blocked:new Set(),
-  profileLoaded:false,profileError:'',
+  profileLoaded:false,profileError:'',verifyEmailMessage:'',
   conversations:[],messageReads:{},notifications:[],
   unsubAuth:null,unsubFeed:null,unsubProfile:null,unsubLiked:null,unsubBookmarks:null,unsubFollowing:null,unsubComments:null,unsubEntitlement:null,unsubBlocked:null,
   unsubConversations:null,unsubMessageReads:null,unsubNotifications:null,unsubThread:null,unsubChefRecipes:null,
@@ -1195,7 +1195,7 @@ function profileTemplate(){
     :cloud.user&&cloud.profileLoaded&&!cloud.profile
       ?'<div class="notice">This account has no chef profile yet. Set a display name and save — Community posting, messages and publishing all need it.</div>'
       :'';
-  const firebaseCard=cloud.user?`<section class="card"><div class="quality">Connected to ChefVoice Firebase</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2>${profileNotice}<div class="field"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><div id="cloudAuthStatus" class="hint">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint"></div></div></section>`;
+  const firebaseCard=cloud.user?`<section class="card"><div class="quality">Connected to ChefVoice Firebase</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2>${profileNotice}${cloud.user.emailVerified?'':'<div class="notice">Email not verified — required for ChefVoice Review and posting media to Community. Local Cook &amp; Capture works either way.</div>'}<button id="verifyEmail" class="secondary wide" ${cloud.user.emailVerified?'disabled':''}>${cloud.user.emailVerified?'✓ Email verified':'Verify email'}</button><div id="verifyEmailStatus" class="hint">${escapeHtml(cloud.verifyEmailMessage||'')}</div><div class="field" style="margin-top:12px"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><div id="cloudAuthStatus" class="hint">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint"></div></div></section>`;
   const pushCard=cloud.user
     ?`<section class="card"><h2>Notifications</h2><p class="status">The Activity tab in your Inbox always works. Push also alerts you when ChefVoice is closed.</p><div id="pushStatus" class="hint">${escapeHtml(pushMessage||'')}</div><div class="row wrap" style="margin-top:8px"><button class="secondary" id="enablePush">Turn on push</button><button class="ghost" id="disablePush">Turn off on this device</button></div></section>`
     :'';
@@ -1234,7 +1234,32 @@ function bindProfile(){
   const signUp=document.querySelector('#cloudSignUp');if(signUp)signUp.onclick=async()=>{const status=document.querySelector('#cloudSignUpStatus');const name=document.querySelector('#newChefName').value.trim();const email=document.querySelector('#newEmail').value.trim();const password=document.querySelector('#newPassword').value;if(!email||password.length<6){status.textContent='Enter an email and a password of at least 6 characters.';return;}signUp.disabled=true;status.textContent='Creating account…';try{await cloud.api.signUp(email,password,name);status.textContent='Account created.';}catch(e){status.textContent=e?.message||'Could not create account.';signUp.disabled=false;}};
   const save=document.querySelector('#saveProfile');if(save)save.onclick=async()=>{const status=document.querySelector('#profileStatus');save.disabled=true;status.textContent='Saving…';try{await cloud.api.saveUserProfile(cloud.user.uid,{displayName:document.querySelector('#profileName').value,bio:document.querySelector('#profileBio').value,photoUrl:cloud.profile?.photoUrl||'',createdAt:cloud.profile?.createdAt||Date.now()});status.textContent='Profile saved.';}catch(e){status.textContent=e?.message||'Could not save profile.';}finally{save.disabled=false;}};
   const signOut=document.querySelector('#cloudSignOut');if(signOut)signOut.onclick=async()=>{signOut.disabled=true;try{await cloud.api?.signOutUser();}catch{signOut.disabled=false;}};
+  const verifyEmail=document.querySelector('#verifyEmail');
+  if(verifyEmail)verifyEmail.onclick=async()=>{
+    verifyEmail.disabled=true;
+    cloud.verifyEmailMessage='Sending verification email…';
+    const status=document.querySelector('#verifyEmailStatus');if(status)status.textContent=cloud.verifyEmailMessage;
+    try{
+      await cloud.api.sendVerificationEmail();
+      cloud.verifyEmailMessage='Verification email sent — check your inbox (and spam folder), then reopen Profile to refresh.';
+    }catch(e){
+      cloud.verifyEmailMessage=e?.message||'Could not send verification email.';
+      verifyEmail.disabled=false;
+    }
+    if(status)status.textContent=cloud.verifyEmailMessage;
+  };
 }
+
+// Mirrors Android's ON_RESUME refreshEmailVerification(): Auth's cached user
+// only picks up a server-side verified flip via reload(), and there is no
+// event that fires just because the chef clicked the emailed link in another
+// tab. Re-checking whenever ChefVoice regains focus on Profile is the closest
+// the PWA has to that lifecycle hook.
+document.addEventListener('visibilitychange',async()=>{
+  if(document.hidden||currentTab!=='profile'||!cloud.user||cloud.user.emailVerified||!cloud.api)return;
+  const verified=await cloud.api.refreshEmailVerification().catch(()=>false);
+  if(verified)render();
+});
 
 // ---- Inbox: direct messages + activity notifications ------------------------
 

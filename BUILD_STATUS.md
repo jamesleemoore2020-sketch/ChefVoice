@@ -17,6 +17,12 @@
   into `CreateRecipeScreen`'s capture-stop merge the same way. Android
   versionCode 68 / versionName 0.11.7. No rules/Functions/Live/App Check/
   billing changes. See `TITLE_PREP_COOK_ANDROID_PARITY_0.11.7.md`.
+- Found live testing the above: the PWA had the "verify your email" gate on
+  ChefVoice Review but never had the flow to actually send or recheck one --
+  every PWA sign-up was permanently stuck unverified. Ported Android's
+  existing `sendVerificationEmail()`/`refreshEmailVerification()` and Profile
+  UI to the PWA. PWA cache/package version 0.5.6. See
+  `PWA_EMAIL_VERIFICATION_0.5.6.md`.
 
 # Current handoff — 2026-09-15
 
