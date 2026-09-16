@@ -82,9 +82,8 @@ check(!!mintedDraftId,'a draft id is minted for the private upload');
 check(transcribeCalls.length===1&&transcribeCalls[0].id===mintedDraftId,'audio uploaded under the minted draft id');
 check(!!get('#closeCaptureSecondPass'),'review result replaces the run button');
 check(!get('#captureSecondPass').textContent.includes('reviews left'),'quota card is replaced by results');
-click('[data-accept-capture-ingredient]');
-check(run("ingredients.some(i=>i.name.toLowerCase().includes('flour'))"),'accepted ingredient suggestion fills the draft');
-check(secondPassAcceptedCalls.includes('ingredient'),'ingredient acceptance is tracked');
+check(run("ingredients.some(i=>i.name.toLowerCase().includes('flour'))"),'an ingredient the live pass missed fills the draft on its own');
+check(!document.querySelector('[data-accept-capture-ingredient]'),'a purely additive miss needs no accept click');
 // "Add two cups of flour" is itself a valid method step as well as an ingredient
 // declaration, so more than one card can offer a method suggestion here -- find
 // the one that actually adds the missing "stir" step rather than assuming order.
@@ -142,7 +141,9 @@ transcribeResult={transcript:"Okay, so today we're going to cook my famous top r
 click('#runCaptureSecondPass');await tick();
 check(run("form.title")==='Famous top ramen meal','the review fills the spoken recipe name with no accept click');
 check(run("form.cookTime")==='2','the review fills the spoken cook time with no accept click');
-check(run("ingredients.length")===0&&run("steps.length")===0,'Recipe Details autofill does not silently apply ingredient or method wording');
+check(run("ingredients.map(i=>i.name).join(',')")==='Pack of top ramen,Salt,Pepper','ingredients the live pass missed are added without an accept click');
+check(document.querySelectorAll('[data-accept-capture-ingredient]').length===0,'auto-applied ingredient cards resolve instead of lingering');
+check(run("steps.length")===0&&document.querySelectorAll('[data-accept-capture-method]').length>0,'method wording is never auto-applied and still offers an accept');
 next();
 check(get('#title').value==='Famous top ramen meal'&&get('#cookTime').value==='2','review-detected details reach the mounted Recipe Details inputs');
 // A name the chef already typed is theirs; the review must not overwrite it.
@@ -152,6 +153,16 @@ run("audioBlob=new Blob(['v']);transcript=[{id:'y',elapsedMs:0,text:'uh'}];captu
 next();fill('#title','My own name');back();
 click('#runCaptureSecondPass');await tick();
 check(run("form.title")==='My own name','a manually typed recipe name survives the review autofill');
-check(run("form.cookTime")==='2','an empty cook time is still filled alongside it');
+check(run("form.cookTime")==='2','an empty cook time is still filled alongside the name the chef kept');
+// Only a purely additive miss is automatic. A quantity the chef already has
+// recorded disagreeing with the review changes what was said, so it stays behind
+// an explicit "Use second pass".
+resetCook();
+globalThis.localStorage.removeItem('chefvoice.secondPass.usage');
+run("ingredients=[{id:'ing-1',quantity:'3',unit:'tbsp',name:'Salt'}];audioBlob=new Blob(['v']);transcript=[{id:'z',elapsedMs:0,text:'uh'}];captureSecondPass={busy:false,message:'',result:null};renderCookDynamic();");
+transcribeResult={transcript:'Add 1 tbsp of salt.',segments:[],provider:'google-cloud-speech-v2',model:'chirp_3'};
+click('#runCaptureSecondPass');await tick();
+check(run("ingredients.find(i=>i.name==='Salt').quantity")==='3','a disagreeing quantity is not overwritten automatically');
+check(document.querySelectorAll('[data-accept-capture-ingredient]').length>0,'the disagreement is still offered for review');
 console.log(`${checks} Cook wizard DOM checks passed.`);
 dom.window.close();

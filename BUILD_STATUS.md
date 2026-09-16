@@ -83,6 +83,17 @@
   0.5.9, Android versionCode 72 / versionName 0.11.11. No rules/Functions/
   Live/App Check/billing changes. See
   `REVIEW_AUTOFILLS_DETAILS_0.5.9_0.11.11.md`.
+- Autofill confirmed working live, so by request ChefVoice Review now also
+  applies "possible missed ingredient" suggestions on its own, with no "Use
+  second pass" button for them. Scoped to that one issue type because it is
+  purely additive -- the live transcript never caught the ingredient, so
+  applying it cannot overwrite or delete anything recorded. Quantity changes,
+  name cleanups, artifact removal and every method issue still require an
+  explicit accept, so the chef's own content is never silently rewritten and
+  "Keep current" stays meaningful. Auto-applied items deliberately do not fire
+  the secondPassAccepted analytic. PWA cache/package version 0.5.10. No parser
+  change, no Android change. See
+  `REVIEW_AUTOAPPLIES_MISSED_INGREDIENTS_0.5.10.md`.
 
 # Current handoff — 2026-09-15
 

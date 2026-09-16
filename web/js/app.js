@@ -491,21 +491,32 @@ async function runCaptureSecondPass(){
     // Counted only on success: a failed review must not burn an allowance.
     recordSecondPassUse();
     ChefAnalytics.secondPassOpened();
-    const result=fromCloudTranscript({
-      liveIngredients:ingredients,
+    const review=liveIngredients=>fromCloudTranscript({
+      liveIngredients,
       liveSteps:steps,
       transcript:cloudResult.transcript,
       rawSegments:cloudResult.segments,
       provider:cloudResult.provider,
       model:cloudResult.model
     });
+    let result=review(ingredients);
+    // A "possible missed ingredient" is purely additive: the live transcript
+    // never caught it, so applying it cannot overwrite or drop anything the
+    // chef recorded. Those go straight in. Every other kind still needs an
+    // explicit "Use second pass" -- a quantity change, a name cleanup, removing
+    // a live artifact and any method wording all alter or discard what was
+    // actually said, which is exactly what this review exists to keep opt-in.
+    const missed=result.issues.filter(i=>i.type==='possible-missed-ingredient');
+    if(missed.length){
+      for(const issue of missed)ingredients=applySuggestion(ingredients,issue);
+      result=review(ingredients);
+    }
     result.rawSegments=cloudResult.segments;
-    // Recipe Details fills straight from the review, without waiting for a
-    // "Use second pass" click. Running the review is already the chef's
-    // explicit opt-in, and this only ever writes into fields they left empty,
-    // so nothing they typed and no ingredient or method wording is touched --
-    // those still require an accept.
-    captureSecondPass={busy:false,message:applyDetectedRecipeMeta(result).trim(),result};
+    // Recipe Details fills straight from the review too. Running the review is
+    // already the chef's explicit opt-in, and this only ever writes into fields
+    // they left empty, so nothing they typed is touched.
+    const addedNote=missed.length?`Added ${missed.length} ingredient${missed.length===1?'':'s'} ChefVoice Review heard.`:'';
+    captureSecondPass={busy:false,message:`${addedNote}${applyDetectedRecipeMeta(result)}`.trim(),result};
   }catch(e){
     captureSecondPass={busy:false,message:e?.message||'ChefVoice Review could not finish. Your local recipe and audio are unchanged.',result:null};
   }
