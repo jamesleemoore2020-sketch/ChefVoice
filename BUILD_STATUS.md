@@ -142,8 +142,27 @@
   `ChefVoice-v0.11.12-Production.apk` (SHA-256
   `6f10fef91323b10880b1f9f5c7dc0317d3ad4aee97bd321412ba6bf9359d5403`) for
   sideloading. Signing certificate verified identical to the accepted 0.11.11
-  artifact (SHA-256 `3c81185f...c98e3274`, Plugged'N LLC). **The Play draft has
-  not been touched** -- it still holds code 72 and is still not rolled out.
+  artifact (SHA-256 `3c81185f...c98e3274`, Plugged'N LLC).
+- **Correction to the note above: code 72 (0.11.11) was already live.** By the
+  time the Console was opened the production track read `Active - Latest
+  release: 72 (0.11.11) - 177 countries/regions - 3 installs`, rolled out at
+  100% earlier the same evening. The earlier "draft only, not rolled out" note
+  was stale, so there was no draft to replace.
+- **Code 73 (0.11.12) has been submitted to production.** A new production
+  release was created with the 0.11.12 bundle, release name `73 (0.11.12)`,
+  en-US notes covering the two parser fixes, roll-out percentage 100%, all
+  targeted countries, previous 72 bundle deliberately *not* included. Managed
+  publishing is off, so it auto-publishes once Google's review passes;
+  Publishing overview now shows "Changes in review". Two non-blocking warnings
+  were present and are pre-existing, not introduced by 0.11.12: the advertising
+  ID declaration says the app uses an ad ID while the manifest has no
+  `com.google.android.gms.permission.AD_ID` (release-blocking errors are turned
+  off), and the bundle ships native code with no uploaded debug symbols, so
+  native WebRTC crashes will not symbolicate. Consider `ndk { debugSymbolLevel =
+  "FULL" }` and correcting the ad-ID declaration before the next release.
+- No separate `mapping.txt` upload is needed: the bundle already embeds
+  `BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map`, so Play
+  deobfuscates Java/Kotlin crashes automatically.
 - PWA 0.5.11 is deployed and verified by running the *deployed*
   `js/cooking-session-parser.js` from `chefvoice-d7fec.web.app` against the
   device transcript, not just the local file.
