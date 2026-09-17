@@ -156,6 +156,13 @@ object CookingSessionParser {
 
     private val uncertainThemClause = Regex("(?i)^[a-z][a-z'-]*\\s+them\\b")
 
+    // A segment the parser cannot otherwise classify is still the chef's own
+    // narration. Dropping it silently loses recorded content, so it is kept
+    // verbatim when it names a concrete duration -- strong evidence of a real
+    // instruction, and exactly the timing detail a recipe depends on. Filler
+    // ("okay", "so where were we") names no duration and is still dropped.
+    private val strandedDurationClause = Regex("(?i)\\b(?:seconds?|minutes?|hours?)\\b")
+
     private val ingredientMethodContinuationAction = Regex(
         "(?i)\\b(?:season|seasoning|sprinkle|top|add|adding|mix|mixing|combine|combining)\\b"
     )
@@ -250,20 +257,26 @@ object CookingSessionParser {
         return ""
     }
 
-    // A step that is itself the opening title announcement ("Make my famous
-    // chili.") is not a cooking instruction -- without this it would show up
-    // both as the recipe title and as a redundant first Method step. Checked
-    // against the already-extracted title text directly (cleanStep has
-    // already stripped the leading pronoun that titleMakingPattern requires,
-    // so that pattern itself can no longer match here).
-    private fun isTitleAnnouncementStep(step: String, title: String): Boolean {
-        if (title.isBlank()) return false
+    // A step that opens with the title announcement ("Make my famous chili.")
+    // is not a cooking instruction -- without this it would show up both as
+    // the recipe title and as a redundant first Method step. Checked against
+    // the already-extracted title text directly (cleanStep has already
+    // stripped the leading pronoun that titleMakingPattern requires, so that
+    // pattern itself can no longer match here). When a recognizer runs the
+    // announcement together with the next sentence -- "Make my famous chili
+    // you had two tablespoon of salt." -- only the announcement prefix is
+    // removed; what followed it is the chef's own content and is kept verbatim
+    // rather than deleted along with it.
+    private fun stripTitleAnnouncement(step: String, title: String): String {
+        if (title.isBlank()) return step
         val stripped = step.trimEnd('.', '!', '?').trim()
         val escapedTitle = Regex.escape(title)
         val restatementPattern = Regex(
-            "(?i)^(?:(?:making|make|cooking|cook)\\s+(?:my\\s+)?|this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+|this\\s+recipe\\s+is\\s+(?:for\\s+)?)$escapedTitle$"
+            "(?i)^(?:(?:making|make|cooking|cook)\\s+(?:my\\s+)?|this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+|this\\s+recipe\\s+is\\s+(?:for\\s+)?)$escapedTitle\\b\\s*"
         )
-        return restatementPattern.matches(stripped)
+        val match = restatementPattern.find(stripped) ?: return step
+        val rest = stripped.substring(match.value.length).trim()
+        return if (rest.isNotEmpty()) sentenceCase(rest) else ""
     }
 
     // ---- Prep/cook time estimate ----------------------------------------------
@@ -411,7 +424,7 @@ object CookingSessionParser {
         )
 
         val title = extractRecipeTitle(normalized)
-        val finalSteps = dedupeSteps(steps).filterNot { isTitleAnnouncementStep(it, title) }
+        val finalSteps = dedupeSteps(steps.map { stripTitleAnnouncement(it, title) }.filter { it.isNotEmpty() })
         val inferredTimes = estimatePrepCookMinutes(finalSteps)
 
         return CookingDraft(
@@ -804,6 +817,12 @@ object CookingSessionParser {
             }
 
             if (cleaned.length >= 4 && methodContinuationCue.containsMatchIn(cleaned)) {
+                result.add(sentenceCase(cleaned))
+                acceptsIngredientContinuation = false
+                return@forEach
+            }
+
+            if (cleaned.length >= 4 && strandedDurationClause.containsMatchIn(cleaned)) {
                 result.add(sentenceCase(cleaned))
                 acceptsIngredientContinuation = false
                 return@forEach

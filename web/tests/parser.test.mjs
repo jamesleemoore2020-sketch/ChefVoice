@@ -37,6 +37,30 @@ test('a dropped copula still announces a title, but only for "make"/"do"',()=>{
   assert.equal(parseCookingSession([{text:'we going to cook our ground beef for 10 mins'}]).title,'');
 });
 test('extracts title from "this is my recipe for X"',()=>assert.equal(parseCookingSession([{text:'we took one pound of beef'},{text:'this is my recipe for spicy chili'}]).title,'Spicy chili'));
+
+// Real Android device capture, 0916 (see GoldenCookingCorpusTest.kt's
+// realDeviceRunOnTitleAnnouncementKeepsTheInstructionAndTheStrandedDurationSegment).
+// "you add" came back as "you had", so the salt instruction ran on from the title
+// announcement instead of opening its own step; only the announcement prefix may
+// be dropped. "then sauté the garlic" came back as "then so I tell you the
+// garlic" and was discarded outright; a segment naming a duration is kept verbatim.
+test('a run-on title announcement loses only the announcement, and a stranded duration segment survives',()=>{
+  const d=parseCookingSession([
+    {text:"I'm going to make my famous top romantle"},
+    {text:'You had two tablespoon of salt'},
+    {text:'Then so I tell you the garlic for five minutes'},
+    {text:'Let it cook for 10 minutes'}
+  ].map((s,i)=>({elapsedMs:i*3000,...s})));
+  assert.equal(d.title,'Famous top romantle');
+  assert.equal(d.cookMinutes,10);
+  assert.deepEqual(d.ingredients.map(i=>[i.quantity,i.unit,i.name]),[['2','tbsp','Salt']]);
+  assert.deepEqual(d.steps,[
+    'You had two tablespoon of salt.',
+    'Then so I tell you the garlic for five minutes.',
+    'Cook for 10 minutes.'
+  ]);
+  assert.ok(!d.steps.some(s=>/famous top romantle/i.test(s)),`announcement prefix must not survive: ${JSON.stringify(d.steps)}`);
+});
 test('extracts title from "this recipe is X"',()=>assert.equal(parseCookingSession([{text:"this recipe is grandma's meatloaf"}]).title,"Grandma's meatloaf"));
 test('does not mistake a bare imperative "make X" for a title',()=>assert.equal(parseCookingSession([{text:'take one pound of ground beef'},{text:'make four burger patties'}]).title,''));
 test('does not mistake a later "we\'re going to cook X" for a title',()=>assert.equal(parseCookingSession([

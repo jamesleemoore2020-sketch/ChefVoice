@@ -83,6 +83,12 @@ const durationAttachableMethod = /\b(?:cook|bake|roast|simmer|boil|fry|sear|broi
 // repeated direct-object clauses without guessing the recognized verb.
 const repeatedThemBoundary = /(\bthem(?:\s+(?:down|up|over|through|well|evenly|out|off|aside|together|apart|back|around|both|again)){0,2})\s+(?:and\s+)?(?=[a-z][a-z'-]*\s+them\b)/gi;
 const uncertainThemClause = /^[a-z][a-z'-]*\s+them\b/i;
+// A segment the parser cannot otherwise classify is still the chef's own
+// narration. Dropping it silently loses recorded content, so it is kept
+// verbatim when it names a concrete duration -- strong evidence of a real
+// instruction, and exactly the timing detail a recipe depends on. Filler
+// ("okay", "so where were we") names no duration and is still dropped.
+const strandedDurationClause = /\b(?:seconds?|minutes?|hours?)\b/i;
 const ingredientMethodContinuationAction = /\b(?:season|seasoning|sprinkle|top|add|adding|mix|mixing|combine|combining)\b/i;
 
 const methodTemperatureAfterFor = /\b(cook|bake|roast|heat|preheat|sear|fry|broil)\b([^.!?]{0,80}?)\bfor\s+(\d+(?:\.\d+)?\s*(?:°(?:\s*[fc])?|degrees?(?:\s+(?:fahrenheit|celsius))?))(?=\s|$|[,.!?])/gi;
@@ -460,6 +466,12 @@ function collectSegmentAwareSteps(normalizedSegments) {
       continue segmentLoop;
     }
 
+    if (cleaned.length >= 4 && strandedDurationClause.test(cleaned)) {
+      result.push(sentenceCase(cleaned));
+      acceptsIngredientContinuation = false;
+      continue segmentLoop;
+    }
+
     if (cleaned.trim()) acceptsIngredientContinuation = false;
   }
 
@@ -801,22 +813,27 @@ function extractStatedTimes(normalizedSegments) {
   return { prepMinutes, cookMinutes, remainingSegments };
 }
 
-// A step that is itself the opening title announcement ("Make my famous
-// chili.") is not a cooking instruction -- without this it would show up
-// both as the recipe title and as a redundant first Method step. Checked
-// against the already-extracted title text directly (cleanStep has already
-// stripped the leading pronoun that titleMakingPattern requires, so that
-// pattern itself can no longer match here).
-function isTitleAnnouncementStep(step, title) {
-  if (!title) return false;
+// A step that opens with the title announcement ("Make my famous chili.") is
+// not a cooking instruction -- without this it would show up both as the
+// recipe title and as a redundant first Method step. Checked against the
+// already-extracted title text directly (cleanStep has already stripped the
+// leading pronoun that titleMakingPattern requires, so that pattern itself can
+// no longer match here). When a recognizer runs the announcement together with
+// the next sentence -- "Make my famous chili you had two tablespoon of salt."
+// -- only the announcement prefix is removed; what followed it is the chef's
+// own content and is kept verbatim rather than deleted along with it.
+function stripTitleAnnouncement(step, title) {
+  if (!title) return step;
   const stripped = step.replace(/[.!?]+$/, '').trim();
   const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const restatementPattern = new RegExp(
-    `^(?:(?:making|make|cooking|cook)\\s+(?:my\\s+)?|this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+|this\\s+recipe\\s+is\\s+(?:for\\s+)?)${escapedTitle}$`,
+    `^(?:(?:making|make|cooking|cook)\\s+(?:my\\s+)?|this\\s+is\\s+(?:my|a|the)\\s+recipe\\s+for\\s+|this\\s+recipe\\s+is\\s+(?:for\\s+)?)${escapedTitle}\\b\\s*`,
     'i'
   );
-  if (restatementPattern.test(stripped)) return true;
-  return false;
+  const match = stripped.match(restatementPattern);
+  if (!match) return step;
+  const rest = stripped.slice(match[0].length).trim();
+  return rest ? sentenceCase(rest) : '';
 }
 
 export function parseCookingSession(segments = []) {
@@ -860,7 +877,7 @@ export function parseCookingSession(segments = []) {
   const correctedIngredients = dedupeIngredients(applyCorrections(fullTranscript, dedupeIngredients(ingredients)));
 
   const title = extractRecipeTitle(normalized);
-  const finalSteps = dedupeSteps(steps).filter((step) => !isTitleAnnouncementStep(step, title));
+  const finalSteps = dedupeSteps(steps.map((step) => stripTitleAnnouncement(step, title)).filter(Boolean));
   const inferredTimes = estimatePrepCookMinutes(finalSteps);
 
   return {

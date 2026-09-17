@@ -58,7 +58,7 @@ class GoldenCookingCorpusTest {
             }
         }
 
-        assertEquals("Golden corpus row count changed unexpectedly", 59, rows.size)
+        assertEquals("Golden corpus row count changed unexpectedly", 60, rows.size)
         assertTrue("Android golden corpus failures:\n${failures.joinToString("\n")}", failures.isEmpty())
     }
 
@@ -499,6 +499,54 @@ class GoldenCookingCorpusTest {
         assertTrue(
             "the title announcement must not also stand as a method step, got: ${draft.steps}",
             draft.steps.none { it.contains("famous top ramen meal", ignoreCase = true) }
+        )
+    }
+
+    /**
+     * Real Android device capture, 0916, release build. Two separate losses, both
+     * caused by the recognizer rather than by the chef:
+     *
+     * 1. "you add" came back as "you had". "had" is not a step-start verb, so the
+     *    segment never opened a step of its own and instead ran on from the title
+     *    announcement. The announcement check only matched a step that was
+     *    *entirely* the title, so the whole run-on survived as
+     *    "Make my famous top romantle you had two tablespoon of salt." Only the
+     *    announcement prefix may be dropped -- the instruction after it is the
+     *    chef's content.
+     * 2. "then sauté the garlic" came back as "then so I tell you the garlic".
+     *    With no recognizable verb, ingredient or continuation cue, the whole
+     *    segment was discarded silently. A segment naming a concrete duration is
+     *    kept verbatim instead, which is what the parser promises everywhere else:
+     *    an uncertain phrase is left for the chef to review, never deleted.
+     */
+    @Test
+    fun realDeviceRunOnTitleAnnouncementKeepsTheInstructionAndTheStrandedDurationSegment() {
+        val segments = listOf(
+            "I'm going to make my famous top romantle",
+            "You had two tablespoon of salt",
+            "Then so I tell you the garlic for five minutes",
+            "Let it cook for 10 minutes"
+        ).mapIndexed { index, text -> TranscriptSegment(elapsedMs = index * 3_000L, text = text) }
+
+        val draft = CookingSessionParser.parse(segments)
+
+        assertEquals("Famous top romantle", draft.title)
+        assertEquals(10, draft.cookMinutes)
+        assertEquals(
+            listOf(listOf("2", "tbsp", "Salt")),
+            draft.ingredients.map { listOf(it.quantity, it.unit, it.name) }
+        )
+        assertEquals(
+            listOf(
+                "You had two tablespoon of salt.",
+                "Then so I tell you the garlic for five minutes.",
+                "Cook for 10 minutes."
+            ),
+            draft.steps
+        )
+        assertTrue(
+            "only the announcement prefix may be stripped, never the instruction after it, got: ${draft.steps}",
+            draft.steps.none { it.contains("famous top romantle", ignoreCase = true) }
         )
     }
 }

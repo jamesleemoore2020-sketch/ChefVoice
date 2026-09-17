@@ -114,6 +114,30 @@
   `ChefVoice-v0.11.11-Production.apk` first. Also note the ChefVoice Review
   autofill/auto-apply work in 0.5.8-0.5.10 is PWA-only, so this Android build
   carries the parser fixes but none of that review UX.
+- **That smoke test has now been done** on a Galaxy S25 Ultra (SM-S938U,
+  Android 16) against the split-APK install of the signed code 72 bundle --
+  i.e. what Play actually delivers, not the universal APK. R8 is clean: no
+  `ClassNotFoundException`/`NoSuchMethodError`/`VerifyError`/`UnsatisfiedLinkError`
+  anywhere, Firestore read *and* write correct with real data, mic ->
+  SpeechRecognizer -> foreground service and the saved "Full cooking session"
+  clip both working, and **WebRTC Live initialized under minification**
+  (`libjingle_peerconnection_so.so` loaded, `PeerConnectionFactory` up, session
+  went LIVE and ended cleanly) -- the exact path the `org.jni_zero` keeps were
+  added for in 0.11.5, never previously run minified. On-device parser output
+  matched the JS reference byte for byte.
+- That same capture surfaced two real parser bugs, both of which *deleted the
+  chef's recorded content* and neither of which was a regression (the parser at
+  `522c433` produces identical output): a run-on title announcement swallowed
+  the instruction that followed it, and an unclassifiable segment naming a
+  duration was discarded outright. Fixed deterministically in both parsers --
+  the announcement is now stripped as a prefix rather than suppressing the whole
+  step, and a stranded duration-bearing segment is kept verbatim. Android
+  versionCode 73 / versionName 0.11.12, PWA cache/package version 0.5.11,
+  corpus 59 -> 60 rows. No rules/Functions/Live/App Check/billing changes. See
+  `RUNON_TITLE_AND_STRANDED_SEGMENT_0.5.11_0.11.12.md`.
+- Because of that, the saved Play draft (code 72 / 0.11.11) is now behind the
+  source. A fresh code 73 / 0.11.12 bundle carrying the parser fixes should
+  replace it before rollout.
 
 # Current handoff — 2026-09-15
 
