@@ -136,8 +136,17 @@
   corpus 59 -> 60 rows. No rules/Functions/Live/App Check/billing changes. See
   `RUNON_TITLE_AND_STRANDED_SEGMENT_0.5.11_0.11.12.md`.
 - Because of that, the saved Play draft (code 72 / 0.11.11) is now behind the
-  source. A fresh code 73 / 0.11.12 bundle carrying the parser fixes should
-  replace it before rollout.
+  source. A fresh code 73 / 0.11.12 bundle carrying the parser fixes has been
+  built and signed to replace it: `ChefVoice-v0.11.12-Production.aab`, SHA-256
+  `6284cacc9dab9783d4a33d203384c36a1e2513ffdc3d49a398533aeb1364de60`, with
+  `ChefVoice-v0.11.12-Production.apk` (SHA-256
+  `6f10fef91323b10880b1f9f5c7dc0317d3ad4aee97bd321412ba6bf9359d5403`) for
+  sideloading. Signing certificate verified identical to the accepted 0.11.11
+  artifact (SHA-256 `3c81185f...c98e3274`, Plugged'N LLC). **The Play draft has
+  not been touched** -- it still holds code 72 and is still not rolled out.
+- PWA 0.5.11 is deployed and verified by running the *deployed*
+  `js/cooking-session-parser.js` from `chefvoice-d7fec.web.app` against the
+  device transcript, not just the local file.
 
 # Current handoff — 2026-09-15
 
