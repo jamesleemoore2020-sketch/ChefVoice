@@ -73,8 +73,9 @@ the exact `org.jni_zero` path from 0.11.5, never before run minified. No
   `firebase deploy --only hosting:pwa --project chefvoice-d7fec`).
 
 ## 7. NEXT
-Confirm code 73 actually published (production track should read `Active - Latest release: 73
-(0.11.12)`). Nothing else is in flight.
+Done, 2026-09-18: code 73 published. Production track reads `Active - Latest release: 73
+(0.11.12) - 177 countries/regions - 3 installs`; Releases shows it "Available on Google Play",
+released Sep 16 9:41 PM; Publishing overview is empty. Nothing is in flight.
 
 ## 8. OPEN
 - Whether `possible-missed-step` should auto-apply like ingredients do (carried from session 4,

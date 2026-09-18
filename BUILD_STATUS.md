@@ -160,6 +160,13 @@
   off), and the bundle ships native code with no uploaded debug symbols, so
   native WebRTC crashes will not symbolicate. Consider `ndk { debugSymbolLevel =
   "FULL" }` and correcting the ad-ID declaration before the next release.
+- **Code 73 (0.11.12) is live.** Confirmed in the Play Console on 2026-09-18:
+  the production track reads `Active - Latest release: 73 (0.11.12) - 177
+  countries/regions - 3 installs`, and the Releases tab shows `73 (0.11.12)`
+  as "Available on Google Play - 1 version code - Released on Sep 16 9:41 PM".
+  Publishing overview is empty (nothing in review, nothing pending) and reads
+  "Last published on September 16, 2026". Review passed and managed publishing
+  being off auto-published it as expected; no further Play action is needed.
 - No separate `mapping.txt` upload is needed: the bundle already embeds
   `BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map`, so Play
   deobfuscates Java/Kotlin crashes automatically.
