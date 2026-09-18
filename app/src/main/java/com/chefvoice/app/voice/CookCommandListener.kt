@@ -51,7 +51,7 @@ class CookCommandListener(
         return try {
             createRecognizer()
             listen()
-            onStatus("Hands-free on · say \"next\", \"back\" or \"repeat\"")
+            onStatus("Hands-free on · say \"next\", \"back\" or \"read out loud\"")
             true
         } catch (t: Throwable) {
             running = false

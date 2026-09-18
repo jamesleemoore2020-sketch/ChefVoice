@@ -14,7 +14,11 @@ import java.util.Locale
 enum class CookCommand(val safeFromPartial: Boolean) {
     NEXT(true),
     PREVIOUS(true),
+    /** Says the current step once. Does not turn continuous reading on or off. */
     REPEAT(true),
+    /** Turns continuous step reading on, which is what "read out loud" means. */
+    READ_ALOUD(true),
+    STOP_READING(false),
     START_TIMER(false),
     STOP_TIMER(false),
     STOP_LISTENING(false)
@@ -37,6 +41,15 @@ object CookCommands {
             .forEach { put(it, CookCommand.PREVIOUS) }
         listOf("repeat", "repeat that", "say again", "say that again", "again", "what was that")
             .forEach { put(it, CookCommand.REPEAT) }
+        // Turning reading on is its own command. "Repeat" used to double as the way to
+        // switch it on, which meant the chef had to say a word that means "again" to
+        // start something that had not happened yet.
+        listOf(
+            "read out loud", "read it out loud", "read aloud", "read this out loud",
+            "read the steps", "read the step", "start reading", "read it to me", "read"
+        ).forEach { put(it, CookCommand.READ_ALOUD) }
+        listOf("stop reading", "stop reading out loud", "stop talking", "quiet", "be quiet")
+            .forEach { put(it, CookCommand.STOP_READING) }
         listOf("start timer", "set timer", "start the timer", "timer", "start timer please")
             .forEach { put(it, CookCommand.START_TIMER) }
         listOf("stop timer", "cancel timer", "stop the timer", "reset timer")

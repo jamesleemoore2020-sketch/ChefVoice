@@ -1,3 +1,35 @@
+# Current handoff — 2026-09-18 (device-test fixes)
+
+Android versionCode 76 / versionName 0.11.15. Three fixes from testing 0.11.14 on the
+SM-S938U. Parser, corpus, rules, Functions, Live and App Check untouched; nothing in
+`web/` changed, so the PWA stays at 0.5.12. Android 108 tests / 0 failures.
+
+- **The Community banner and the Following/Discover switch now scroll away.** They sat in
+  a fixed `Column` above the feed, so 170dp of hero artwork stayed on screen permanently
+  and the dishes -- the reason anyone opens the tab -- scrolled in a short window beneath
+  it. The whole screen is now one `LazyColumn` with the banner, the mode switch, search,
+  notices and chef results as items, so the feed gets the full screen once you scroll.
+  Verified on device: after two swipes the banner is gone entirely.
+- **"Read out loud" is now its own hands-free command, separate from "repeat".** Repeat
+  used to double as the way to switch reading on, which meant saying a word that means
+  "again" to start something that had not happened yet. Now `read out loud` / `read
+  aloud` / `start reading` turns continuous reading on, `repeat` says the current step
+  once, and `stop reading` / `be quiet` turns it off. The narration guard still holds:
+  "read the recipe before you start cooking" does not fire it.
+- **The shopping list is reachable from where it is filled.** The list itself was working
+  correctly -- 9 items had saved from a real recipe -- but the only way in was the button
+  on the Recipes tab, which is a long way back from the recipe you just added from. The
+  confirmation now carries a **View list** action straight to it. The Recipes-tab button
+  also already shows a count once the list is non-empty ("Shopping list · 9 to buy").
+
+**Install note for future sessions:** the dev phone carries a **release-signed** build, so
+a debug APK is refused with `INSTALL_FAILED_UPDATE_INCOMPATIBLE` and the only way to force
+it is an uninstall, which wipes local recipes and private cooking audio. Build
+`:app:assembleRelease` instead -- the four `CHEFVOICE_RELEASE_*` signing variables are set
+in the environment and the keystore is at
+`C:\Users\james\Documents\ChefVoice-Release-Key\chefvoice-release.jks`, so a signed APK
+installs straight over the top with data intact, and exercises R8 at the same time.
+
 # Current handoff — 2026-09-18 (later)
 
 - **Five cook-along and library features, all built on structure the parser already

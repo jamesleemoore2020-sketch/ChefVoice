@@ -19,6 +19,8 @@ class CookCommandsTest {
         assertEquals(CookCommand.NEXT, CookCommands.match("next step"))
         assertEquals(CookCommand.PREVIOUS, CookCommands.match("go back"))
         assertEquals(CookCommand.REPEAT, CookCommands.match("say that again"))
+        assertEquals(CookCommand.READ_ALOUD, CookCommands.match("read out loud"))
+        assertEquals(CookCommand.STOP_READING, CookCommands.match("stop reading"))
         assertEquals(CookCommand.START_TIMER, CookCommands.match("start timer"))
         assertEquals(CookCommand.STOP_TIMER, CookCommands.match("cancel timer"))
         assertEquals(CookCommand.STOP_LISTENING, CookCommands.match("stop listening"))
@@ -57,12 +59,34 @@ class CookCommandsTest {
     }
 
     @Test
+    fun turningReadingOnIsItsOwnCommandSeparateFromRepeat() {
+        // "Repeat" used to double as the way to switch reading on, which meant saying a
+        // word that means "again" to start something that had not happened yet. The two
+        // are now distinct: repeat says the current step once, read-aloud turns
+        // continuous reading on.
+        listOf("read out loud", "read it out loud", "read aloud", "start reading", "read the steps")
+            .forEach { assertEquals(it, CookCommand.READ_ALOUD, CookCommands.match(it)) }
+        assertEquals(CookCommand.REPEAT, CookCommands.match("repeat"))
+        listOf("stop reading", "be quiet", "stop talking")
+            .forEach { assertEquals(it, CookCommand.STOP_READING, CookCommands.match(it)) }
+    }
+
+    @Test
+    fun readingCommandsAreStillIgnoredInsideNarration() {
+        // "read" is a short word and a common one; it must not fire mid-sentence.
+        assertNull(CookCommands.match("read the recipe before you start cooking"))
+        assertNull(CookCommands.match("i read that somewhere"))
+    }
+
+    @Test
     fun onlyReversibleCommandsMayFireOnAPartialResult() {
         // Stepping is instantly undoable, so firing early feels responsive. Stopping
         // something is not, so a half-heard "stop" must wait for a final result.
         assertTrue(CookCommand.NEXT.safeFromPartial)
         assertTrue(CookCommand.PREVIOUS.safeFromPartial)
         assertTrue(CookCommand.REPEAT.safeFromPartial)
+        assertTrue(CookCommand.READ_ALOUD.safeFromPartial)
+        assertFalse(CookCommand.STOP_READING.safeFromPartial)
         assertFalse(CookCommand.START_TIMER.safeFromPartial)
         assertFalse(CookCommand.STOP_TIMER.safeFromPartial)
         assertFalse(CookCommand.STOP_LISTENING.safeFromPartial)

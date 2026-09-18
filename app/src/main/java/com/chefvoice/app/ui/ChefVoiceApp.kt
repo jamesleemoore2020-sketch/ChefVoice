@@ -406,6 +406,7 @@ fun ChefVoiceApp(
                         },
                         onCreateCollection = appState::createCollection,
                         onAddToShoppingList = { factor -> appState.addRecipeToShoppingList(recipe, factor) },
+                        onOpenShoppingList = { appState.showShoppingList = true },
                         shoppingMessage = appState.shoppingMessage,
                         onDismissShoppingMessage = appState::dismissShoppingMessage
                     )
@@ -1735,226 +1736,246 @@ private fun CommunityScreen(
         haystack.contains(term)
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp)) {
-            Box(Modifier.fillMaxWidth().height(170.dp)) {
-                Image(
-                    painter = painterResource(R.drawable.chefvoice_community_hero),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color(0xD1190C07), Color(0x33190C07)))))
-                Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
-                    Text("CHEFVOICE COMMUNITY", color = Color(0xFFFFBD9D), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(6.dp))
-                    Text("Community", color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                }
-                Row(Modifier.align(Alignment.TopEnd).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CommunityBannerAction(if (searchExpanded) "✕" else "🔍", if (searchExpanded) "Close search" else "Search") {
-                        if (searchExpanded) { searchText = ""; appliedSearch = ""; onSearchChefs("") }
-                        searchExpanded = !searchExpanded
+    // One list for the whole screen, banner included. The hero and the
+    // Following/Discover switch used to sit in a fixed Column above the feed, which
+    // held 170dp of artwork on screen permanently and left the dishes -- the reason
+    // anyone opens this tab -- scrolling in a short window beneath it. As list items
+    // they scroll away with everything else and the feed gets the full screen.
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item(key = "community-banner") {
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp)) {
+                Box(Modifier.fillMaxWidth().height(170.dp)) {
+                    Image(
+                        painter = painterResource(R.drawable.chefvoice_community_hero),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color(0xD1190C07), Color(0x33190C07)))))
+                    Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
+                        Text("CHEFVOICE COMMUNITY", color = Color(0xFFFFBD9D), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Text("Community", color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                     }
-                    CommunityBannerAction("✉", "Messages", unreadMessageCount, onMessages)
-                    CommunityBannerAction("🔔", "Notifications", unreadNotificationCount, onNotifications)
+                    Row(Modifier.align(Alignment.TopEnd).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CommunityBannerAction(if (searchExpanded) "✕" else "🔍", if (searchExpanded) "Close search" else "Search") {
+                            if (searchExpanded) { searchText = ""; appliedSearch = ""; onSearchChefs("") }
+                            searchExpanded = !searchExpanded
+                        }
+                        CommunityBannerAction("✉", "Messages", unreadMessageCount, onMessages)
+                        CommunityBannerAction("🔔", "Notifications", unreadNotificationCount, onNotifications)
+                    }
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (communityMode == "following") Button(onClick = { communityMode = "following" }, modifier = Modifier.weight(1f)) { Text("Following") }
-            else OutlinedButton(onClick = { communityMode = "following" }, modifier = Modifier.weight(1f)) { Text("Following") }
-            if (communityMode == "discover") Button(onClick = { communityMode = "discover" }, modifier = Modifier.weight(1f)) { Text("Discover") }
-            else OutlinedButton(onClick = { communityMode = "discover" }, modifier = Modifier.weight(1f)) { Text("Discover") }
+        item(key = "community-mode") {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (communityMode == "following") Button(onClick = { communityMode = "following" }, modifier = Modifier.weight(1f)) { Text("Following") }
+                else OutlinedButton(onClick = { communityMode = "following" }, modifier = Modifier.weight(1f)) { Text("Following") }
+                if (communityMode == "discover") Button(onClick = { communityMode = "discover" }, modifier = Modifier.weight(1f)) { Text("Discover") }
+                else OutlinedButton(onClick = { communityMode = "discover" }, modifier = Modifier.weight(1f)) { Text("Discover") }
+            }
         }
         if (searchExpanded) {
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = searchText,
-                    onValueChange = { searchText = it },
-                    label = { Text("Search chefs, dishes or #tags") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                Button(onClick = { appliedSearch = searchText.trim(); onSearchChefs(appliedSearch) }, enabled = searchText.trim().length >= 2) { Text("Search") }
-            }
-            if (appliedSearch.isNotBlank()) {
-                TextButton(onClick = { searchText = ""; appliedSearch = ""; onSearchChefs("") }) { Text("Clear search") }
+            item(key = "community-search") {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = searchText,
+                            onValueChange = { searchText = it },
+                            label = { Text("Search chefs, dishes or #tags") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(onClick = { appliedSearch = searchText.trim(); onSearchChefs(appliedSearch) }, enabled = searchText.trim().length >= 2) { Text("Search") }
+                    }
+                    if (appliedSearch.isNotBlank()) {
+                        TextButton(onClick = { searchText = ""; appliedSearch = ""; onSearchChefs("") }) { Text("Clear search") }
+                    }
+                }
             }
         }
         if (!cloudConfigured) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Text("Demo mode · Connect Firebase for the real member feed.", Modifier.padding(12.dp))
+            item(key = "community-demo") {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Text("Demo mode · Connect Firebase for the real member feed.", Modifier.padding(12.dp))
+                }
             }
         }
-        if (cloudMessage.isNotBlank()) Text(cloudMessage, style = MaterialTheme.typography.bodySmall)
+        if (cloudMessage.isNotBlank()) {
+            item(key = "community-cloud-message") { Text(cloudMessage, style = MaterialTheme.typography.bodySmall) }
+        }
         if (appliedSearch.length >= 2) {
-            Spacer(Modifier.height(8.dp))
-            Text("Chefs", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            when {
-                chefSearchBusy -> Text("Finding chefs…", style = MaterialTheme.typography.bodySmall)
-                chefSearchError.isNotBlank() -> Text(chefSearchError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                chefSearchResults.isEmpty() -> Text("No chef profiles matched this search.", style = MaterialTheme.typography.bodySmall)
-                else -> chefSearchResults.forEach { result ->
-                    val profile = result.profile
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp).clickable { onChefProfile(profile.uid) },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            RemoteProfileImage(profile.photoUrl, "${profile.displayName} profile", Modifier.size(54.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(profile.displayName, fontWeight = FontWeight.Bold)
-                                val detail = profile.bio.ifBlank { profile.favoriteThings.take(3).joinToString(" · ") }
-                                if (detail.isNotBlank()) Text(detail, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-                                Text("${result.followerCount} follower${if (result.followerCount == 1L) "" else "s"}", style = MaterialTheme.typography.bodySmall)
-                            }
-                            if (profile.uid != signedInUserId && isSignedIn) {
-                                TextButton(onClick = { onFollowChef(profile.uid) }) { Text(if (isFollowing(profile.uid)) "✓ Following" else "+ Follow") }
+            item(key = "community-chef-results") {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Chefs", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    when {
+                        chefSearchBusy -> Text("Finding chefs…", style = MaterialTheme.typography.bodySmall)
+                        chefSearchError.isNotBlank() -> Text(chefSearchError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        chefSearchResults.isEmpty() -> Text("No chef profiles matched this search.", style = MaterialTheme.typography.bodySmall)
+                        else -> chefSearchResults.forEach { result ->
+                            val profile = result.profile
+                            Card(
+                                modifier = Modifier.fillMaxWidth().clickable { onChefProfile(profile.uid) },
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    RemoteProfileImage(profile.photoUrl, "${profile.displayName} profile", Modifier.size(54.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(profile.displayName, fontWeight = FontWeight.Bold)
+                                        val detail = profile.bio.ifBlank { profile.favoriteThings.take(3).joinToString(" · ") }
+                                        if (detail.isNotBlank()) Text(detail, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                                        Text("${result.followerCount} follower${if (result.followerCount == 1L) "" else "s"}", style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    if (profile.uid != signedInUserId && isSignedIn) {
+                                        TextButton(onClick = { onFollowChef(profile.uid) }) { Text(if (isFollowing(profile.uid)) "✓ Following" else "+ Follow") }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
         if (visibleItems.isEmpty()) {
-            val message = when {
-                communityMode == "following" && !isSignedIn -> "Sign in to see finished dishes from chefs you follow."
-                communityMode == "following" -> "Follow chefs from Discover, Chef Profiles, or Live to build your Following feed."
-                appliedSearch.isNotBlank() -> "No finished dishes match this search."
-                else -> "Publish the first finished dish from your library."
+            item(key = "community-empty") {
+                val message = when {
+                    communityMode == "following" && !isSignedIn -> "Sign in to see finished dishes from chefs you follow."
+                    communityMode == "following" -> "Follow chefs from Discover, Chef Profiles, or Live to build your Following feed."
+                    appliedSearch.isNotBlank() -> "No finished dishes match this search."
+                    else -> "Publish the first finished dish from your library."
+                }
+                EmptyState("Nothing here yet", message)
             }
-            EmptyState("Nothing here yet", message)
         } else {
-            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                items(visibleItems, key = { it.recipe.id }) { item ->
-                    val recipe = item.recipe
-                    val profile = item.authorProfile
-                    val context = LocalContext.current
-                    var menuOpen by remember { mutableStateOf(false) }
-                    var heartTrigger by remember { mutableIntStateOf(0) }
-                    val canModerate = isSignedIn && recipe.authorId.isNotBlank() && recipe.authorId != signedInUserId
-                    // Swipe right to save to the cookbook. Only rightward travel is
-                    // tracked, and like the double-tap above it only ever adds: dragging
-                    // a dish that is already saved must not quietly unsave it, because
-                    // the gesture reads as "keep this", not "toggle this".
-                    val swipeThresholdPx = with(LocalDensity.current) { 110.dp.toPx() }
-                    var swipeOffset by remember(recipe.id) { mutableFloatStateOf(0f) }
-                    val swipeShift by animateFloatAsState(swipeOffset, label = "communitySaveSwipe")
-                    val swipeProgress = (swipeShift / swipeThresholdPx).coerceIn(0f, 1f)
-                    Box(Modifier.fillMaxWidth()) {
-                        if (swipeProgress > 0f) {
-                            Row(
-                                modifier = Modifier.matchParentSize().padding(start = 24.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    if (isBookmarked(recipe.id)) "★ Already saved" else "★ Save to cookbook",
-                                    color = MaterialTheme.colorScheme.primary.copy(alpha = swipeProgress),
-                                    fontWeight = FontWeight.Bold
+            items(visibleItems, key = { it.recipe.id }) { item ->
+                val recipe = item.recipe
+                val profile = item.authorProfile
+                val context = LocalContext.current
+                var menuOpen by remember { mutableStateOf(false) }
+                var heartTrigger by remember { mutableIntStateOf(0) }
+                val canModerate = isSignedIn && recipe.authorId.isNotBlank() && recipe.authorId != signedInUserId
+                // Swipe right to save to the cookbook. Only rightward travel is
+                // tracked, and like the double-tap above it only ever adds: dragging
+                // a dish that is already saved must not quietly unsave it, because
+                // the gesture reads as "keep this", not "toggle this".
+                val swipeThresholdPx = with(LocalDensity.current) { 110.dp.toPx() }
+                var swipeOffset by remember(recipe.id) { mutableFloatStateOf(0f) }
+                val swipeShift by animateFloatAsState(swipeOffset, label = "communitySaveSwipe")
+                val swipeProgress = (swipeShift / swipeThresholdPx).coerceIn(0f, 1f)
+                Box(Modifier.fillMaxWidth()) {
+                    if (swipeProgress > 0f) {
+                        Row(
+                            modifier = Modifier.matchParentSize().padding(start = 24.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (isBookmarked(recipe.id)) "★ Already saved" else "★ Save to cookbook",
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = swipeProgress),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                    Card(
+                        modifier = Modifier.fillMaxWidth()
+                            .offset { IntOffset(swipeShift.roundToInt(), 0) }
+                            .pointerInput(recipe.id) {
+                                detectHorizontalDragGestures(
+                                    onDragEnd = {
+                                        if (swipeOffset >= swipeThresholdPx && !isBookmarked(recipe.id)) onBookmark(recipe)
+                                        swipeOffset = 0f
+                                    },
+                                    onDragCancel = { swipeOffset = 0f },
+                                    onHorizontalDrag = { change, delta ->
+                                        change.consume()
+                                        // Clamped at zero so a left drag never moves the
+                                        // card, and just past the threshold so the travel
+                                        // stays a hint rather than sliding the dish away.
+                                        swipeOffset = (swipeOffset + delta)
+                                            .coerceIn(0f, swipeThresholdPx * 1.25f)
+                                    }
+                                )
+                            },
+                        shape = RoundedCornerShape(24.dp)
+                    ) {
+                        Box(
+                            Modifier.fillMaxWidth().height(360.dp).pointerInput(recipe.id) {
+                                detectTapGestures(
+                                    onTap = { onOpen(recipe) },
+                                    // Instagram-style: a double-tap always likes and always
+                                    // shows the heart, but never removes an existing like.
+                                    onDoubleTap = {
+                                        if (!isLiked(recipe.id)) onLike(recipe)
+                                        heartTrigger++
+                                    }
                                 )
                             }
-                        }
-                        Card(
-                            modifier = Modifier.fillMaxWidth()
-                                .offset { IntOffset(swipeShift.roundToInt(), 0) }
-                                .pointerInput(recipe.id) {
-                                    detectHorizontalDragGestures(
-                                        onDragEnd = {
-                                            if (swipeOffset >= swipeThresholdPx && !isBookmarked(recipe.id)) onBookmark(recipe)
-                                            swipeOffset = 0f
-                                        },
-                                        onDragCancel = { swipeOffset = 0f },
-                                        onHorizontalDrag = { change, delta ->
-                                            change.consume()
-                                            // Clamped at zero so a left drag never moves the
-                                            // card, and just past the threshold so the travel
-                                            // stays a hint rather than sliding the dish away.
-                                            swipeOffset = (swipeOffset + delta)
-                                                .coerceIn(0f, swipeThresholdPx * 1.25f)
-                                        }
-                                    )
-                                },
-                            shape = RoundedCornerShape(24.dp)
                         ) {
-                            Box(
-                                Modifier.fillMaxWidth().height(360.dp).pointerInput(recipe.id) {
-                                    detectTapGestures(
-                                        onTap = { onOpen(recipe) },
-                                        // Instagram-style: a double-tap always likes and always
-                                        // shows the heart, but never removes an existing like.
-                                        onDoubleTap = {
-                                            if (!isLiked(recipe.id)) onLike(recipe)
-                                            heartTrigger++
-                                        }
-                                    )
-                                }
+                            val hero = recipe.media.firstOrNull { it.type == MediaType.IMAGE } ?: recipe.media.firstOrNull()
+                            if (hero != null) RecipeMediaBanner(hero, Modifier.fillMaxSize())
+                            else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondary), contentAlignment = Alignment.Center) { Text("🍽️", style = MaterialTheme.typography.displayMedium, color = Color.White) }
+                            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.16f)))
+                            HeartBurstOverlay(heartTrigger, Modifier.align(Alignment.Center))
+                            Row(
+                                modifier = Modifier.align(Alignment.TopStart).padding(12.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(24.dp)).clickable(enabled = recipe.authorId.isNotBlank()) { onChefProfile(recipe.authorId) }.padding(horizontal = 7.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                val hero = recipe.media.firstOrNull { it.type == MediaType.IMAGE } ?: recipe.media.firstOrNull()
-                                if (hero != null) RecipeMediaBanner(hero, Modifier.fillMaxSize())
-                                else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondary), contentAlignment = Alignment.Center) { Text("🍽️", style = MaterialTheme.typography.displayMedium, color = Color.White) }
-                                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.16f)))
-                                HeartBurstOverlay(heartTrigger, Modifier.align(Alignment.Center))
+                                RemoteProfileImage(profile?.photoUrl.orEmpty(), "${profile?.displayName ?: recipe.authorName} profile", Modifier.size(36.dp))
+                                Spacer(Modifier.width(8.dp)); Text(profile?.displayName?.ifBlank { recipe.authorName } ?: recipe.authorName, color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                            if (canModerate) {
                                 Row(
-                                    modifier = Modifier.align(Alignment.TopStart).padding(12.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(24.dp)).clickable(enabled = recipe.authorId.isNotBlank()) { onChefProfile(recipe.authorId) }.padding(horizontal = 7.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    RemoteProfileImage(profile?.photoUrl.orEmpty(), "${profile?.displayName ?: recipe.authorName} profile", Modifier.size(36.dp))
-                                    Spacer(Modifier.width(8.dp)); Text(profile?.displayName?.ifBlank { recipe.authorName } ?: recipe.authorName, color = Color.White, fontWeight = FontWeight.Bold)
-                                }
-                                if (canModerate) {
-                                    Row(
-                                        modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        val following = isFollowing(recipe.authorId)
+                                    val following = isFollowing(recipe.authorId)
+                                    TextButton(
+                                        onClick = { onFollowChef(recipe.authorId) },
+                                        modifier = Modifier.background(if (following) Color.Black.copy(alpha = 0.5f) else Color.White, CircleShape),
+                                        colors = ButtonDefaults.textButtonColors(contentColor = if (following) Color.White else Color.Black)
+                                    ) { Text(if (following) "Following" else "Follow", style = MaterialTheme.typography.labelSmall) }
+                                    Box {
                                         TextButton(
-                                            onClick = { onFollowChef(recipe.authorId) },
-                                            modifier = Modifier.background(if (following) Color.Black.copy(alpha = 0.5f) else Color.White, CircleShape),
-                                            colors = ButtonDefaults.textButtonColors(contentColor = if (following) Color.White else Color.Black)
-                                        ) { Text(if (following) "Following" else "Follow", style = MaterialTheme.typography.labelSmall) }
-                                        Box {
-                                            TextButton(
-                                                onClick = { menuOpen = true },
-                                                modifier = Modifier.background(Color.Black.copy(alpha = 0.58f), CircleShape)
-                                            ) { Text("⋯", color = Color.White, fontWeight = FontWeight.Bold) }
-                                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                                DropdownMenuItem(text = { Text("✉ Message chef") }, onClick = { menuOpen = false; onMessageChef(recipe.authorId, recipe.authorName) })
-                                                DropdownMenuItem(text = { Text("⚑ Report") }, onClick = { menuOpen = false; onReportRecipe(recipe) })
-                                                DropdownMenuItem(
-                                                    text = { Text(if (isUserBlocked(recipe.authorId)) "Unblock chef" else "🚫 Block chef") },
-                                                    onClick = { menuOpen = false; onToggleBlock(recipe.authorId) }
-                                                )
-                                            }
+                                            onClick = { menuOpen = true },
+                                            modifier = Modifier.background(Color.Black.copy(alpha = 0.58f), CircleShape)
+                                        ) { Text("⋯", color = Color.White, fontWeight = FontWeight.Bold) }
+                                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                            DropdownMenuItem(text = { Text("✉ Message chef") }, onClick = { menuOpen = false; onMessageChef(recipe.authorId, recipe.authorName) })
+                                            DropdownMenuItem(text = { Text("⚑ Report") }, onClick = { menuOpen = false; onReportRecipe(recipe) })
+                                            DropdownMenuItem(
+                                                text = { Text(if (isUserBlocked(recipe.authorId)) "Unblock chef" else "🚫 Block chef") },
+                                                onClick = { menuOpen = false; onToggleBlock(recipe.authorId) }
+                                            )
                                         }
                                     }
                                 }
-                                Column(modifier = Modifier.align(Alignment.BottomStart).padding(14.dp).background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(16.dp)).padding(10.dp)) {
-                                    Text(recipe.title, color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Text("${recipe.ingredients.size} ingredients · 💬 ${formatCount(recipe.commentCount)} · ${relativeTime(recipe.createdAt)}", color = Color.White, style = MaterialTheme.typography.bodySmall)
-                                    if (recipe.tags.isNotEmpty()) {
-                                        Text(recipe.tags.take(3).joinToString(" ") { "#$it" }, color = Color.White, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    }
+                            }
+                            Column(modifier = Modifier.align(Alignment.BottomStart).padding(14.dp).background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(16.dp)).padding(10.dp)) {
+                                Text(recipe.title, color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text("${recipe.ingredients.size} ingredients · 💬 ${formatCount(recipe.commentCount)} · ${relativeTime(recipe.createdAt)}", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                                if (recipe.tags.isNotEmpty()) {
+                                    Text(recipe.tags.take(3).joinToString(" ") { "#$it" }, color = Color.White, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
-                                Column(modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp)), horizontalAlignment = Alignment.CenterHorizontally) {
-                                    TextButton(onClick = { onLike(recipe) }) { Text(if (isLiked(recipe.id)) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}", color = Color.White) }
-                                    TextButton(onClick = { onOpen(recipe) }) { Text("💬", color = Color.White) }
-                                    TextButton(onClick = { shareRecipe(context, recipe) }) { Text("📤", color = Color.White) }
-                                    TextButton(onClick = { onBookmark(recipe) }) { Text(if (isBookmarked(recipe.id)) "★" else "☆", color = Color.White) }
-                                }
+                            }
+                            Column(modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp)), horizontalAlignment = Alignment.CenterHorizontally) {
+                                TextButton(onClick = { onLike(recipe) }) { Text(if (isLiked(recipe.id)) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}", color = Color.White) }
+                                TextButton(onClick = { onOpen(recipe) }) { Text("💬", color = Color.White) }
+                                TextButton(onClick = { shareRecipe(context, recipe) }) { Text("📤", color = Color.White) }
+                                TextButton(onClick = { onBookmark(recipe) }) { Text(if (isBookmarked(recipe.id)) "★" else "☆", color = Color.White) }
                             }
                         }
                     }
                 }
-                if (communityMode == "discover" && term.isBlank() && communityHasMore) {
-                    item(key = "community-load-more") {
-                        OutlinedButton(onClick = onLoadMore, enabled = !communityLoadingMore, modifier = Modifier.fillMaxWidth()) {
-                            Text(if (communityLoadingMore) "Loading…" else "Load more dishes")
-                        }
-                    }
+            }
+        }
+        if (communityMode == "discover" && term.isBlank() && communityHasMore) {
+            item(key = "community-load-more") {
+                OutlinedButton(onClick = onLoadMore, enabled = !communityLoadingMore, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (communityLoadingMore) "Loading…" else "Load more dishes")
                 }
             }
         }
@@ -2627,6 +2648,7 @@ private fun RecipeDetailScreen(
     onSetInCollection: (String, Boolean) -> Unit,
     onCreateCollection: (String) -> String,
     onAddToShoppingList: (Double) -> Unit,
+    onOpenShoppingList: () -> Unit,
     shoppingMessage: String,
     onDismissShoppingMessage: () -> Unit
 ) {
@@ -2974,8 +2996,13 @@ private fun RecipeDetailScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) { Text("🛒 Add to shopping list") }
                         if (shoppingMessage.isNotBlank()) {
+                            // Adding to the list used to confirm and then leave the chef
+                            // to find the list themselves, which is a long way back:
+                            // Recipes tab, then the shopping button. The confirmation
+                            // now carries the way there.
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(shoppingMessage, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                TextButton(onClick = onOpenShoppingList) { Text("View list") }
                                 TextButton(onClick = onDismissShoppingMessage) { Text("OK") }
                             }
                         }
@@ -3301,9 +3328,13 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
         when (command) {
             CookCommand.NEXT -> if (stepIndex < lastStepIndex) stepIndex++
             CookCommand.PREVIOUS -> if (stepIndex > 0) stepIndex--
-            CookCommand.REPEAT -> {
-                if (!readAloud) readAloud = true else repeatTrigger++
+            // Repeat says the current step again; it no longer doubles as the way to
+            // switch reading on, which is what "read out loud" is for.
+            CookCommand.REPEAT -> repeatTrigger++
+            CookCommand.READ_ALOUD -> {
+                if (readAloud) repeatTrigger++ else readAloud = true
             }
+            CookCommand.STOP_READING -> readAloud = false
             CookCommand.START_TIMER -> stepTimers.firstOrNull()?.let { startTimer(it) }
             CookCommand.STOP_TIMER -> clearTimer()
             CookCommand.STOP_LISTENING -> handsFree = false
@@ -3431,7 +3462,7 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
                 } else if (handsFree) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Say \"next\", \"back\", \"repeat\", \"start timer\" or \"stop listening\". " +
+                        "Say \"next\", \"back\", \"read out loud\", \"repeat\", \"start timer\" or \"stop listening\". " +
                             "Nothing you say here is recorded or saved.",
                         style = MaterialTheme.typography.bodySmall
                     )
