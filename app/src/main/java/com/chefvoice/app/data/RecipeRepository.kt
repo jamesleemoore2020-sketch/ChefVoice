@@ -122,7 +122,9 @@ class RecipeRepository(context: Context) {
     }
 }
 
-private fun Recipe.toJson() = JSONObject().apply {
+// internal rather than private so a JVM test can round-trip a recipe through the exact
+// JSON the phone stores; nothing outside this module can see them either way.
+internal fun Recipe.toJson() = JSONObject().apply {
     put("id", id)
     put("title", title)
     put("description", description)
@@ -137,6 +139,11 @@ private fun Recipe.toJson() = JSONObject().apply {
     put("likes", likes)
     put("commentCount", commentCount)
     put("communityUpdatePending", communityUpdatePending)
+    // Tags were never written here, so every tag a chef added lived only until the app
+    // was next closed. The Community publish path reads them from this same in-memory
+    // recipe, so a restart followed by "Update Community" would also have pushed an
+    // empty tag list over the published one.
+    put("tags", JSONArray().apply { tags.forEach { put(it) } })
 
     put("ingredients", JSONArray().apply {
         ingredients.forEach { ingredient ->
@@ -325,8 +332,17 @@ private fun JSONObject.toSecondPassResult(): SecondPassResult {
     )
 }
 
-private fun JSONObject.toRecipe(): Recipe {
+internal fun JSONObject.toRecipe(): Recipe {
     fun optArray(name: String): JSONArray = optJSONArray(name) ?: JSONArray()
+
+    // Recipes saved before tags were persisted have no "tags" key, which reads as none.
+    val tagArray = optArray("tags")
+    val tags = buildList {
+        for (i in 0 until tagArray.length()) {
+            val value = tagArray.optString(i)
+            if (value.isNotBlank()) add(value)
+        }
+    }
 
     val ingredientArray = optArray("ingredients")
     val ingredients = buildList {
@@ -413,7 +429,8 @@ private fun JSONObject.toRecipe(): Recipe {
         updatedAt = optLong("updatedAt", System.currentTimeMillis()),
         likes = optInt("likes", 0),
         commentCount = optInt("commentCount", 0),
-        communityUpdatePending = optBoolean("communityUpdatePending", false)
+        communityUpdatePending = optBoolean("communityUpdatePending", false),
+        tags = tags
     )
 }
 

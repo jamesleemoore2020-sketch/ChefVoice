@@ -178,6 +178,10 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-video:$coilVersion")
 
     testImplementation("junit:junit:4.13.2")
+    // android.jar ships org.json as throwing stubs, so a JVM unit test that touches
+    // JSONObject dies with "not mocked". A real implementation ahead of it on the test
+    // classpath is the standard fix; it is never packaged into the app.
+    testImplementation("org.json:json:20240303")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
