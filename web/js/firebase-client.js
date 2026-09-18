@@ -1,5 +1,5 @@
 import { firebaseConfig, messagingVapidKey } from './firebase-config.js';
-import { normalizeEntitlement, FREE_ENTITLEMENT } from './entitlement.js';
+import { normalizeEntitlement, FREE_ENTITLEMENT, SecondPassLimits } from './entitlement.js';
 import * as ChefAnalytics from './chef-analytics.js';
 import { LIVE_LEASE_REFRESH_MS, isFreshLiveSession } from './webrtc-signaling.js';
 
@@ -19,7 +19,7 @@ const {
   getFirestore,collection,doc,increment,limit,onSnapshot,query,setDoc,where,orderBy,
   getDoc,getDocs,deleteDoc,updateDoc,runTransaction,writeBatch,documentId,startAfter
 }=firestoreSdk;
-const {getStorage,ref:storageRef,uploadBytes,getDownloadURL}=storageSdk;
+const {getStorage,ref:storageRef,uploadBytes,getDownloadURL,deleteObject}=storageSdk;
 
 const app=initializeApp(firebaseConfig);
 const auth=getAuth(app);
@@ -197,7 +197,7 @@ export async function publishRecipe(recipe,displayName,{mediaAssets=[],voiceBlob
     try{
       const contentType=audioContentType(voiceBlob);
       const durationMs=await audioDurationMs(voiceBlob);
-      if(durationMs<=0||durationMs>SECOND_PASS_MAX_DURATION_MS)throw new Error('the cooking audio duration could not be verified within the 90-minute cloud limit');
+      if(durationMs<=0||durationMs>PRIVATE_SESSION_MAX_DURATION_MS)throw new Error('the cooking audio duration could not be verified within the 90-minute cloud limit');
       const permit=await callFunction('authorizeChefVoiceStorageUpload',{kind:'private_session',recipeId:recipe.id,fileName:'session',bytes:voiceBlob.size,contentType});
       if(!permit?.permitId||!permit?.token)throw new Error('the private cooking audio upload was not authorized');
       // Raw cooking-session audio stays private for ChefVoice Review: uploaded to
@@ -316,8 +316,46 @@ export async function addComment(recipeId,text,authorName,parent=null){
 // issues a token that the Storage rule checks against the object's metadata, so a
 // client cannot upload without server authorization.
 
-const SECOND_PASS_MAX_DURATION_MS=90*60*1000;
+// Two separate ceilings on the one private cooking-audio object, mirroring
+// SecondPassLimits and PRIVATE_SESSION_MAX_DECLARED_DURATION_MS on Android.
+//
+// SecondPassLimits.MAX_REVIEW_DURATION_MS is what ChefVoice Review uploads and sends
+// to Chirp 3, and lives in entitlement.js beside the other mirrored limits so the
+// review cards can quote it without importing this module.
+//
+// PRIVATE_SESSION_MAX_DURATION_MS is the ceiling on the private cloud copy written at
+// publish time. That is a storage bound only, not a speech bound, so it stays at 90.
+const PRIVATE_SESSION_MAX_DURATION_MS=90*60*1000;
 const SECOND_PASS_MAX_BYTES=120*1024*1024;
+
+/**
+ * Removes the private cooking audio from Cloud Storage once ChefVoice Review has
+ * finished with it, whether the review succeeded or failed.
+ *
+ * The upload exists only to hand one recording to Chirp 3. Nothing reads the object
+ * afterwards -- a later review re-uploads from the local recording, which is the
+ * source of truth and is never touched here -- so leaving it behind was a standing
+ * storage charge per reviewed recipe for an object with no reader.
+ *
+ * Best-effort on purpose: a failed delete is a cost problem, never a correctness one,
+ * so it must not turn a completed review into an error the chef sees. The
+ * owner-delete permission it relies on is already granted by storage.rules for
+ * privateVoice/{uid}/{recipeId}/session.
+ */
+async function releasePrivateSessionAudio(target){
+  try{await deleteObject(target);}catch(_){/* cost, not correctness */}
+}
+
+/**
+ * Says how long the recording actually is rather than only quoting the limit, so a
+ * chef whose session is just over can tell how far over it is.
+ */
+function secondPassTooLongMessage(durationMs){
+  const actualMinutes=Math.ceil(durationMs/60000);
+  return 'ChefVoice Review covers cooking recordings up to '+SecondPassLimits.MAX_REVIEW_MINUTES+
+    ' minutes, and this one is about '+actualMinutes+
+    '. The original local audio is unchanged and still plays back in full.';
+}
 
 function audioContentType(blob){
   const raw=String(blob?.type||'').split(';')[0].trim().toLowerCase();
@@ -388,7 +426,7 @@ export async function transcribePrivateChefVoice(recipeId,audioBlob){
 
   const durationMs=await audioDurationMs(audioBlob);
   if(durationMs<=0)throw new Error('ChefVoice could not read the original audio duration. The local recording was not changed.');
-  if(durationMs>SECOND_PASS_MAX_DURATION_MS)throw new Error('ChefVoice Review supports cooking recordings up to 90 minutes. The original local audio is unchanged.');
+  if(durationMs>SecondPassLimits.MAX_REVIEW_DURATION_MS)throw new Error(secondPassTooLongMessage(durationMs));
 
   const contentType=audioContentType(audioBlob);
   const permit=await callFunction('authorizeChefVoiceStorageUpload',{
@@ -407,7 +445,12 @@ export async function transcribePrivateChefVoice(recipeId,audioBlob){
     }
   });
 
-  const data=await callFunction('transcribeChefVoice',{recipeId});
+  let data;
+  try{
+    data=await callFunction('transcribeChefVoice',{recipeId});
+  }finally{
+    await releasePrivateSessionAudio(target);
+  }
   if(!data||typeof data!=='object')throw new Error('ChefVoice Review returned an unreadable response.');
   const rawSegments=Array.isArray(data.segments)?data.segments:[];
   return {

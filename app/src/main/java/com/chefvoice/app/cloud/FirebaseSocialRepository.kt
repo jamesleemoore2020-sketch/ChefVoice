@@ -18,6 +18,7 @@ import com.chefvoice.app.model.MediaAttachment
 import com.chefvoice.app.model.MediaType
 import com.chefvoice.app.model.NotificationPreferences
 import com.chefvoice.app.model.Recipe
+import com.chefvoice.app.model.SecondPassLimits
 import com.chefvoice.app.model.stableStepIds
 import com.chefvoice.app.model.ProEntitlement
 import com.chefvoice.app.model.RecipeComment
@@ -37,6 +38,7 @@ import com.google.firebase.installations.FirebaseInstallations
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.storage.FirebaseStorage
 import com.google.firebase.storage.StorageMetadata
+import com.google.firebase.storage.StorageReference
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -81,7 +83,16 @@ class FirebaseSocialRepository(private val context: Context) {
         private const val LIVE_LEASE_REFRESH_MS = 5_000L
         private const val MAX_PUBLISHED_MEDIA_SLOTS = 24
         private const val MAX_PUBLIC_VOICE_SLOTS = 16
-        private const val SECOND_PASS_MAX_DECLARED_DURATION_MS = 90L * 60L * 1000L
+        // Two separate ceilings on the one private cooking-audio object.
+        //
+        // SecondPassLimits.MAX_REVIEW_DURATION_MS is what ChefVoice Review will upload
+        // and send to Chirp 3, and lives in the model layer so paywall and recipe copy
+        // can quote it without depending on this class.
+        //
+        // PRIVATE_SESSION_MAX_DECLARED_DURATION_MS is the older ceiling on the private
+        // cloud copy written at publish time. It is a storage bound only, not a speech
+        // bound, so it stays where it was.
+        private const val PRIVATE_SESSION_MAX_DECLARED_DURATION_MS = 90L * 60L * 1000L
     }
 
     private var publicRecipeCursor: DocumentSnapshot? = null
@@ -418,8 +429,8 @@ class FirebaseSocialRepository(private val context: Context) {
             callback(null, "ChefVoice could not read the original audio duration. The local recording was not changed.")
             return
         }
-        if (durationMs > SECOND_PASS_MAX_DECLARED_DURATION_MS) {
-            callback(null, "ChefVoice Review supports cooking recordings up to 90 minutes. The original local audio is unchanged.")
+        if (durationMs > SecondPassLimits.MAX_REVIEW_DURATION_MS) {
+            callback(null, secondPassTooLongMessage(durationMs))
             return
         }
         val target = storage.reference.child(
@@ -440,6 +451,7 @@ class FirebaseSocialRepository(private val context: Context) {
                     .addOnSuccessListener { result ->
                         val data = result.data as? Map<*, *>
                         if (data == null) {
+                            releasePrivateSessionAudio(target)
                             callback(null, "ChefVoice Review returned an unreadable response.")
                             return@addOnSuccessListener
                         }
@@ -453,6 +465,7 @@ class FirebaseSocialRepository(private val context: Context) {
                                 confidence = (map["confidence"] as? Number)?.toDouble()
                             )
                         }
+                        releasePrivateSessionAudio(target)
                         callback(
                             CloudSecondPassResult(
                                 provider = data["provider"]?.toString().orEmpty().ifBlank { "google-cloud-speech-v2" },
@@ -466,6 +479,7 @@ class FirebaseSocialRepository(private val context: Context) {
                         )
                     }
                     .addOnFailureListener { error ->
+                        releasePrivateSessionAudio(target)
                         val message = if (error is FirebaseFunctionsException) {
                             error.message ?: "ChefVoice Review failed (${error.code})."
                         } else {
@@ -475,9 +489,39 @@ class FirebaseSocialRepository(private val context: Context) {
                     }
             }
             .addOnFailureListener { error ->
+                releasePrivateSessionAudio(target)
                 callback(null, error.message ?: "Could not upload the private original cooking audio.")
             }
         }
+    }
+
+    /**
+     * Removes the private cooking audio from Cloud Storage once ChefVoice Review has
+     * finished with it, whether the review succeeded or failed.
+     *
+     * The upload exists only to hand one recording to Chirp 3. Once the transcript has
+     * come back, nothing reads the object again: a later review re-uploads from the
+     * local file, which is the source of truth and is never touched here. Leaving it
+     * behind was a standing storage charge per reviewed recipe for an object with no
+     * reader, so it is released immediately instead.
+     *
+     * Deliberately best-effort and fire-and-forget: a failed delete is a cost problem,
+     * never a correctness one, so it must not turn a completed review into an error the
+     * chef sees, and it must not delay the callback. The owner-delete permission this
+     * relies on is already granted by storage.rules for privateVoice/{uid}/{recipeId}/session.
+     */
+    private fun releasePrivateSessionAudio(ref: StorageReference) {
+        runCatching { ref.delete() }
+    }
+
+    /**
+     * Says how long the recording actually is rather than only quoting the limit, so a
+     * chef whose session is just over can tell how far over it is.
+     */
+    private fun secondPassTooLongMessage(durationMs: Long): String {
+        val actualMinutes = (durationMs + 59_999L) / 60_000L
+        return "ChefVoice Review covers cooking recordings up to ${SecondPassLimits.MAX_REVIEW_MINUTES} minutes, and this one is " +
+            "about $actualMinutes. The original local audio is unchanged and still plays back in full."
     }
 
     /**
@@ -1439,7 +1483,7 @@ class FirebaseSocialRepository(private val context: Context) {
             var durationMs = 0L
             if (isFullCookingSession) {
                 durationMs = audioDurationMs(file)
-                if (durationMs <= 0L || durationMs > SECOND_PASS_MAX_DECLARED_DURATION_MS) {
+                if (durationMs <= 0L || durationMs > PRIVATE_SESSION_MAX_DECLARED_DURATION_MS) {
                     warnings += "Private cooking audio stayed local because its duration could not be verified within the 90-minute cloud limit."
                     next(index + 1)
                     return

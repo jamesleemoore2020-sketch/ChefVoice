@@ -643,6 +643,31 @@ class ChefAppState(context: Context) {
         }
     }
 
+    /**
+     * Clears one notification, whether it has been read or not.
+     *
+     * Backs both the per-row close button and the swipe on the Notifications tab, so a
+     * chef can deal with a single alert without clearing everything they have read.
+     * Removed from the list first so the row goes away with the gesture rather than
+     * after a Firestore round trip; the listener would drop it anyway once the delete
+     * lands, and a failed delete restores it along with the reason.
+     */
+    fun dismissNotification(notification: ChefNotification) {
+        if (!isSignedIn) { notificationsError = "Sign in to clear notifications."; return }
+        val index = notifications.indexOfFirst { it.id == notification.id }
+        if (index < 0) return
+        val removed = notifications.removeAt(index)
+        notificationsError = ""
+        cloud.deleteNotifications(listOf(removed.id)) { error ->
+            if (error != null) {
+                if (notifications.none { it.id == removed.id }) {
+                    notifications.add(index.coerceAtMost(notifications.size), removed)
+                }
+                notificationsError = "That notification could not be cleared: $error"
+            }
+        }
+    }
+
     fun openRecipe(recipe: Recipe) {
         selectedRecipe = recipe
         focusedCommentId = ""

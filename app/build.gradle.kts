@@ -30,8 +30,8 @@ android {
         applicationId = "com.chefvoice.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 73
-        versionName = "0.11.12"
+        versionCode = 74
+        versionName = "0.11.13"
     }
 
     buildFeatures {

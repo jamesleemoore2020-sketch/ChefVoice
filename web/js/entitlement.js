@@ -43,6 +43,25 @@ export const ProTierLimits = Object.freeze({
 });
 
 /**
+ * How much audio one ChefVoice Review is allowed to send to the cloud.
+ *
+ * Unlike the per-month counts above this is not a tier lever -- Free and Pro get the
+ * same ceiling -- because it bounds the cost of a single review rather than how many
+ * a chef may run. Cloud speech is billed per minute of audio, so this is the number
+ * that decides what a review costs.
+ *
+ * It does not limit Cook & Capture. A chef can narrate for as long as they like; the
+ * local recording is the source of truth and is never truncated, only left out of
+ * cloud review when it runs past this length.
+ *
+ * Mirrors SecondPassLimits in the Android model layer -- change both together.
+ */
+export const SecondPassLimits = Object.freeze({
+  MAX_REVIEW_DURATION_MS: 5 * 60 * 1000,
+  MAX_REVIEW_MINUTES: 5
+});
+
+/**
  * Launch access display copy. The backend owns the real decision; these numbers are
  * mirrored so the membership card can say "one of the first 10", "2 years" and
  * "90 days" without inventing them. `billing/functions/index.js` holds the

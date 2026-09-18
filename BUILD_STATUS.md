@@ -1,3 +1,32 @@
+# Current handoff — 2026-09-18
+
+- **ChefVoice Review now sends at most 5 minutes of audio per review, down from 90.**
+  Review does not record anything of its own -- it uploads the cooking-session recording
+  the chef already made and hands it to Chirp 3, which is billed per minute, so that
+  ceiling is what decides what a review costs. The cap does not limit Cook & Capture,
+  does not truncate the local recording, and does not review "the first five minutes" of
+  a longer session: an over-long recording is refused outright, naming both the limit and
+  the actual length. The private cloud copy written at publish time costs storage but no
+  speech time, so it keeps its own separate 90-minute ceiling.
+- **The uploaded audio is deleted as soon as the review finishes with it**, on success and
+  on failure alike. Nothing read the object after transcription, so it had been a standing
+  storage charge per reviewed recipe. Best-effort and fire-and-forget: a failed delete is
+  a cost problem, not a correctness one. **No rules or Functions change was needed** --
+  `storage.rules` already allowed the owner to delete their own
+  `privateVoice/{uid}/{recipeId}/session`, and a new test pins that permission so
+  tightening it later cannot silently restart the leak.
+- **Notifications got timestamps, a per-row close button, and swipe-to-clear**, so a
+  single alert can be dealt with without clearing everything already read. Both routes
+  share one optimistic `dismissNotification` over the existing batch delete; the PWA
+  already had a Dismiss button and only needed the timestamp.
+- **Swiping a Community dish right saves it to the cookbook.** Like the existing
+  double-tap-to-like it only ever adds -- swiping an already-saved dish does not unsave
+  it -- and it reuses the existing bookmark plumbing with no new collection or rule.
+- Android versionCode 74 / versionName 0.11.13, PWA cache/package version 0.5.12. Parser,
+  corpus, rules, Functions, Live/WebRTC, App Check and tier counts all untouched. Gates:
+  Android 59 tests / 0 failures (`GoldenCookingCorpusTest` still 24 of them), PWA 130 / 0.
+  See `REVIEW_COST_AND_LIST_GESTURES_0.5.12_0.11.13.md`.
+
 # Current handoff — 2026-09-16
 
 - On top of the 0.5.3 (orphaned-audio cleanup) and 0.5.4 (cloud recipe

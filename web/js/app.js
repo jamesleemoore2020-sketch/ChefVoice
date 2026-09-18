@@ -8,7 +8,7 @@ import {
 import {
   cloudRecipesRemaining, daysRemaining, FoundingAccess, FreeTierLimits, FREE_ENTITLEMENT,
   isEntitlementActive, isFounding, isPromo, PaywallTrigger, recordSecondPassUse, remainingLabel,
-  secondPassMonthlyLimit, secondPassRemaining
+  secondPassMonthlyLimit, secondPassRemaining, SecondPassLimits
 } from './entitlement.js';
 import {
   applyMethodSuggestion, applySuggestion, fromCloudTranscript
@@ -410,7 +410,7 @@ function captureSecondPassTemplate(){
   const remaining=secondPassRemaining(pro);
   const limit=secondPassMonthlyLimit(pro);
   if(!captureSecondPass.result){
-    return `<section class="card"><h2>ChefVoice Review</h2><p class="hint">Re-transcribes this cooking audio in the cloud right now, before you save, so a cleaner draft can fill in Ingredients/Method for you. Nothing changes until you accept a suggestion.</p><p class="status">${remaining} of ${limit} reviews left this month.</p><button id="runCaptureSecondPass" class="secondary wide"${captureSecondPass.busy?' disabled':''}>${captureSecondPass.busy?'Running…':'Run ChefVoice Review'}</button>${captureSecondPass.message?`<p class="hint">${escapeHtml(captureSecondPass.message)}</p>`:''}</section>`;
+    return `<section class="card"><h2>ChefVoice Review</h2><p class="hint">Re-transcribes this cooking audio in the cloud right now, before you save, so a cleaner draft can fill in Ingredients/Method for you. Nothing changes until you accept a suggestion.</p><p class="hint">Covers recordings up to ${SecondPassLimits.MAX_REVIEW_MINUTES} minutes; longer sessions stay on this device and play back in full.</p><p class="status">${remaining} of ${limit} reviews left this month.</p><button id="runCaptureSecondPass" class="secondary wide"${captureSecondPass.busy?' disabled':''}>${captureSecondPass.busy?'Running…':'Run ChefVoice Review'}</button>${captureSecondPass.message?`<p class="hint">${escapeHtml(captureSecondPass.message)}</p>`:''}</section>`;
   }
   const result=captureSecondPass.result;
   const card=(issue,kind)=>{
@@ -734,7 +734,7 @@ function secondPassTemplate(recipe){
   const remaining=secondPassRemaining(pro);
   const limit=secondPassMonthlyLimit(pro);
   if(secondPass.recipeId!==recipe.id||!secondPass.result){
-    return `<section class="card"><h2>ChefVoice Review</h2><p class="hint">Re-transcribes your original cooking audio in the cloud and shows what a cleaner transcript heard. Nothing changes until you accept a suggestion.</p><p class="status">${remaining} of ${limit} reviews left this month.</p><button id="runSecondPass" class="secondary wide"${secondPass.busy?' disabled':''}>${secondPass.busy?'Running…':'Run ChefVoice Review'}</button>${secondPass.message?`<p class="hint">${escapeHtml(secondPass.message)}</p>`:''}</section>`;
+    return `<section class="card"><h2>ChefVoice Review</h2><p class="hint">Re-transcribes your original cooking audio in the cloud and shows what a cleaner transcript heard. Nothing changes until you accept a suggestion.</p><p class="hint">Covers recordings up to ${SecondPassLimits.MAX_REVIEW_MINUTES} minutes; longer sessions stay on this device and play back in full.</p><p class="status">${remaining} of ${limit} reviews left this month.</p><button id="runSecondPass" class="secondary wide"${secondPass.busy?' disabled':''}>${secondPass.busy?'Running…':'Run ChefVoice Review'}</button>${secondPass.message?`<p class="hint">${escapeHtml(secondPass.message)}</p>`:''}</section>`;
   }
 
   const result=secondPass.result;
@@ -1330,7 +1330,7 @@ function inboxTemplate(){
 
   if(inboxSection==='activity'){
     const list=cloud.notifications.length
-      ?cloud.notifications.map(n=>`<article class="card ${n.readAt<=0?'unread':''}" data-notification="${escapeHtml(n.id)}"><div class="row between"><strong>${escapeHtml(n.title)}</strong>${n.readAt<=0?'<span class="pill">New</span>':''}</div>${n.body?`<p class="status">${escapeHtml(n.body)}</p>`:''}<div class="row wrap" style="margin-top:8px">${n.readAt<=0?`<button class="secondary" data-read="${escapeHtml(n.id)}">Mark read</button>`:''}<button class="ghost" data-dismiss-notification="${escapeHtml(n.id)}">Dismiss</button></div></article>`).join('')
+      ?cloud.notifications.map(n=>`<article class="card ${n.readAt<=0?'unread':''}" data-notification="${escapeHtml(n.id)}"><div class="row between"><strong>${escapeHtml(n.title)}</strong>${n.readAt<=0?'<span class="pill">New</span>':''}</div>${n.body?`<p class="status">${escapeHtml(n.body)}</p>`:''}${n.createdAt?`<p class="hint">${escapeHtml(relativeTime(n.createdAt))}</p>`:''}<div class="row wrap" style="margin-top:8px">${n.readAt<=0?`<button class="secondary" data-read="${escapeHtml(n.id)}">Mark read</button>`:''}<button class="ghost" data-dismiss-notification="${escapeHtml(n.id)}">Dismiss</button></div></article>`).join('')
       :'<div class="empty card">No activity yet. Likes, comments, replies, follows and Live alerts show up here.</div>';
     return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">Inbox</div><h1>Messages and activity.</h1></section>${tabs}<div id="safetyStatus" class="hint"></div>${list}`;
   }

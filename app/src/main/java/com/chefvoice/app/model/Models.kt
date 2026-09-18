@@ -340,6 +340,26 @@ object ProTierLimits {
 }
 
 /**
+ * How much audio one ChefVoice Review is allowed to send to the cloud.
+ *
+ * Unlike the per-month counts above this is not a tier lever -- Free and Pro get the
+ * same ceiling -- because it bounds the cost of a single review rather than how many
+ * a chef may run. Cloud speech is billed per minute of audio, so this is the number
+ * that decides what a review costs.
+ *
+ * It does not limit Cook & Capture. A chef can narrate for as long as they like; the
+ * local recording is the source of truth and is never truncated, only left out of
+ * cloud review when it runs past this length.
+ *
+ * The repository enforces it and the PWA mirrors it in web/js/firebase-client.js.
+ * Changing it means changing it in both places together.
+ */
+object SecondPassLimits {
+    const val MAX_REVIEW_DURATION_MS = 5L * 60L * 1000L
+    const val MAX_REVIEW_MINUTES = MAX_REVIEW_DURATION_MS / 60_000L
+}
+
+/**
  * Launch access, granted by the `chefvoice-billing` Functions codebase.
  *
  * These numbers are display copy only. The backend owns the real decision and writes
