@@ -16,6 +16,9 @@ import com.chefvoice.app.billing.ChefVoiceOffer
 import com.chefvoice.app.billing.PlayBillingManager
 import com.chefvoice.app.cloud.FirebaseSocialRepository
 import com.chefvoice.app.data.RecipeRepository
+import com.chefvoice.app.importer.HttpPageFetcher
+import com.chefvoice.app.importer.ImportOutcome
+import com.chefvoice.app.importer.RecipeImporter
 import com.chefvoice.app.media.AudioPlayer
 import com.chefvoice.app.model.ChefNotification
 import com.chefvoice.app.model.ChefProfile
@@ -114,6 +117,22 @@ class ChefAppState(context: Context) {
     var showShoppingList by mutableStateOf(false)
     var activeCollectionId by mutableStateOf("")
     var shoppingMessage by mutableStateOf("")
+
+    // Recipe import from a web address. The page is fetched off the main thread; the token
+    // lets a result that arrives after the chef backed out (or the state was closed) be
+    // discarded instead of saving a recipe they walked away from.
+    var showRecipeImport by mutableStateOf(false)
+        private set
+    var recipeImportBusy by mutableStateOf(false)
+        private set
+    var recipeImportMessage by mutableStateOf("")
+        private set
+    var importNotice by mutableStateOf("")
+        private set
+    var importNoticeRecipeId by mutableStateOf("")
+        private set
+    private var recipeImportToken = 0
+    private val importHandler = Handler(Looper.getMainLooper())
     var selectedLiveSession by mutableStateOf<LiveSession?>(null)
         private set
     var selectedConversation by mutableStateOf<DirectConversation?>(null)
@@ -696,6 +715,7 @@ class ChefAppState(context: Context) {
 
     fun closeRecipe() {
         selectedRecipe = null
+        dismissImportNotice()
         secondPassMessage = ""
         comments.clear()
         commentsListener?.remove()
@@ -1867,6 +1887,60 @@ class ChefAppState(context: Context) {
         shoppingMessage = ""
     }
 
+    fun openRecipeImport() {
+        recipeImportMessage = ""
+        showRecipeImport = true
+    }
+
+    /** Backing out abandons a page that is still loading rather than saving it later. */
+    fun closeRecipeImport() {
+        recipeImportToken++
+        recipeImportBusy = false
+        recipeImportMessage = ""
+        showRecipeImport = false
+    }
+
+    /**
+     * Reads the recipe a web page publishes and saves it as a private recipe.
+     *
+     * Runs entirely off the main thread and on-device: no Cloud Function, no server, no
+     * rules involved. On success the new recipe is opened straight away so the chef checks
+     * it against the page; on failure they stay on the import screen with the reason.
+     */
+    fun importRecipeFromUrl(rawUrl: String) {
+        if (recipeImportBusy) return
+        val token = ++recipeImportToken
+        recipeImportBusy = true
+        recipeImportMessage = ""
+        val author = displayName
+        Thread {
+            val outcome = RecipeImporter.importFrom(rawUrl, author, HttpPageFetcher())
+            importHandler.post {
+                if (token != recipeImportToken) return@post
+                recipeImportBusy = false
+                when (outcome) {
+                    is ImportOutcome.Failed -> recipeImportMessage = outcome.message
+                    is ImportOutcome.Imported -> {
+                        saveRecipe(outcome.recipe)
+                        showRecipeImport = false
+                        openRecipe(outcome.recipe)
+                        importNoticeRecipeId = outcome.recipe.id
+                        importNotice = buildString {
+                            append("Saved from ${outcome.host} as a private recipe. ")
+                            append("Check the ingredients and method against the page before you cook from it.")
+                            outcome.notes.forEach { append("\n• ").append(it) }
+                        }
+                    }
+                }
+            }
+        }.start()
+    }
+
+    fun dismissImportNotice() {
+        importNotice = ""
+        importNoticeRecipeId = ""
+    }
+
     private fun persistShoppingItems() {
         repository.saveShoppingItems(shoppingItems.toList())
     }
@@ -1877,6 +1951,8 @@ class ChefAppState(context: Context) {
         (signedInUserId.isNotBlank() && recipe.authorId == signedInUserId)
 
     fun close() {
+        // A page still loading must not save into a state that is no longer on screen.
+        recipeImportToken++
         stopLiveHeartbeat()
         audioPlayer.stop()
         playBilling.close()

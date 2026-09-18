@@ -23,6 +23,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -92,6 +95,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -101,6 +105,8 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextDecoration
@@ -229,6 +235,7 @@ fun ChefVoiceApp(
     fun requestAppBack() {
         when {
             appState.showShoppingList -> appState.showShoppingList = false
+            appState.showRecipeImport -> appState.closeRecipeImport()
             appState.cookingRecipe != null -> appState.cookingRecipe = null
             appState.selectedConversation != null -> appState.closeConversation()
             appState.selectedRecipe != null -> appState.closeRecipe()
@@ -240,7 +247,7 @@ fun ChefVoiceApp(
     }
 
     BackHandler(
-        enabled = appState.showShoppingList || appState.cookingRecipe != null || appState.selectedConversation != null || appState.selectedRecipe != null ||
+        enabled = appState.showShoppingList || appState.showRecipeImport || appState.cookingRecipe != null || appState.selectedConversation != null || appState.selectedRecipe != null ||
             appState.selectedChefUid.isNotBlank() || appState.selectedLiveSession != null || tabHistory.isNotEmpty()
     ) { requestAppBack() }
 
@@ -332,6 +339,12 @@ fun ChefVoiceApp(
                     onShare = { shareText(context, "ChefVoice shopping list", appState.shoppingShareText()) },
                     onDismissMessage = appState::dismissShoppingMessage
                 )
+                appState.showRecipeImport -> RecipeImportScreen(
+                    busy = appState.recipeImportBusy,
+                    message = appState.recipeImportMessage,
+                    onImport = appState::importRecipeFromUrl,
+                    onBack = appState::closeRecipeImport
+                )
                 appState.cookingRecipe != null -> CookingScreen(
                     recipe = appState.cookingRecipe!!,
                     onBack = { appState.cookingRecipe = null },
@@ -408,7 +421,9 @@ fun ChefVoiceApp(
                         onAddToShoppingList = { factor -> appState.addRecipeToShoppingList(recipe, factor) },
                         onOpenShoppingList = { appState.showShoppingList = true },
                         shoppingMessage = appState.shoppingMessage,
-                        onDismissShoppingMessage = appState::dismissShoppingMessage
+                        onDismissShoppingMessage = appState::dismissShoppingMessage,
+                        importNotice = if (appState.importNoticeRecipeId == recipe.id) appState.importNotice else "",
+                        onDismissImportNotice = appState::dismissImportNotice
                     )
                 }
                 appState.selectedChefUid.isNotBlank() -> PublicChefProfileScreen(
@@ -482,6 +497,7 @@ fun ChefVoiceApp(
                                 onDeleteCollection = appState::deleteCollection,
                                 shoppingUncheckedCount = appState.shoppingUncheckedCount,
                                 onShoppingList = { appState.showShoppingList = true },
+                                onImport = appState::openRecipeImport,
                                 onOpen = appState::openRecipe,
                                 onCreate = { navigateTab(Tab.CREATE) },
                                 onCommunity = { navigateTab(Tab.COMMUNITY) }
@@ -685,6 +701,7 @@ private fun LibraryScreen(
     onDeleteCollection: (String) -> Unit,
     shoppingUncheckedCount: Int,
     onShoppingList: () -> Unit,
+    onImport: () -> Unit,
     onOpen: (Recipe) -> Unit,
     onCreate: () -> Unit,
     onCommunity: () -> Unit
@@ -706,6 +723,10 @@ private fun LibraryScreen(
         Spacer(Modifier.height(16.dp))
         Button(onClick = onCreate, modifier = Modifier.fillMaxWidth()) {
             Text("🎙 Create a recipe")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
+            Text("🔗 Import from a web address")
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = onShoppingList, modifier = Modifier.fillMaxWidth()) {
@@ -781,7 +802,7 @@ private fun LibraryScreen(
                     } else {
                         EmptyState(
                             title = "Your kitchen notebook is empty",
-                            body = "Dictate ingredients, record your own chef voice, attach photos or videos, then save your first recipe."
+                            body = "Dictate ingredients, record your own chef voice, attach photos or videos, then save your first recipe. Or import one from a web address."
                         )
                     }
                 }
@@ -2650,7 +2671,9 @@ private fun RecipeDetailScreen(
     onAddToShoppingList: (Double) -> Unit,
     onOpenShoppingList: () -> Unit,
     shoppingMessage: String,
-    onDismissShoppingMessage: () -> Unit
+    onDismissShoppingMessage: () -> Unit,
+    importNotice: String,
+    onDismissImportNotice: () -> Unit
 ) {
     var commentText by remember(recipe.id) { mutableStateOf("") }
     var replyTarget by remember(recipe.id) { mutableStateOf<RecipeComment?>(null) }
@@ -2712,6 +2735,20 @@ private fun RecipeDetailScreen(
             modifier = Modifier.padding(padding).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (importNotice.isNotBlank()) {
+                // Shown until dismissed rather than as a passing status line: the chef
+                // is being asked to check the recipe against its source, and a message
+                // that fades or hides in small print would not get that done.
+                item(key = "import-notice") {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Imported recipe", fontWeight = FontWeight.SemiBold)
+                            Text(importNotice, style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = onDismissImportNotice) { Text("Got it") }
+                        }
+                    }
+                }
+            }
             item {
                 if (recipe.description.isNotBlank()) Text(recipe.description, style = MaterialTheme.typography.bodyLarge)
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3611,6 +3648,87 @@ private fun ShoppingListScreen(
         )
     }
 }
+/**
+ * Recipe import from a web address. All of the work is in [ChefAppState.importRecipeFromUrl]
+ * and the `importer` package; this only collects the link and shows what happened.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RecipeImportScreen(
+    busy: Boolean,
+    message: String,
+    onImport: (String) -> Unit,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    var address by remember { mutableStateOf("") }
+
+    fun submit() {
+        if (busy || address.isBlank()) return
+        focusManager.clearFocus()
+        onImport(address)
+    }
+
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("Import a recipe") },
+            navigationIcon = { TextButton(onClick = onBack) { Text("Back") } }
+        )
+    }) { padding ->
+        Column(
+            Modifier.padding(padding).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                "Paste the link to a recipe page. ChefVoice reads the ingredients and method the page itself " +
+                    "publishes and saves them as a private recipe you can edit. Nothing is guessed or rewritten.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            OutlinedTextField(
+                value = address,
+                onValueChange = { address = it },
+                label = { Text("Recipe web address") },
+                placeholder = { Text("https://…") },
+                singleLine = true,
+                enabled = !busy,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { submit() }),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = {
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val pasted = clipboard.primaryClip
+                            ?.takeIf { it.itemCount > 0 }
+                            ?.getItemAt(0)
+                            ?.coerceToText(context)
+                            ?.toString()
+                        if (!pasted.isNullOrBlank()) address = pasted.trim()
+                    }
+                ) { Text("Paste") }
+                Button(
+                    onClick = { submit() },
+                    enabled = !busy && address.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                ) { Text(if (busy) "Reading the page…" else "Import recipe") }
+            }
+            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (message.isNotBlank()) {
+                Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(
+                "Works with pages that publish a standard recipe, which most recipe sites do. The recipe stays on " +
+                    "your phone until you choose to publish it, and it keeps a link back to the page it came from.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 @Composable
 private fun PublicChefProfileScreen(
     uid: String,

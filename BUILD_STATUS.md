@@ -1,3 +1,50 @@
+# Current handoff — 2026-09-18 (recipe import)
+
+Android versionCode 77 / versionName 0.11.16. **Recipe import from a web address**, plus a
+bug fix found on the way in. Parser, corpus, rules, Functions, Live and App Check
+untouched; nothing in `web/` changed, so the PWA stays at 0.5.12. Android 205 tests / 0
+failures (108 before). See `RECIPE_URL_IMPORT_0.11.16.md`.
+
+- **Recipes tab → "Import from a web address".** Paste a link; the page is read on the
+  phone and saved as an ordinary **private** recipe, opened straight away with a notice
+  asking the chef to check it against the page. New `importer/` package, entirely apart
+  from `voice/`. It reads the schema.org `Recipe` JSON-LD a site publishes and reports what
+  it says: no scraping of visible text, no guessed yield or time, no paragraph split into
+  steps. Gaps the page leaves are named in the notice. A page with no structured recipe is
+  refused, not half-guessed.
+- **Written-form ingredient parser, separate from the voice one** so it cannot disturb a
+  corpus row. Fails soft (a size like "1 1/2-inch" is not an amount; ranges kept as
+  written) and emits the voice parser's canonical units, so scaling, unit conversion and
+  shopping-list merging treat an imported recipe like a narrated one.
+- **Attribution lives in the description** ("Source: author · url"), so it travels with a
+  published recipe and needs no Firestore field and **no rules deploy**. **Open decision:**
+  nothing stops publishing an imported recipe to Community; see the writeup.
+- **Safe fetch:** https only (http upgraded), private/local hosts and credentials refused,
+  the same rules re-applied to every redirect hop, timeouts, 5 MB cap, plain-language
+  errors. Nothing is deployed and no Cloud Function is involved.
+- **Bug fix: local tags were never saved.** `RecipeRepository` never wrote or read
+  `Recipe.tags`, so every tag vanished when the app closed while the screen said "Tags
+  saved", and a restart then **Update Community** pushed an empty tag list over the
+  published one. Fixed, with a round-trip test confirmed to fail without the fix. Tags
+  lost before this are not recoverable; published recipes' tags still exist in Firestore.
+- **Validated on five live recipe pages from five sites** (all extracted correctly, 5-77
+  ms each), which found six real ingredient-line gaps the synthetic tests missed; all
+  fixed and pinned. Live pages are not committed as fixtures.
+- **NOT verified on a device.** No phone attached and no emulator installed: the import
+  screen, its keyboard/Paste/back behaviour, and the fetch through Android's own network
+  stack have not been run. Debug and release (R8, release-signed) builds are clean.
+- **One real site blocked the fetch.** Run end to end against live servers from a desktop
+  JVM, two of three real recipe sites imported (including an `http://` link that was
+  upgraded and a link pasted inside a sentence with tracking parameters); **Simply Recipes
+  returned a Cloudflare bot challenge (403)** to the JVM's `HttpURLConnection` while curl and
+  Java's newer HTTP client, with identical headers, got the page. It is reported as "that
+  site wouldn't let ChefVoice read the page". Whether the phone is challenged the same way is
+  the first thing to test on the device. The escalation, if many sites refuse, is a
+  WebView-based read, not imitating a browser.
+
+**Install:** build `:app:assembleRelease` and install over the top (see the install note
+below), then try a real recipe link on the Recipes tab.
+
 # Current handoff — 2026-09-18 (device-test fixes)
 
 Android versionCode 76 / versionName 0.11.15. Three fixes from testing 0.11.14 on the
