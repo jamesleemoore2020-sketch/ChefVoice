@@ -1,3 +1,14 @@
+# Current handoff — 2026-09-18 (PWA save fix)
+
+PWA 0.5.13 (service-worker cache bumped so phones pick it up). **Saving a Community recipe
+from the PWA was rejected with "Missing or insufficient permissions"**: the client wrote
+`{createdAt}` but `firestore.rules` requires the bookmark to carry `recipeId` equal to its
+path id, as Android writes it. It has failed since the rules were written. One-line fix in
+`web/js/firebase-client.js`, pinned by `web/tests/bookmark-rules.test.mjs` (fails on the old
+code). PWA 132 tests / 0 failures. No rules change, nothing deployed yet -- the fix is not
+live until `DEPLOY_PWA.cmd` is run. **Swipe-to-save is Android-only (0.11.13); the PWA never
+had it**, so "swipe doesn't work on the PWA" is a missing feature, not a regression.
+
 # Current handoff — 2026-09-18 (recipe import)
 
 Android versionCode 77 / versionName 0.11.16. **Recipe import from a web address**, plus a

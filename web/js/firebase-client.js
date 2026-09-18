@@ -261,7 +261,10 @@ export async function toggleBookmark(recipeId){
   const target=doc(db,'users',user.uid,'bookmarks',recipeId);
   const existing=await getDoc(target);
   if(existing.exists()){await deleteDoc(target);return false;}
-  await setDoc(target,{createdAt:Date.now()});return true;
+  // firestore.rules requires recipeId in the document and equal to the path id, exactly as
+  // Android writes it. Without it every Save from the PWA was rejected as "Missing or
+  // insufficient permissions".
+  await setDoc(target,{recipeId,createdAt:Date.now()});return true;
 }
 
 export async function toggleFollow(targetUid){
