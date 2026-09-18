@@ -33,8 +33,11 @@ import com.chefvoice.app.model.FreeTierLimits
 import com.chefvoice.app.model.ProEntitlement
 import com.chefvoice.app.model.ProTierLimits
 import com.chefvoice.app.model.Recipe
+import com.chefvoice.app.model.RecipeCollection
+import com.chefvoice.app.model.ShoppingItem
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.stableStepIds
+import com.chefvoice.app.util.ShoppingList
 import com.chefvoice.app.voice.SecondPassReviewer
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.ListenerRegistration
@@ -59,6 +62,8 @@ class ChefAppState(context: Context) {
     private val playBilling = PlayBillingManager(context)
 
     val recipes = mutableStateListOf<Recipe>()
+    val collections = mutableStateListOf<RecipeCollection>()
+    val shoppingItems = mutableStateListOf<ShoppingItem>()
     val cloudRecipes = mutableStateListOf<Recipe>()
     val comments = mutableStateListOf<RecipeComment>()
     val conversations = mutableStateListOf<DirectConversation>()
@@ -106,6 +111,9 @@ class ChefAppState(context: Context) {
     var focusedCommentId by mutableStateOf("")
         private set
     var cookingRecipe by mutableStateOf<Recipe?>(null)
+    var showShoppingList by mutableStateOf(false)
+    var activeCollectionId by mutableStateOf("")
+    var shoppingMessage by mutableStateOf("")
     var selectedLiveSession by mutableStateOf<LiveSession?>(null)
         private set
     var selectedConversation by mutableStateOf<DirectConversation?>(null)
@@ -251,6 +259,8 @@ class ChefAppState(context: Context) {
         loadSecondPassUsage()
         loadProOffers()
         recipes.addAll(repository.loadRecipes())
+        collections.addAll(repository.loadCollections())
+        shoppingItems.addAll(repository.loadShoppingItems())
         localLikedIds.addAll(repository.loadLikedIds())
         // Reclaim media and cooking audio from abandoned sessions and deleted
         // recipes. Off the main thread: this touches the filesystem.
@@ -1723,6 +1733,142 @@ class ChefAppState(context: Context) {
         }
         val own = recipes.filter { it.isPublic }.map { CommunityItem(it) }
         return (own + demoCommunityRecipes()).sortedByDescending { it.recipe.updatedAt }
+    }
+
+
+    // ---- Collections ----------------------------------------------------------
+    // A chef's own filing of their own library. Local to this device by design:
+    // cloud bookmarks already cover saving other chefs' dishes, so this needs no
+    // Firestore collection, no security rule and no rules deploy, and it keeps
+    // working for a chef who is signed out.
+
+    /** Recipes in [collectionId], in library order. A blank id means the whole library. */
+    fun recipesInCollection(collectionId: String): List<Recipe> {
+        if (collectionId.isBlank()) return recipes
+        val collection = collections.firstOrNull { it.id == collectionId } ?: return recipes
+        // Ids that no longer resolve are skipped rather than pruned, so deleting a
+        // recipe can never corrupt a collection that mentioned it.
+        return recipes.filter { collection.recipeIds.contains(it.id) }
+    }
+
+    fun collectionsContaining(recipeId: String): List<RecipeCollection> =
+        collections.filter { it.recipeIds.contains(recipeId) }
+
+    fun createCollection(name: String): String {
+        val clean = name.trim().take(60)
+        if (clean.isBlank()) return ""
+        // Re-using an existing collection by name rather than making a second one with
+        // the same label, which would be indistinguishable in the picker.
+        collections.firstOrNull { it.name.equals(clean, ignoreCase = true) }?.let { return it.id }
+        val collection = RecipeCollection(name = clean)
+        collections.add(collection)
+        persistCollections()
+        return collection.id
+    }
+
+    fun renameCollection(collectionId: String, name: String) {
+        val clean = name.trim().take(60)
+        if (clean.isBlank()) return
+        val index = collections.indexOfFirst { it.id == collectionId }
+        if (index < 0) return
+        collections[index] = collections[index].copy(name = clean, updatedAt = System.currentTimeMillis())
+        persistCollections()
+    }
+
+    /** Removes the collection only. The recipes in it are untouched. */
+    fun deleteCollection(collectionId: String) {
+        if (collections.none { it.id == collectionId }) return
+        collections.removeAll { it.id == collectionId }
+        if (activeCollectionId == collectionId) activeCollectionId = ""
+        persistCollections()
+    }
+
+    fun setRecipeInCollection(collectionId: String, recipeId: String, inCollection: Boolean) {
+        val index = collections.indexOfFirst { it.id == collectionId }
+        if (index < 0 || recipeId.isBlank()) return
+        val current = collections[index]
+        val alreadyIn = current.recipeIds.contains(recipeId)
+        if (alreadyIn == inCollection) return
+        val next = if (inCollection) current.recipeIds + recipeId else current.recipeIds - recipeId
+        collections[index] = current.copy(recipeIds = next, updatedAt = System.currentTimeMillis())
+        persistCollections()
+    }
+
+    private fun persistCollections() {
+        repository.saveCollections(collections.toList())
+    }
+
+    // ---- Shopping list --------------------------------------------------------
+    // Built from the structured ingredients the parser already produced, so a chef
+    // never retypes what they narrated. Local for the same reasons collections are.
+
+    val shoppingUncheckedCount: Int get() = shoppingItems.count { !it.checked }
+
+    /**
+     * Adds one recipe's ingredients, scaled the way the chef is currently viewing it,
+     * merging into lines that are already on the list where that is safe.
+     */
+    fun addRecipeToShoppingList(recipe: Recipe, servingFactor: Double = 1.0) {
+        val incoming = ShoppingList.itemsFor(
+            recipeId = recipe.id,
+            recipeTitle = recipe.title.ifBlank { "Untitled recipe" },
+            ingredients = recipe.ingredients,
+            servingFactor = servingFactor
+        )
+        if (incoming.isEmpty()) {
+            shoppingMessage = "That recipe has no ingredients to add yet."
+            return
+        }
+        val before = shoppingItems.size
+        val merged = ShoppingList.merge(shoppingItems.toList(), incoming)
+        shoppingItems.clear()
+        shoppingItems.addAll(merged)
+        persistShoppingItems()
+        val added = merged.size - before
+        val combined = incoming.size - added
+        shoppingMessage = when {
+            combined <= 0 -> "Added $added item${if (added == 1) "" else "s"} to the shopping list."
+            added <= 0 -> "Combined $combined item${if (combined == 1) "" else "s"} into lines already on the list."
+            else -> "Added $added and combined $combined into the shopping list."
+        }
+    }
+
+    fun setShoppingItemChecked(itemId: String, checked: Boolean) {
+        val index = shoppingItems.indexOfFirst { it.id == itemId }
+        if (index < 0) return
+        shoppingItems[index] = shoppingItems[index].copy(checked = checked)
+        persistShoppingItems()
+    }
+
+    fun removeShoppingItem(itemId: String) {
+        if (shoppingItems.none { it.id == itemId }) return
+        shoppingItems.removeAll { it.id == itemId }
+        persistShoppingItems()
+    }
+
+    /** Clears the ticked lines, which is how a list gets reset after a shop. */
+    fun clearCheckedShoppingItems() {
+        if (shoppingItems.none { it.checked }) return
+        shoppingItems.removeAll { it.checked }
+        persistShoppingItems()
+        shoppingMessage = "Cleared everything already in the basket."
+    }
+
+    fun clearShoppingList() {
+        if (shoppingItems.isEmpty()) return
+        shoppingItems.clear()
+        persistShoppingItems()
+        shoppingMessage = "Shopping list emptied."
+    }
+
+    fun shoppingShareText(): String = ShoppingList.asShareText(shoppingItems.toList())
+
+    fun dismissShoppingMessage() {
+        shoppingMessage = ""
+    }
+
+    private fun persistShoppingItems() {
+        repository.saveShoppingItems(shoppingItems.toList())
     }
 
     fun bookmarkedRecipes(): List<Recipe> = cloudRecipes.filter { bookmarkIds.contains(it.id) }

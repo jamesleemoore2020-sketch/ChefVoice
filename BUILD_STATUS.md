@@ -1,3 +1,39 @@
+# Current handoff — 2026-09-18 (later)
+
+- **Five cook-along and library features, all built on structure the parser already
+  produces.** Android versionCode 75 / versionName 0.11.14. Nothing in `web/` changed, so
+  the PWA stays at 0.5.12. See `COOK_ALONG_AND_LIBRARY_0.11.14.md`.
+- **Tappable step timers.** `util/StepTimers.kt` reads the durations a chef actually said
+  out of a finished step ("20 minutes", "1 1/2 hours", "fifteen minutes", "10 to 12
+  minutes") and the cook-along screen offers each as a timer with pause, cancel and a
+  spoken finish. A range times the **lower** bound so the chef is called back while there
+  is still a decision to make. Deliberately a **read-only extractor outside
+  `CookingSessionParser`** -- it never edits a step and cannot change a corpus row. A bare
+  number with no time unit is not a timer, so "preheat to 350 degrees" offers nothing.
+- **Hands-free step advance.** A toggle listens for `next` / `back` / `repeat` /
+  `start timer` / `stop timer` / `stop listening`. **Nothing said to it is recorded,
+  transcribed or kept** -- `CookCommandListener` shares no code with capture and discards
+  every result after matching. Matching is literal on purpose: "the next thing you want to
+  do is add the garlic" must not advance the step. Only reversible commands may fire on a
+  partial result.
+- **Shopping list** from the structured ingredients, with a narrow merge rule: lines
+  combine only when the name matches, the units are comparable **and** both quantities are
+  readable numbers. "2 cups flour" + "200 g flour" stays two lines rather than guessing how
+  flour packs. Merging into a ticked line un-ticks it, because there is more to buy.
+- **Serving scaling and metric/imperial conversion**, both strictly a **view** -- nothing
+  is written back, matching the rule the parser and Second Pass follow. Unreadable
+  quantities ("a pinch") pass through untouched so scaling can never lose an ingredient,
+  and volume is never converted to weight.
+- **Collections**, chef-named groups of their own recipes, **local to the device**. Cloud
+  bookmarks already cover other chefs' dishes, so this needed no Firestore collection, no
+  rule and **no rules deploy**. Deleting a collection keeps every recipe in it.
+- Parser, corpus, rules, Functions, Live/WebRTC and App Check all untouched. Gates: Android
+  106 tests / 0 failures (`GoldenCookingCorpusTest` still 24), `assembleDebug` clean. The
+  two `SwipeToDismissBox` call sites moved off the deprecated `confirmValueChange`.
+- **Not yet device-verified.** The logic is unit-tested, but the gestures, voice commands
+  and running timer are UI behavior needing a real device -- hands-free especially, whose
+  recognizer cannot be exercised by a unit test. That is the next check before shipping.
+
 # Current handoff — 2026-09-18
 
 - **ChefVoice Review now sends at most 5 minutes of audio per review, down from 90.**

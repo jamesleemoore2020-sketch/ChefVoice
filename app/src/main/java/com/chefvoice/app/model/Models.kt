@@ -109,6 +109,44 @@ fun Recipe.stableStepIds(): List<String> = steps.indices.map { index ->
 
 fun Recipe.stepIdAt(index: Int): String = stableStepIds().getOrElse(index) { "${id}:step:${index + 1}" }
 
+/**
+ * One line on the shopping list.
+ *
+ * [recipeTitle] can name several recipes once lines have been merged, which is what
+ * lets a chef see that the 3 cups of flour came from two different dishes.
+ */
+data class ShoppingItem(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String = "",
+    val quantity: String = "",
+    val unit: String = "",
+    val recipeId: String = "",
+    val recipeTitle: String = "",
+    val checked: Boolean = false,
+    val addedAt: Long = System.currentTimeMillis()
+) {
+    fun displayText(): String = listOf(quantity, unit, name)
+        .filter { it.isNotBlank() }
+        .joinToString(" ")
+}
+
+/**
+ * A chef-named group of their own saved recipes -- "Weeknight", "Thanksgiving".
+ *
+ * Deliberately **local to the device**, stored beside the recipes themselves. Cloud
+ * bookmarks already exist for saving other chefs' dishes; this is the chef's own
+ * filing of their own library, so it needs no Firestore collection and no security
+ * rule, and therefore no rules deploy. Recipe ids that no longer resolve are ignored
+ * at read time rather than pruned, so deleting a recipe cannot corrupt a collection.
+ */
+data class RecipeCollection(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String = "",
+    val recipeIds: List<String> = emptyList(),
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
 data class CommunityItem(
     val recipe: Recipe,
     val isDemoMember: Boolean = false,

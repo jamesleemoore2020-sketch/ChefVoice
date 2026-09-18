@@ -21,6 +21,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -80,6 +82,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -100,6 +103,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -122,7 +126,9 @@ import com.chefvoice.app.model.LiveSession
 import com.chefvoice.app.model.MediaAttachment
 import com.chefvoice.app.model.MediaType
 import com.chefvoice.app.model.NotificationPreferences
+import com.chefvoice.app.model.RecipeCollection
 import com.chefvoice.app.model.SecondPassLimits
+import com.chefvoice.app.model.ShoppingItem
 import com.chefvoice.app.model.FoundingAccess
 import com.chefvoice.app.model.FreeTierLimits
 import com.chefvoice.app.model.ProEntitlement
@@ -134,9 +140,17 @@ import com.chefvoice.app.notifications.ChefVoiceForegroundService
 import com.chefvoice.app.model.TranscriptSegment
 import com.chefvoice.app.model.VoiceClip
 import com.chefvoice.app.util.shareRecipe
+import com.chefvoice.app.util.shareText
 import com.chefvoice.app.util.parseTagsInput
 import com.chefvoice.app.util.tagMatchesQuery
 import com.chefvoice.app.voice.CookingSessionCapture
+import com.chefvoice.app.util.CookCommand
+import com.chefvoice.app.util.IngredientScaling
+import com.chefvoice.app.util.MeasurementSystem
+import com.chefvoice.app.util.CookCommands
+import com.chefvoice.app.util.StepTimer
+import com.chefvoice.app.util.StepTimers
+import com.chefvoice.app.voice.CookCommandListener
 import com.chefvoice.app.voice.CookingSessionParser
 import com.chefvoice.app.voice.IngredientParser
 import java.io.File
@@ -214,6 +228,7 @@ fun ChefVoiceApp(
 
     fun requestAppBack() {
         when {
+            appState.showShoppingList -> appState.showShoppingList = false
             appState.cookingRecipe != null -> appState.cookingRecipe = null
             appState.selectedConversation != null -> appState.closeConversation()
             appState.selectedRecipe != null -> appState.closeRecipe()
@@ -225,7 +240,7 @@ fun ChefVoiceApp(
     }
 
     BackHandler(
-        enabled = appState.cookingRecipe != null || appState.selectedConversation != null || appState.selectedRecipe != null ||
+        enabled = appState.showShoppingList || appState.cookingRecipe != null || appState.selectedConversation != null || appState.selectedRecipe != null ||
             appState.selectedChefUid.isNotBlank() || appState.selectedLiveSession != null || tabHistory.isNotEmpty()
     ) { requestAppBack() }
 
@@ -306,6 +321,17 @@ fun ChefVoiceApp(
                 // them, because targetSdk 36 makes edge-to-edge mandatory.
                 Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)
             ) { when {
+                appState.showShoppingList -> ShoppingListScreen(
+                    items = appState.shoppingItems,
+                    message = appState.shoppingMessage,
+                    onBack = { appState.showShoppingList = false },
+                    onToggle = appState::setShoppingItemChecked,
+                    onRemove = appState::removeShoppingItem,
+                    onClearChecked = appState::clearCheckedShoppingItems,
+                    onClearAll = appState::clearShoppingList,
+                    onShare = { shareText(context, "ChefVoice shopping list", appState.shoppingShareText()) },
+                    onDismissMessage = appState::dismissShoppingMessage
+                )
                 appState.cookingRecipe != null -> CookingScreen(
                     recipe = appState.cookingRecipe!!,
                     onBack = { appState.cookingRecipe = null },
@@ -372,7 +398,16 @@ fun ChefVoiceApp(
                         onAcceptSecondPass = { issueId -> appState.acceptSecondPassIssue(recipe.id, issueId) },
                         onKeepSecondPass = { issueId -> appState.keepCurrentForSecondPassIssue(recipe.id, issueId) },
                         onAcceptSecondPassMethod = { issueId -> appState.acceptSecondPassMethodIssue(recipe.id, issueId) },
-                        onKeepSecondPassMethod = { issueId -> appState.keepCurrentForSecondPassMethodIssue(recipe.id, issueId) }
+                        onKeepSecondPassMethod = { issueId -> appState.keepCurrentForSecondPassMethodIssue(recipe.id, issueId) },
+                        collections = appState.collections,
+                        collectionIdsForRecipe = appState.collectionsContaining(recipe.id).map { it.id }.toSet(),
+                        onSetInCollection = { collectionId, inCollection ->
+                            appState.setRecipeInCollection(collectionId, recipe.id, inCollection)
+                        },
+                        onCreateCollection = appState::createCollection,
+                        onAddToShoppingList = { factor -> appState.addRecipeToShoppingList(recipe, factor) },
+                        shoppingMessage = appState.shoppingMessage,
+                        onDismissShoppingMessage = appState::dismissShoppingMessage
                     )
                 }
                 appState.selectedChefUid.isNotBlank() -> PublicChefProfileScreen(
@@ -437,9 +472,15 @@ fun ChefVoiceApp(
                     Box(Modifier.padding(padding)) {
                         when (tab) {
                             Tab.LIBRARY -> LibraryScreen(
-                                recipes = appState.recipes,
+                                recipes = appState.recipesInCollection(appState.activeCollectionId),
                                 cookbook = appState.bookmarkedRecipes(),
                                 isSignedIn = appState.isSignedIn,
+                                collections = appState.collections,
+                                activeCollectionId = appState.activeCollectionId,
+                                onSelectCollection = { appState.activeCollectionId = it },
+                                onDeleteCollection = appState::deleteCollection,
+                                shoppingUncheckedCount = appState.shoppingUncheckedCount,
+                                onShoppingList = { appState.showShoppingList = true },
                                 onOpen = appState::openRecipe,
                                 onCreate = { navigateTab(Tab.CREATE) },
                                 onCommunity = { navigateTab(Tab.COMMUNITY) }
@@ -637,6 +678,12 @@ private fun LibraryScreen(
     recipes: List<Recipe>,
     cookbook: List<Recipe>,
     isSignedIn: Boolean,
+    collections: List<RecipeCollection>,
+    activeCollectionId: String,
+    onSelectCollection: (String) -> Unit,
+    onDeleteCollection: (String) -> Unit,
+    shoppingUncheckedCount: Int,
+    onShoppingList: () -> Unit,
     onOpen: (Recipe) -> Unit,
     onCreate: () -> Unit,
     onCommunity: () -> Unit
@@ -659,19 +706,83 @@ private fun LibraryScreen(
         Button(onClick = onCreate, modifier = Modifier.fillMaxWidth()) {
             Text("🎙 Create a recipe")
         }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onShoppingList, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                if (shoppingUncheckedCount > 0) "🛒 Shopping list · $shoppingUncheckedCount to buy"
+                else "🛒 Shopping list"
+            )
+        }
         Spacer(Modifier.height(12.dp))
 
         LazyColumn(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { SectionTitle("My recipes") }
+            if (collections.isNotEmpty()) {
+                item {
+                    // Filing, not filtering away: "All" is always first and always
+                    // returns the whole library, so a collection can never look like
+                    // recipes have gone missing.
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (activeCollectionId.isBlank()) {
+                            Button(onClick = { }) { Text("All") }
+                        } else {
+                            OutlinedButton(onClick = { onSelectCollection("") }) { Text("All") }
+                        }
+                        collections.forEach { collection ->
+                            val selected = collection.id == activeCollectionId
+                            if (selected) {
+                                var menuOpen by remember(collection.id) { mutableStateOf(false) }
+                                Box {
+                                    Button(onClick = { menuOpen = true }) {
+                                        Text("${collection.name} · ${collection.recipeIds.size}")
+                                    }
+                                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text("Show all recipes") },
+                                            onClick = { menuOpen = false; onSelectCollection("") }
+                                        )
+                                        DropdownMenuItem(
+                                            // Deletes the grouping only. Every recipe in
+                                            // it stays in the library.
+                                            text = { Text("Delete collection (keeps recipes)") },
+                                            onClick = { menuOpen = false; onDeleteCollection(collection.id) }
+                                        )
+                                    }
+                                }
+                            } else {
+                                OutlinedButton(onClick = { onSelectCollection(collection.id) }) {
+                                    Text("${collection.name} · ${collection.recipeIds.size}")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                SectionTitle(
+                    if (activeCollectionId.isBlank()) "My recipes"
+                    else collections.firstOrNull { it.id == activeCollectionId }?.name ?: "My recipes"
+                )
+            }
             if (recipes.isEmpty()) {
                 item {
-                    EmptyState(
-                        title = "Your kitchen notebook is empty",
-                        body = "Dictate ingredients, record your own chef voice, attach photos or videos, then save your first recipe."
-                    )
+                    if (activeCollectionId.isNotBlank()) {
+                        EmptyState(
+                            title = "Nothing filed here yet",
+                            body = "Open a recipe and use \"Add to a collection\" to put it in this one."
+                        )
+                    } else {
+                        EmptyState(
+                            title = "Your kitchen notebook is empty",
+                            body = "Dictate ingredients, record your own chef voice, attach photos or videos, then save your first recipe."
+                        )
+                    }
                 }
             } else {
                 items(recipes, key = { "local:${it.id}" }) { recipe ->
@@ -2055,17 +2166,18 @@ private fun NotificationsScreen(
                             "reply" -> "↩"
                             else -> "🔔"
                         }
-                        // Swiping either way clears the row. confirmValueChange runs the
-                        // dismiss and then returns false so the box never settles into a
-                        // dismissed state: the row leaves the list because the state it
-                        // was keyed on is gone, not because the gesture parked it
-                        // off-screen, which is what left a blank gap here otherwise.
-                        val dismissState = rememberSwipeToDismissBoxState(
-                            confirmValueChange = { value ->
-                                if (value != SwipeToDismissBoxValue.Settled) onDismiss(notification)
-                                false
+                        // Swiping either way clears the row. The dismiss is driven off
+                        // the settled value rather than vetoed in confirmValueChange,
+                        // which Compose has deprecated. Because dismissNotification
+                        // removes the row from the list straight away, this state is
+                        // disposed with it and a row restored after a failed delete
+                        // comes back with a fresh, un-swiped state of its own.
+                        val dismissState = rememberSwipeToDismissBoxState()
+                        LaunchedEffect(dismissState.currentValue) {
+                            if (dismissState.currentValue != SwipeToDismissBoxValue.Settled) {
+                                onDismiss(notification)
                             }
-                        )
+                        }
                         SwipeToDismissBox(
                             state = dismissState,
                             backgroundContent = {
@@ -2509,7 +2621,14 @@ private fun RecipeDetailScreen(
     onAcceptSecondPass: (String) -> Unit,
     onKeepSecondPass: (String) -> Unit,
     onAcceptSecondPassMethod: (String) -> Unit,
-    onKeepSecondPassMethod: (String) -> Unit
+    onKeepSecondPassMethod: (String) -> Unit,
+    collections: List<RecipeCollection>,
+    collectionIdsForRecipe: Set<String>,
+    onSetInCollection: (String, Boolean) -> Unit,
+    onCreateCollection: (String) -> String,
+    onAddToShoppingList: (Double) -> Unit,
+    shoppingMessage: String,
+    onDismissShoppingMessage: () -> Unit
 ) {
     var commentText by remember(recipe.id) { mutableStateOf("") }
     var replyTarget by remember(recipe.id) { mutableStateOf<RecipeComment?>(null) }
@@ -2520,6 +2639,19 @@ private fun RecipeDetailScreen(
     var cookTimeText by remember(recipe.id) { mutableStateOf(recipe.cookTimeMinutes.takeIf { it > 0 }?.toString().orEmpty()) }
     var tagsText by remember(recipe.id) { mutableStateOf(recipe.tags.joinToString(", ") { "#$it" }) }
     var pendingMediaStepId by remember(recipe.id) { mutableStateOf("") }
+    // Serving scaling and unit conversion are a **view** over the saved recipe.
+    // Nothing here writes back: the chef narrated these amounts, and a stepper on a
+    // screen must not quietly become the record of what they said.
+    var viewServings by remember(recipe.id) { mutableIntStateOf(recipe.servings.coerceAtLeast(1)) }
+    var measurementSystem by remember(recipe.id) { mutableStateOf(MeasurementSystem.AS_WRITTEN) }
+    var showCollectionPicker by remember(recipe.id) { mutableStateOf(false) }
+    val servingFactor = IngredientScaling.servingFactor(recipe.servings, viewServings)
+    val shownIngredients = remember(recipe.ingredients, servingFactor, measurementSystem) {
+        IngredientScaling.convert(
+            IngredientScaling.scale(recipe.ingredients, servingFactor),
+            measurementSystem
+        )
+    }
     val context = LocalContext.current
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { copyPickedMedia(context, it) }?.let { onAddMedia(it.copy(stepId = pendingMediaStepId)) }
@@ -2793,7 +2925,64 @@ private fun RecipeDetailScreen(
             }
 
             item { SectionTitle("Ingredients") }
-            items(recipe.ingredients, key = { "ingredient:${it.id}" }) { ingredient ->
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Serves $viewServings", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (servingFactor == 1.0) "As the chef cooked it"
+                                    else "Scaled from ${recipe.servings} · the saved recipe is unchanged",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            OutlinedButton(
+                                enabled = viewServings > 1,
+                                onClick = { viewServings = (viewServings - 1).coerceAtLeast(1) }
+                            ) { Text("−") }
+                            Spacer(Modifier.width(6.dp))
+                            OutlinedButton(
+                                enabled = viewServings < 99,
+                                onClick = { viewServings = (viewServings + 1).coerceAtMost(99) }
+                            ) { Text("+") }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MeasurementSystem.values().forEach { system ->
+                                val label = when (system) {
+                                    MeasurementSystem.AS_WRITTEN -> "As written"
+                                    MeasurementSystem.METRIC -> "Metric"
+                                    MeasurementSystem.IMPERIAL -> "Imperial"
+                                }
+                                if (measurementSystem == system) {
+                                    Button(onClick = { }, modifier = Modifier.weight(1f)) { Text(label, maxLines = 1) }
+                                } else {
+                                    OutlinedButton(onClick = { measurementSystem = system }, modifier = Modifier.weight(1f)) {
+                                        Text(label, maxLines = 1)
+                                    }
+                                }
+                            }
+                        }
+                        if (measurementSystem != MeasurementSystem.AS_WRITTEN) {
+                            Text(
+                                "Units ChefVoice cannot convert without guessing — a cup of flour is not a cup of honey — stay exactly as the chef said them.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { onAddToShoppingList(servingFactor) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("🛒 Add to shopping list") }
+                        if (shoppingMessage.isNotBlank()) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(shoppingMessage, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                TextButton(onClick = onDismissShoppingMessage) { Text("OK") }
+                            }
+                        }
+                    }
+                }
+            }
+            items(shownIngredients, key = { "ingredient:${it.id}" }) { ingredient ->
                 if (isOwned && mediaEditMode) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("• ${ingredient.displayText()}", Modifier.weight(1f))
@@ -2861,6 +3050,18 @@ private fun RecipeDetailScreen(
                     Button(onClick = onShare, modifier = Modifier.weight(1f)) { Text("Share") }
                     OutlinedButton(onClick = onLike, modifier = Modifier.weight(1f)) {
                         Text(if (isLiked) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}")
+                    }
+                }
+            }
+            if (isOwned) {
+                item {
+                    val inCollections = collections.filter { collectionIdsForRecipe.contains(it.id) }
+                    OutlinedButton(onClick = { showCollectionPicker = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            if (inCollections.isEmpty()) "🗂 Add to a collection"
+                            else "🗂 " + inCollections.joinToString(", ") { it.name }
+                            , maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
@@ -2970,6 +3171,56 @@ private fun RecipeDetailScreen(
             dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") } }
         )
     }
+    if (showCollectionPicker) {
+        var newCollectionName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showCollectionPicker = false },
+            title = { Text("Collections") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Collections are your own filing of your own recipes, kept on this phone.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    collections.forEach { collection ->
+                        val isIn = collectionIdsForRecipe.contains(collection.id)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(collection.name, Modifier.weight(1f))
+                            Switch(
+                                checked = isIn,
+                                onCheckedChange = { onSetInCollection(collection.id, it) }
+                            )
+                        }
+                    }
+                    if (collections.isEmpty()) {
+                        Text("No collections yet. Name one below.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = newCollectionName,
+                            onValueChange = { newCollectionName = it.take(60) },
+                            label = { Text("New collection") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(
+                            enabled = newCollectionName.isNotBlank(),
+                            onClick = {
+                                val id = onCreateCollection(newCollectionName)
+                                // Creating one from here means the chef wants this
+                                // recipe in it; making them then toggle it on would be
+                                // a second step for something they already asked for.
+                                if (id.isNotBlank()) onSetInCollection(id, true)
+                                newCollectionName = ""
+                            }
+                        ) { Text("Add") }
+                    }
+                }
+            },
+            confirmButton = { Button(onClick = { showCollectionPicker = false }) { Text("Done") } }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2980,10 +3231,111 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
     val speakerContext = LocalContext.current
     val speaker = remember { RecipeSpeaker(speakerContext) }
     var readAloud by remember { mutableStateOf(false) }
+    // Bumped to re-speak the same step when the chef asks for it again, which a plain
+    // key on stepIndex cannot do because the index has not changed.
+    var repeatTrigger by remember(recipe.id) { mutableIntStateOf(0) }
     DisposableEffect(Unit) { onDispose { speaker.shutdown() } }
-    LaunchedEffect(stepIndex, readAloud) {
+    LaunchedEffect(stepIndex, readAloud, repeatTrigger) {
         if (readAloud) speaker.speak(step.orEmpty()) else speaker.stop()
     }
+
+    // ---- Timers -------------------------------------------------------------
+    // Offered only for durations the chef actually stated in this step. A step with
+    // no stated duration simply has no timer, rather than a guessed one.
+    val stepTimers = remember(step) { StepTimers.timersIn(step.orEmpty()) }
+    var runningTimerLabel by remember(recipe.id) { mutableStateOf("") }
+    var remainingSeconds by remember(recipe.id) { mutableIntStateOf(0) }
+    var timerPaused by remember(recipe.id) { mutableStateOf(false) }
+    var timerFinished by remember(recipe.id) { mutableStateOf(false) }
+    // Keyed into the countdown so that starting a timer always restarts it, even when
+    // it is the same duration that just finished. Without this, re-running "20 minutes"
+    // on the same step would leave the effect keyed on an unchanged label and the clock
+    // would sit there showing 20:00 and never move.
+    var timerRun by remember(recipe.id) { mutableIntStateOf(0) }
+
+    fun startTimer(timer: StepTimer) {
+        runningTimerLabel = timer.label
+        remainingSeconds = timer.totalSeconds
+        timerPaused = false
+        timerFinished = false
+        timerRun++
+    }
+
+    fun clearTimer() {
+        runningTimerLabel = ""
+        remainingSeconds = 0
+        timerPaused = false
+        timerFinished = false
+    }
+
+    LaunchedEffect(timerRun, timerPaused) {
+        if (runningTimerLabel.isBlank() || timerPaused) return@LaunchedEffect
+        while (remainingSeconds > 0) {
+            delay(1000)
+            if (timerPaused) return@LaunchedEffect
+            remainingSeconds--
+        }
+        if (remainingSeconds <= 0 && runningTimerLabel.isNotBlank()) {
+            timerFinished = true
+            // The chef's hands are busy and they may not be looking at the screen, so
+            // the timer says so out loud as well as showing it.
+            speaker.speak("Timer finished. $runningTimerLabel is up.")
+        }
+    }
+
+    // The screen must not sleep mid-recipe with a timer running and the chef's hands
+    // covered in flour.
+    KeepScreenOn(enabled = true)
+
+    // ---- Hands-free ---------------------------------------------------------
+    var handsFree by remember(recipe.id) { mutableStateOf(false) }
+    var handsFreeStatus by remember(recipe.id) { mutableStateOf("") }
+    val lastStepIndex = recipe.steps.lastIndex
+    // The listener is created once and must outlive recomposition, but what a command
+    // should do depends on values that change with every step -- above all stepTimers,
+    // which is recomputed from the current step. A lambda captured directly into
+    // remember would freeze those at the first composition, so "start timer" would
+    // silently keep offering step one's duration for the whole recipe. Routing through
+    // rememberUpdatedState keeps the listener stable while the behaviour stays current.
+    val handleCommand by rememberUpdatedState<(CookCommand) -> Unit> { command ->
+        when (command) {
+            CookCommand.NEXT -> if (stepIndex < lastStepIndex) stepIndex++
+            CookCommand.PREVIOUS -> if (stepIndex > 0) stepIndex--
+            CookCommand.REPEAT -> {
+                if (!readAloud) readAloud = true else repeatTrigger++
+            }
+            CookCommand.START_TIMER -> stepTimers.firstOrNull()?.let { startTimer(it) }
+            CookCommand.STOP_TIMER -> clearTimer()
+            CookCommand.STOP_LISTENING -> handsFree = false
+        }
+    }
+    val commandListener = remember {
+        CookCommandListener(
+            context = speakerContext,
+            onCommand = { command -> handleCommand(command) },
+            onStatus = { handsFreeStatus = it }
+        )
+    }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) {
+            handsFree = false
+            handsFreeStatus = "Hands-free needs microphone permission."
+        }
+    }
+    LaunchedEffect(handsFree) {
+        if (handsFree) {
+            if (ContextCompat.checkSelfPermission(speakerContext, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            } else if (!commandListener.start()) {
+                handsFree = false
+            }
+        } else {
+            commandListener.stop()
+        }
+    }
+    DisposableEffect(Unit) { onDispose { commandListener.stop() } }
 
     Scaffold(topBar = {
         TopAppBar(
@@ -3007,6 +3359,51 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
                     activeStepMedia.take(2).forEach { MediaPreview(it) }
                     if (activeStepMedia.size > 2) Text("+${activeStepMedia.size - 2} more media item${if (activeStepMedia.size - 2 == 1) "" else "s"}", style = MaterialTheme.typography.bodySmall)
                 }
+
+                if (runningTimerLabel.isNotBlank()) {
+                    Spacer(Modifier.height(18.dp))
+                    Card(
+                        Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (timerFinished) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                if (timerFinished) "⏰ $runningTimerLabel is up" else "⏱ $runningTimerLabel",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                StepTimers.formatClock(remainingSeconds),
+                                style = MaterialTheme.typography.displaySmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (!timerFinished) {
+                                    OutlinedButton(onClick = { timerPaused = !timerPaused }, modifier = Modifier.weight(1f)) {
+                                        Text(if (timerPaused) "Resume" else "Pause")
+                                    }
+                                }
+                                OutlinedButton(onClick = { clearTimer() }, modifier = Modifier.weight(1f)) {
+                                    Text(if (timerFinished) "Clear" else "Cancel")
+                                }
+                            }
+                        }
+                    }
+                } else if (stepTimers.isNotEmpty()) {
+                    Spacer(Modifier.height(18.dp))
+                    Text("Timers from this step", style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        stepTimers.take(3).forEach { timer ->
+                            OutlinedButton(onClick = { startTimer(timer) }) {
+                                Text("⏱ ${timer.label}")
+                            }
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(28.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
@@ -3024,6 +3421,21 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
                 OutlinedButton(onClick = { readAloud = !readAloud }, modifier = Modifier.fillMaxWidth()) {
                     Text(if (readAloud) "🔊 Reading aloud — tap to stop" else "🔊 Read steps aloud")
                 }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = { handsFree = !handsFree }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (handsFree) "🎙 Hands-free on — tap to stop" else "🎙 Hands-free")
+                }
+                if (handsFreeStatus.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(handsFreeStatus, style = MaterialTheme.typography.bodySmall)
+                } else if (handsFree) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Say \"next\", \"back\", \"repeat\", \"start timer\" or \"stop listening\". " +
+                            "Nothing you say here is recorded or saved.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 if (recipe.voiceClips.isNotEmpty()) {
                     Spacer(Modifier.height(18.dp))
                     OutlinedButton(
@@ -3036,6 +3448,138 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
     }
 }
 
+/**
+ * The shopping list, built from the structured ingredients the parser already
+ * produced, so a chef never retypes what they narrated.
+ *
+ * Ticked lines stay on the list rather than disappearing, because a chef in a shop
+ * wants to see what they have already put in the basket, not watch it vanish. They
+ * are cleared explicitly, in one go, when the shop is done.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ShoppingListScreen(
+    items: List<ShoppingItem>,
+    message: String,
+    onBack: () -> Unit,
+    onToggle: (String, Boolean) -> Unit,
+    onRemove: (String) -> Unit,
+    onClearChecked: () -> Unit,
+    onClearAll: () -> Unit,
+    onShare: () -> Unit,
+    onDismissMessage: () -> Unit
+) {
+    var showClearConfirm by remember { mutableStateOf(false) }
+    val remaining = items.count { !it.checked }
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("Shopping list") },
+            navigationIcon = { TextButton(onClick = onBack) { Text("Back") } }
+        )
+    }) { padding ->
+        Column(Modifier.padding(padding).padding(16.dp).fillMaxSize()) {
+            Text(
+                if (items.isEmpty()) "Nothing on the list yet"
+                else "$remaining to buy · ${items.size - remaining} in the basket",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            if (message.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = onDismissMessage) { Text("OK") }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            if (items.isEmpty()) {
+                EmptyState(
+                    title = "Your shopping list is empty",
+                    body = "Open any recipe and tap \"Add to shopping list\". Ingredients arrive already measured, and matching lines are added together for you."
+                )
+            } else {
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(items, key = { it.id }) { item ->
+                        // Same pattern as the Notifications list: act on the settled
+                        // value, and let the row's removal dispose this state with it.
+                        val dismissState = rememberSwipeToDismissBoxState()
+                        LaunchedEffect(dismissState.currentValue) {
+                            if (dismissState.currentValue != SwipeToDismissBoxValue.Settled) {
+                                onRemove(item.id)
+                            }
+                        }
+                        SwipeToDismissBox(
+                            state = dismissState,
+                            backgroundContent = {
+                                Box(
+                                    Modifier.fillMaxSize()
+                                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                                        .padding(horizontal = 20.dp),
+                                    contentAlignment = when (dismissState.dismissDirection) {
+                                        SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                                        else -> Alignment.CenterEnd
+                                    }
+                                ) { Text("Remove", fontWeight = FontWeight.SemiBold) }
+                            }
+                        ) {
+                            Card(Modifier.fillMaxWidth()) {
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .clickable { onToggle(item.id, !item.checked) }
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Switch(checked = item.checked, onCheckedChange = { onToggle(item.id, it) })
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            item.displayText(),
+                                            fontWeight = if (item.checked) FontWeight.Normal else FontWeight.SemiBold,
+                                            textDecoration = if (item.checked) TextDecoration.LineThrough else null,
+                                            color = if (item.checked) MaterialTheme.colorScheme.onSurfaceVariant
+                                            else MaterialTheme.colorScheme.onSurface
+                                        )
+                                        if (item.recipeTitle.isNotBlank()) {
+                                            Text(
+                                                item.recipeTitle,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f)) { Text("📤 Share") }
+                    OutlinedButton(
+                        enabled = items.any { it.checked },
+                        onClick = onClearChecked,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Clear basket") }
+                }
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { showClearConfirm = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Empty the whole list")
+                }
+            }
+        }
+    }
+
+    if (showClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            title = { Text("Empty the shopping list?") },
+            text = { Text("Every line is removed, including ones you have not bought yet. Your recipes are not affected.") },
+            confirmButton = { Button(onClick = { showClearConfirm = false; onClearAll() }) { Text("Empty list") } },
+            dismissButton = { TextButton(onClick = { showClearConfirm = false }) { Text("Cancel") } }
+        )
+    }
+}
 @Composable
 private fun PublicChefProfileScreen(
     uid: String,

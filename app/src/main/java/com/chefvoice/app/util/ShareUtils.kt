@@ -53,3 +53,20 @@ fun shareRecipe(context: Context, recipe: Recipe) {
 
     context.startActivity(Intent.createChooser(intent, "Share recipe"))
 }
+
+/**
+ * Shares plain text through the system chooser.
+ *
+ * Used for the shopping list, which has no media and no recipe behind it -- a chef
+ * sending "what to buy" to a partner wants text they can read in any app, not a
+ * ChefVoice-shaped payload.
+ */
+fun shareText(context: Context, title: String, body: String) {
+    if (body.isBlank()) return
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, title)
+        putExtra(Intent.EXTRA_TEXT, body)
+    }
+    context.startActivity(Intent.createChooser(intent, title))
+}

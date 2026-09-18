@@ -5,6 +5,8 @@ import com.chefvoice.app.model.Ingredient
 import com.chefvoice.app.model.MediaAttachment
 import com.chefvoice.app.model.MediaType
 import com.chefvoice.app.model.Recipe
+import com.chefvoice.app.model.RecipeCollection
+import com.chefvoice.app.model.ShoppingItem
 import com.chefvoice.app.model.SecondPassIssue
 import com.chefvoice.app.model.SecondPassMethodIssue
 import com.chefvoice.app.model.SecondPassResult
@@ -76,6 +78,47 @@ class RecipeRepository(context: Context) {
 
     fun saveLikedIds(ids: Set<String>) {
         prefs.edit().putStringSet("liked_ids", ids).apply()
+    }
+
+    /**
+     * Collections and the shopping list are stored the same way the recipes are: JSON
+     * in this device's preferences, never in Firestore. Neither is shared with anyone,
+     * so neither needs a cloud collection or a security rule, and a chef signed out of
+     * ChefVoice still has both.
+     *
+     * Both loaders swallow malformed JSON and return an empty list. A corrupt shopping
+     * list must not be able to stop the app opening.
+     */
+    fun loadCollections(): List<RecipeCollection> {
+        val raw = prefs.getString("collections", null) ?: return emptyList()
+        return runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                for (i in 0 until array.length()) add(array.getJSONObject(i).toCollection())
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveCollections(collections: List<RecipeCollection>) {
+        val array = JSONArray()
+        collections.forEach { array.put(it.toJson()) }
+        prefs.edit().putString("collections", array.toString()).apply()
+    }
+
+    fun loadShoppingItems(): List<ShoppingItem> {
+        val raw = prefs.getString("shopping_items", null) ?: return emptyList()
+        return runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                for (i in 0 until array.length()) add(array.getJSONObject(i).toShoppingItem())
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveShoppingItems(items: List<ShoppingItem>) {
+        val array = JSONArray()
+        items.forEach { array.put(it.toJson()) }
+        prefs.edit().putString("shopping_items", array.toString()).apply()
     }
 }
 
@@ -373,3 +416,49 @@ private fun JSONObject.toRecipe(): Recipe {
         communityUpdatePending = optBoolean("communityUpdatePending", false)
     )
 }
+
+private fun RecipeCollection.toJson() = JSONObject().apply {
+    put("id", id)
+    put("name", name)
+    put("recipeIds", JSONArray().apply { recipeIds.forEach { put(it) } })
+    put("createdAt", createdAt)
+    put("updatedAt", updatedAt)
+}
+
+private fun JSONObject.toCollection(): RecipeCollection {
+    val idArray = optJSONArray("recipeIds") ?: JSONArray()
+    return RecipeCollection(
+        id = optString("id"),
+        name = optString("name"),
+        recipeIds = buildList {
+            for (i in 0 until idArray.length()) {
+                val value = idArray.optString(i)
+                if (value.isNotBlank()) add(value)
+            }
+        },
+        createdAt = optLong("createdAt", System.currentTimeMillis()),
+        updatedAt = optLong("updatedAt", System.currentTimeMillis())
+    )
+}
+
+private fun ShoppingItem.toJson() = JSONObject().apply {
+    put("id", id)
+    put("name", name)
+    put("quantity", quantity)
+    put("unit", unit)
+    put("recipeId", recipeId)
+    put("recipeTitle", recipeTitle)
+    put("checked", checked)
+    put("addedAt", addedAt)
+}
+
+private fun JSONObject.toShoppingItem() = ShoppingItem(
+    id = optString("id"),
+    name = optString("name"),
+    quantity = optString("quantity"),
+    unit = optString("unit"),
+    recipeId = optString("recipeId"),
+    recipeTitle = optString("recipeTitle"),
+    checked = optBoolean("checked", false),
+    addedAt = optLong("addedAt", System.currentTimeMillis())
+)
