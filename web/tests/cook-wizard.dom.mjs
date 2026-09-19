@@ -8,7 +8,7 @@ import {parseIngredient} from '../js/ingredient-parser.js';
 import {parseCookingSession,mergeDraft} from '../js/cooking-session-parser.js';
 import {parseTagsInput} from '../js/tag-utils.js';
 import {applySuggestion,applyMethodSuggestion,fromCloudTranscript} from '../js/second-pass-reviewer.js';
-import {secondPassRemaining,secondPassMonthlyLimit,recordSecondPassUse,PaywallTrigger} from '../js/entitlement.js';
+import {secondPassRemaining,secondPassMonthlyLimit,recordSecondPassUse,PaywallTrigger,SecondPassLimits} from '../js/entitlement.js';
 // entitlement.js's monthly quota bookkeeping reads/writes the browser localStorage
 // global, which plain Node does not provide; a tiny in-memory stand-in lets that
 // real code run as written instead of being re-mocked here.
@@ -24,8 +24,11 @@ const w=dom.window;const document=w.document;w.HTMLElement.prototype.scrollIntoV
 let stored=[];let mediaWrites=0;let voiceWrites=0;let saveFails=false;let starts=0;let stops=0;let permissionResolve;
 let transcribeCalls=[];let transcribeResult=null;let paywallCalls=[];let secondPassAcceptedCalls=[];
 Object.assign(w,{parseIngredient,parseCookingSession,mergeDraft,parseTagsInput,structuredClone,
-  applySuggestion,applyMethodSuggestion,fromCloudTranscript,secondPassRemaining,secondPassMonthlyLimit,recordSecondPassUse,PaywallTrigger,
+  applySuggestion,applyMethodSuggestion,fromCloudTranscript,secondPassRemaining,secondPassMonthlyLimit,recordSecondPassUse,PaywallTrigger,SecondPassLimits,
   isPro:()=>false,safetyStatus:()=>{},showPaywall:t=>{paywallCalls.push(t)},
+  // Collections and the shopping list are read at module load; the Cook wizard never touches
+  // either, so an empty stand-in for each is all this slice of app.js needs.
+  loadCollections:()=>[],loadShoppingItems:()=>[],
   cloud:{user:null,entitlement:null,api:{transcribePrivateChefVoice:async(id,blob)=>{transcribeCalls.push({id,blob});return transcribeResult;}}},
   capture:{start:async()=>{starts++;await new Promise(resolve=>permissionResolve=resolve)},stop:async()=>{stops++;return {audioBlob:new Blob(['voice'])}}},
   saveAudioBlob:async()=>{voiceWrites++;return {stored:true}},saveMediaBlob:async()=>{mediaWrites++;return {stored:true}},saveRecipes:x=>{if(saveFails)throw Error('Storage full');stored=x;},

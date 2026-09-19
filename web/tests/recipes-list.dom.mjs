@@ -12,13 +12,16 @@ const source=readFileSync(new URL('../js/app.js',import.meta.url),'utf8');
 const dom=new JSDOM('<main id="main"></main>',{url:'http://localhost',runScripts:'outside-only'});
 const w=dom.window;const document=w.document;
 
+const collectionHelpers=await import('../js/collections.js');
+
 let stored=[];let deletedAudioIds=[];let deletedMediaRecipeIds=[];let deleteCloudCalls=[];let inspectCalls=[];
 let inspectResponses={};// id -> {exists,authorId} to resolve with, or an Error to throw
 let confirmResult=true;let confirmCalls=0;
+let openedShoppingList=0;let cookedRecipeIds=[];
 
 Object.assign(w,{
   escapeHtml:x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
-  cloud:{user:null,api:{
+  cloud:{user:null,recipes:[],bookmarks:new Set(),api:{
     deleteChefVoiceRecipe:async id=>{deleteCloudCalls.push(id);},
     inspectRecipeForMutation:async id=>{
       inspectCalls.push(id);
@@ -30,18 +33,28 @@ Object.assign(w,{
   saveRecipes:x=>{stored=x;},
   deleteAudioBlob:async id=>{deletedAudioIds.push(id);},
   deleteRecipeMedia:async r=>{deletedMediaRecipeIds.push(r?.id);},
-  confirm:()=>{confirmCalls++;return confirmResult;}
+  confirm:()=>{confirmCalls++;return confirmResult;},
+  // The list also draws the shopping shortcut and the collection chips. The real collection
+  // helpers are used rather than stubs, so the chips here filter exactly as the app does.
+  ...collectionHelpers,
+  saveCollections:()=>{},
+  openShoppingList:()=>{openedShoppingList++;},
+  openCookAlong:recipe=>{cookedRecipeIds.push(recipe?.id);},
+  openRecipe:()=>{},
+  openCommunityRecipe:()=>{}
 });
 
-// recipesTemplate/publishLocalRecipe/unpublishLocalRecipe/bindRecipes is one
-// contiguous block. publishLocalRecipe/unpublishLocalRecipe are pulled in too
-// (unavoidable, mid-block) but never invoked here, so their own free variables
+// savedCookbookTemplate..bindRecipes is one contiguous block, and every one of those
+// templates is reached from recipesTemplate. publishLocalRecipe/unpublishLocalRecipe are
+// pulled in too (unavoidable, mid-block) but never invoked here, so their own free variables
 // (cloudRecipesRemaining, showPaywall, etc.) are never dereferenced.
-const start=source.indexOf('function recipesTemplate(){');
+const start=source.indexOf('function savedCookbookTemplate(){');
 const end=source.indexOf('// ---- Second Pass (ChefVoice Review)',start);
-assert.ok(start>0&&end>start,'recipesTemplate..bindRecipes block found in app.js');
+assert.ok(start>0&&end>start,'savedCookbookTemplate..bindRecipes block found in app.js');
 const recipesSection=source.slice(start,end);
-vm.runInContext(`const main=document.querySelector('#main');let recipes=[];${recipesSection}
+vm.runInContext(`const main=document.querySelector('#main');let recipes=[];
+let collections=[];let activeCollectionId='';let shoppingItems=[];let overlayScreen='';
+${recipesSection}
 function render(){main.innerHTML=recipesTemplate();bindRecipes();}`,dom.getInternalVMContext());
 
 const run=code=>vm.runInContext(code,dom.getInternalVMContext());
@@ -159,6 +172,34 @@ check(!deleteCloudCalls.includes('r10'),'preflight error: delete callable is nev
 check(run("recipes.some(r=>r.id==='r10')"),'preflight error: local copy is kept, not deleted');
 check(get('[data-recipe-status="r10"]').textContent.includes('insufficient permissions'),'preflight error: the underlying error message is surfaced');
 check(get('[data-delete-recipe="r10"]').disabled===false,'preflight error: button is re-enabled');
+
+// ---- The list chrome: shopping shortcut, collection chips, Cook ------------
+
+run("recipes=[{id:'c1',title:'Sunday pasta',steps:['Boil water']},{id:'c2',title:'Camp bread',steps:[]}];cloud.user=null;collections=[];activeCollectionId='';shoppingItems=[];render();");
+check(get('#openShopping').textContent==='🛒 Shopping list','empty list: the shortcut says nothing about a count');
+run("shoppingItems=[{id:'s1',checked:false},{id:'s2',checked:true},{id:'s3',checked:false}];render();");
+check(get('#openShopping').textContent.includes('2 to buy'),'the shortcut counts only what is still to buy');
+click('#openShopping');
+check(openedShoppingList===1,'the shortcut opens the shopping list');
+
+// A recipe with no method steps has nothing to cook along to, so it is not offered.
+check(!!document.querySelector('[data-cook-recipe="c1"]'),'a recipe with steps offers Cook');
+check(!document.querySelector('[data-cook-recipe="c2"]'),'a recipe with no steps does not offer Cook');
+click('[data-cook-recipe="c1"]');
+check(cookedRecipeIds.length===1&&cookedRecipeIds[0]==='c1','Cook opens the cook-along for that recipe');
+
+run("collections=createCollection([],'Weeknight').collections;collections=setRecipeInCollection(collections,collections[0].id,'c1',true);render();");
+check([...document.querySelectorAll('[data-collection]')].length===2,'All recipes plus one collection chip');
+check(get('[data-collection=""]').classList.contains('active'),'the whole library is the chip selected by default');
+check(!document.querySelector('#deleteCollection'),'no delete button while the whole library is shown');
+run("activeCollectionId=collections[0].id;render();");
+check([...document.querySelectorAll('[data-open-recipe]')].map(b=>b.dataset.openRecipe).join()==='c1','a collection shows only its own recipes');
+check(get('#deleteCollection').textContent.includes('Weeknight'),'the active collection can be deleted by name');
+// Filtering into an empty collection must not read as "you have no recipes".
+run("collections=setRecipeInCollection(collections,collections[0].id,'c1',false);render();");
+check(get('.empty').textContent.includes('Nothing in this collection yet'),'an empty collection says so, not that the library is empty');
+run("recipes=[];activeCollectionId='';render();");
+check(get('.empty').textContent.includes('No saved recipes yet'),'an empty library still says so');
 
 console.log(`${checks} Recipes list DOM checks passed.`);
 dom.window.close();

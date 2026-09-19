@@ -72,3 +72,17 @@ export function asShareText(items) {
     .map(i => `${i.checked ? '[x]' : '[ ]'} ${displayText(i)}`).join('\n');
   return `ChefVoice shopping list\n\n${lines}`;
 }
+
+/**
+ * What adding one recipe did, in the words ChefAppState.addRecipeToShoppingList uses. A chef
+ * needs to know when a line was folded into one already on the list, because the total they
+ * are about to buy changed without a new line appearing.
+ */
+export function additionMessage(previousCount, incomingCount, mergedCount) {
+  const added = mergedCount - previousCount;
+  const combined = incomingCount - added;
+  const plural = n => (n === 1 ? '' : 's');
+  if (combined <= 0) return `Added ${added} item${plural(added)} to the shopping list.`;
+  if (added <= 0) return `Combined ${combined} item${plural(combined)} into lines already on the list.`;
+  return `Added ${added} and combined ${combined} into the shopping list.`;
+}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { merge, itemsFor, asShareText } from '../js/shopping-list.js';
+import { additionMessage, merge, itemsFor, asShareText } from '../js/shopping-list.js';
 
 // Port of ShoppingListTest.kt. A duplicate is a small annoyance; a silently wrong total sends
 // the chef to buy the wrong amount, so the merge is deliberately narrow.
@@ -62,3 +62,17 @@ test('share text marks what is already bought', () => {
   assert.ok(text.includes('[x] 1 tsp salt'));
 });
 test('share text of an empty list says so', () => assert.ok(asShareText([]).includes('empty')));
+
+// What adding one recipe reports back. A chef needs to be told when a line merged, because
+// the amount they are about to buy changed without a new line appearing on the list.
+test('adding only new lines reports what was added', () => {
+  assert.equal(additionMessage(0, 3, 3), 'Added 3 items to the shopping list.');
+  assert.equal(additionMessage(2, 1, 3), 'Added 1 item to the shopping list.');
+});
+test('adding only merged lines says they were combined', () => {
+  assert.equal(additionMessage(4, 2, 4), 'Combined 2 items into lines already on the list.');
+  assert.equal(additionMessage(4, 1, 4), 'Combined 1 item into lines already on the list.');
+});
+test('a mix of both is reported as both', () => {
+  assert.equal(additionMessage(3, 4, 5), 'Added 2 and combined 2 into the shopping list.');
+});

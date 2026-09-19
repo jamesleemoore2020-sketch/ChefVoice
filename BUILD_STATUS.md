@@ -1,3 +1,30 @@
+# Current handoff — 2026-09-18 (PWA parity, stage 2)
+
+PWA 0.5.15 (service-worker cache bumped so phones pick it up). **The PWA can now be cooked
+from.** Stage 1 shipped the ported modules but nothing imported them; stage 2 is the user
+interface on top: a **cook-along screen** (one step at a time, Wake Lock, read-aloud split
+from repeat, tappable timers, hands-free voice commands), a **servings stepper with As
+written / Metric / Imperial**, a **shopping list**, and **collections**. Android untouched
+(still 77 / 0.11.16); parser, corpus, `firestore.rules`, Functions, Live and App Check
+untouched. Collections and the shopping list are `localStorage`, so **no rules deploy**.
+PWA 227 tests / 0 failures (183 before), plus both optional jsdom checks fixed — they had
+been failing since 0.5.14 and 0.11.14 respectively. Nothing is deployed yet; the change is
+not live until `DEPLOY_PWA.cmd` (or its two steps) is run. See `PWA_PARITY_STAGE2_0.5.15.md`.
+
+- **Cook-along.** "🍳 Cook this recipe" on a saved recipe, a Community recipe, and a
+  Recipes-tab card. Timers are offered **only for durations the chef actually stated** in
+  that step, a range timing its lower bound; a step with no stated duration gets no timer
+  rather than a guessed one. Hands-free fires only reversible commands on an interim result,
+  so a half-heard "stop" cannot act.
+- **Scaling is display only.** Nothing is written back — the saved recipe still reads the
+  servings and units the chef narrated, and the panel says so while scaled. Quantities that
+  cannot be read as numbers pass through untouched; volume is never converted to weight.
+- **Shopping list and collections are local to the browser**, matching Android's reasoning:
+  cloud bookmarks already cover saving other chefs' dishes, so neither needs a Firestore
+  collection or a security rule.
+- **Bug found in the browser and fixed**: a shopping line's tick box was wrapped in its own
+  `<label>`, so every click reached it twice and the line landed back where it started.
+
 # Current handoff — 2026-09-18 (PWA save fix)
 
 PWA 0.5.13 (service-worker cache bumped so phones pick it up). **Saving a Community recipe

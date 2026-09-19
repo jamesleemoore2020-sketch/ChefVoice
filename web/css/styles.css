@@ -113,3 +113,19 @@
 .live-host-settings[hidden],#startLiveHost[hidden],#liveHostVideo[hidden],#liveHostPlaceholder[hidden],#liveHostActivity[hidden]{display:none}
 #liveHostVideo.mirrored{transform:scaleX(-1)}
 .live-host-controls button:disabled,.live-host-settings button:disabled{opacity:.55;cursor:default}
+
+/* Collections, the shopping list and the cook-along screen. The cook-along type is
+   deliberately large: a chef reads it from across a worktop with flour on their hands. */
+.chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 12px;font-size:.82rem;font-weight:750;color:var(--muted);min-height:0}
+.chip.active{background:var(--peach);border-color:#ffd2bd;color:#8e3611}
+.chip-count{opacity:.65;font-weight:700}
+details>summary{cursor:pointer;font-weight:800;list-style:none}
+details>summary::-webkit-details-marker{display:none}
+details>summary::after{content:" ▾";color:var(--muted)}
+details[open]>summary::after{content:" ▴"}
+.cook-step-card{font-size:1.45rem;line-height:1.35;font-weight:800;padding:22px}
+.cook-timer{background:#fff8f4;border-color:#ffd8c7}
+.cook-timer.finished{background:var(--peach);border-color:#ffc4a6}
+.cook-clock{font-size:2.6rem;font-weight:900;letter-spacing:.02em;margin:6px 0 10px;font-variant-numeric:tabular-nums}
+@media(max-width:430px){.cook-step-card{font-size:1.25rem;padding:18px}.cook-clock{font-size:2.2rem}}

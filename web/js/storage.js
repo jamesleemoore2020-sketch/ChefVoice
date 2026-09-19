@@ -1,4 +1,6 @@
 const RECIPES_KEY='chefvoice.web.recipes.v1';
+const COLLECTIONS_KEY='chefvoice.web.collections.v1';
+const SHOPPING_KEY='chefvoice.web.shopping.v1';
 const DB_NAME='chefvoice-media-v1';
 const AUDIO_STORE='session-audio';
 const MEDIA_STORE='recipe-media';
@@ -54,3 +56,12 @@ export async function deleteMediaBlob(recipeId,mediaId){try{await runStore(MEDIA
 export async function deleteRecipeMedia(recipe){
   await Promise.all((recipe?.media||[]).map(item=>deleteMediaBlob(recipe.id,item.id)));
 }
+
+// Collections and the shopping list are the chef's own filing and their own errand list:
+// local to this browser by design, kept beside the recipes themselves. A corrupt or missing
+// value reads as empty rather than throwing, and a failed write is swallowed, so neither can
+// lock a chef out of the app in a kitchen.
+export function loadCollections(){try{const v=JSON.parse(localStorage.getItem(COLLECTIONS_KEY)||'[]');return Array.isArray(v)?v:[]}catch{return[]}}
+export function saveCollections(collections){try{localStorage.setItem(COLLECTIONS_KEY,JSON.stringify(collections));}catch{}}
+export function loadShoppingItems(){try{const v=JSON.parse(localStorage.getItem(SHOPPING_KEY)||'[]');return Array.isArray(v)?v:[]}catch{return[]}}
+export function saveShoppingItems(items){try{localStorage.setItem(SHOPPING_KEY,JSON.stringify(items));}catch{}}
