@@ -115,6 +115,19 @@ its own `<label>`, so every click reached it twice — once directly, once forwa
 label — and the line landed back where it started. The box is now a sibling of its label,
 which also gives each one an accessible name.
 
+## Deployed
+
+`firebase deploy --only hosting:pwa --project chefvoice-d7fec`, after the same two tripwires
+`DEPLOY_PWA.cmd` applies (both Hosting targets still declared in `firebase.json`) and the PWA
+gates. 32 files, Hosting only — Functions, Firestore rules, Storage rules, App Check and the
+`chefvoice-delete-account` site were not touched.
+
+Then verified against the **deployed** client at https://chefvoice-d7fec.web.app/, per the
+rule this project has used since 0.5.11: `sw.js` reports `chefvoice-pwa-v0.5.15`, all six
+cooking modules return 200, and cooking a recipe there started a timer that counted down.
+The throwaway recipe used for that check was deleted from the browser afterwards, and nothing
+was published.
+
 ## Still to do
 
 Stage 3 (swipe-to-save on Community cards, notification ✕ / swipe-to-clear) and stage 4

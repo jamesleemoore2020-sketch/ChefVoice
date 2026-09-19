@@ -8,8 +8,10 @@ written / Metric / Imperial**, a **shopping list**, and **collections**. Android
 (still 77 / 0.11.16); parser, corpus, `firestore.rules`, Functions, Live and App Check
 untouched. Collections and the shopping list are `localStorage`, so **no rules deploy**.
 PWA 227 tests / 0 failures (183 before), plus both optional jsdom checks fixed — they had
-been failing since 0.5.14 and 0.11.14 respectively. Nothing is deployed yet; the change is
-not live until `DEPLOY_PWA.cmd` (or its two steps) is run. See `PWA_PARITY_STAGE2_0.5.15.md`.
+been failing since 0.5.14 and 0.11.14 respectively. **Live: deployed to
+https://chefvoice-d7fec.web.app/ (`hosting:pwa` only) and verified by driving the deployed
+client**, not localhost — the cook-along, its timer, the shopping shortcut and the collection
+chips all work there. See `PWA_PARITY_STAGE2_0.5.15.md`.
 
 - **Cook-along.** "🍳 Cook this recipe" on a saved recipe, a Community recipe, and a
   Recipes-tab card. Timers are offered **only for durations the chef actually stated** in
