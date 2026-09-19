@@ -17,4 +17,5 @@ node_modules/
 *-mapping.txt
 mappings/
 build_install.log
+build_release.log
 crash_full.log

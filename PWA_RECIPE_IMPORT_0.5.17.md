@@ -130,7 +130,18 @@ The test recipe was deleted afterwards and nothing was published.
 PWA **0.5.17** (`hosting:pwa` only); `sw.js` on the deployed site reports `chefvoice-pwa-v0.5.17`
 and the import button is on the live Recipes tab.
 
+## The Android release build
+
+`assembleRelease` and `bundleRelease` both succeeded (8m 23s, no errors) at **78 / 0.11.17**:
+
+- AAB for Play: `app/build/outputs/bundle/release/app-release.aab` (33.7 MB)
+- Deobfuscation mapping: `app/build/outputs/mapping/release/mapping.txt` (88.9 MB) -- upload it
+  with the release so crash reports stay readable
+- APK: `app/build/outputs/apk/release/app-release.apk` (53.1 MB), verified **v2-signed** by
+  `CN=James Moore, OU=Plugged'N LLC` (SHA-256 `3c81185f...c98e3274`). v1/v3 are off, which is
+  what the previous release builds also produced.
+
 ## Still open
 
-**Android 0.11.17 is not built into a release or uploaded.** The publish warning only reaches
-phones with a new Play build. The PWA half is already live.
+**0.11.17 is not uploaded to Play.** The publish warning only reaches phones once it is. The
+PWA half is already live.
