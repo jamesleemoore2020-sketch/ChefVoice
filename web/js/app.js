@@ -82,6 +82,9 @@ function clearUserObservers(){
 }
 // See openCommunityRecipeId's declaration below for why the community tab's
 // listener-driven re-renders all gate on this instead of just the tab name.
+// True only while the Recipes list itself is showing, never inside an opened recipe, so a
+// background refresh of saves or the feed cannot yank the chef out of what they are reading.
+const onRecipesList=()=>currentTab==='recipes'&&!openCommunityRecipeId&&!document.querySelector('#backRecipes,#backCommunity');
 const shouldRenderCommunity=()=>currentTab==='community'&&!openCommunityRecipeId;
 // Same reasoning as shouldRenderCommunity: while a Live room is open, its own
 // targeted listeners patch the DOM directly (see openLiveRoom) instead of going
@@ -107,7 +110,7 @@ function startUserObservers(user){
   cloud.unsubMessageReads=cloud.api.observeMessageReads(user.uid,map=>{cloud.messageReads=map;updateInboxBadge();if(currentTab==='inbox')render();});
   cloud.unsubNotifications=cloud.api.observeNotifications(user.uid,items=>{cloud.notifications=items;updateInboxBadge();if(currentTab==='inbox')render();});
   cloud.unsubLiked=cloud.api.observeUserRecipeIds(user.uid,'likes',s=>{cloud.liked=s;if(shouldRenderCommunity())render();});
-  cloud.unsubBookmarks=cloud.api.observeUserRecipeIds(user.uid,'bookmarks',s=>{cloud.bookmarks=s;if(shouldRenderCommunity())render();});
+  cloud.unsubBookmarks=cloud.api.observeUserRecipeIds(user.uid,'bookmarks',s=>{cloud.bookmarks=s;if(shouldRenderCommunity()||onRecipesList())render();});
   cloud.unsubFollowing=cloud.api.observeUserRecipeIds(user.uid,'following',s=>{cloud.following=s;if(shouldRenderCommunity())render();});
 }
 async function initCloud(){
@@ -120,7 +123,7 @@ async function initCloud(){
       if(currentTab==='profile'||currentTab==='recipes'||shouldRenderCommunity()||shouldRenderLiveList())render();
     });
     cloud.unsubFeed=api.observePublicRecipes(items=>{
-      cloud.recipes=items;cloud.feedError='';
+      cloud.recipes=items;cloud.feedError='';if(onRecipesList())render();
       // A shared link is only actionable once the feed it points into has
       // loaded; only tried once; if the recipe is gone or unlisted, this just
       // falls through to the ordinary feed rather than looping forever.
@@ -656,9 +659,16 @@ function bindCook(){
   });
 }
 
+function savedCookbookTemplate(){
+  if(!cloud.user)return '<div class="section-title"><h2>Saved cookbook</h2></div><div class="empty card">Sign in, then tap ☆ on any Community recipe to keep it here.</div>';
+  const saved=cloud.recipes.filter(r=>cloud.bookmarks.has(r.id));
+  const body=saved.length?saved.map(r=>`<article class="card recipe-card"><div><div class="row between"><h3>${escapeHtml(r.title)}</h3><span class="pill">★ Saved</span></div><p>by ${escapeHtml(r.authorName)} · ${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps</p><div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-community-recipe="${escapeHtml(r.id)}">Open</button></div></div></article>`).join(''):`<div class="empty card"><strong>No saved Community recipes yet.</strong><br>Tap ☆ on recipes you want to cook again.${cloud.bookmarks.size?' Your saved recipes are still loading from the Community feed.':''}</div>`;
+  return `<div class="section-title"><h2>Saved cookbook</h2></div>${body}`;
+}
+
 function recipesTemplate(){
   const cloudNote=cloud.user?`<div class="quality">Signed in as ${escapeHtml(cloud.user.email||'ChefVoice member')}. Publishing now uses the verified ChefVoice Firebase project.</div>`:`<div class="notice">Local recipes stay private on this device. Sign in from Profile to publish to Community.</div>`;
-  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${recipes.length?recipes.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps · serves ${r.servings||2}</p>${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">${r.isPublic||r.authorId?'Delete':'Delete local'}</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>'}`;
+  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${recipes.length?recipes.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps · serves ${r.servings||2}</p>${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">${r.isPublic||r.authorId?'Delete':'Delete local'}</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>'}${savedCookbookTemplate()}`;
 }
 async function publishLocalRecipe(id,button){
   const r=recipes.find(x=>x.id===id);if(!r||!cloud.api||!cloud.user)return;
@@ -687,6 +697,7 @@ async function unpublishLocalRecipe(id,button){
 }
 function bindRecipes(){
   main.querySelectorAll('[data-open-recipe]').forEach(b=>b.onclick=()=>openRecipe(b.dataset.openRecipe));
+  main.querySelectorAll('[data-open-community-recipe]').forEach(b=>b.onclick=()=>openCommunityRecipe(b.dataset.openCommunityRecipe));
   main.querySelectorAll('[data-publish]').forEach(b=>b.onclick=()=>publishLocalRecipe(b.dataset.publish,b));
   main.querySelectorAll('[data-unpublish]').forEach(b=>b.onclick=()=>unpublishLocalRecipe(b.dataset.unpublish,b));
   main.querySelectorAll('[data-delete-recipe]').forEach(b=>b.onclick=async()=>{

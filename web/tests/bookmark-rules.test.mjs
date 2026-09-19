@@ -22,3 +22,17 @@ test('toggleBookmark writes recipeId as well as createdAt', () => {
   const body = fn.slice(0, fn.indexOf('export async function toggleFollow'));
   assert.match(body, /setDoc\(target,\{recipeId,createdAt:Date\.now\(\)\}\)/);
 });
+
+// Saves were recorded but nothing showed them: the Recipes tab listed only local recipes.
+const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+
+test('the Recipes tab shows a Saved cookbook built from the bookmarked feed recipes', () => {
+  assert.match(app, /function savedCookbookTemplate\(\)/);
+  assert.match(app, /cloud\.recipes\.filter\(r=>cloud\.bookmarks\.has\(r\.id\)\)/);
+  assert.match(app, /\$\{savedCookbookTemplate\(\)\}/);
+});
+
+test('saved cards open, and refreshing saves never closes an open recipe', () => {
+  assert.match(app, /const onRecipesList=\(\)=>currentTab==='recipes'&&!openCommunityRecipeId/);
+  assert.match(app, /if\(shouldRenderCommunity\(\)\|\|onRecipesList\(\)\)render\(\)/);
+});
