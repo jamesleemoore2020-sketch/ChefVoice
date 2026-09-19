@@ -133,4 +133,4 @@ and the import button is on the live Recipes tab.
 ## Still open
 
 **Android 0.11.17 is not built into a release or uploaded.** The publish warning only reaches
-phones with a new Play build; the PWA half is live as soon as `DEPLOY_PWA.cmd` runs.
+phones with a new Play build. The PWA half is already live.
