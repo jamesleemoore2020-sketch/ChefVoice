@@ -939,3 +939,17 @@ function requireUser(message){if(!auth.currentUser)throw new Error(message);retu
 function assertWrites(){if(!CLOUD_WRITES_ENABLED)throw new Error('ChefVoice cloud writes are disabled.');}
 function cloudMediaType(mime=''){return String(mime).startsWith('video/')?'VIDEO':'IMAGE';}
 function friendlyError(e){return String(e?.message||e||'Storage unavailable').replace(/^Firebase:\s*/,'');}
+
+/**
+ * Reads a recipe from a web address, through the `chefvoice-import` Cloud Function.
+ *
+ * A browser cannot fetch another site's page from a script, which is the only reason this
+ * goes through a function at all -- on Android the phone reads the page itself. The function
+ * returns a recipe draft or a reason there wasn't one; it never returns the page, so this is
+ * not a way to read arbitrary web content from the app.
+ */
+export async function importRecipeFromUrl(url){
+  assertWrites();
+  requireUser('Sign in to import a recipe from a web address.');
+  return callFunction('importChefVoiceRecipe',{url:String(url||'')});
+}

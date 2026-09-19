@@ -32,6 +32,25 @@ class RecipeRepositoryJsonTest {
     }
 
     @Test
+    fun whereARecipeWasImportedFromSurvivesARestart() {
+        // The publish warning is the only thing this field is for, and a chef who imports
+        // today may publish next week -- so it has to outlive the app being closed.
+        val restored = roundTrip(Recipe(id = "r4", title = "Pancakes", importedFrom = "https://example.com/pancakes"))
+        assertEquals("https://example.com/pancakes", restored.importedFrom)
+    }
+
+    @Test
+    fun aNarratedRecipeIsNotMarkedAsImported() {
+        assertEquals("", roundTrip(Recipe(id = "r5", title = "Chili")).importedFrom)
+    }
+
+    @Test
+    fun recipesSavedBeforeImportsExistedStillLoad() {
+        val legacy = Recipe(id = "r6", title = "Old recipe").toJson().apply { remove("importedFrom") }
+        assertEquals("", JSONObject(legacy.toString()).toRecipe().importedFrom)
+    }
+
+    @Test
     fun recipesSavedBeforeTagsWerePersistedStillLoad() {
         // The stored JSON of every recipe written by an earlier version has no "tags" key.
         val legacy = Recipe(id = "r3", title = "Old recipe").toJson().apply { remove("tags") }

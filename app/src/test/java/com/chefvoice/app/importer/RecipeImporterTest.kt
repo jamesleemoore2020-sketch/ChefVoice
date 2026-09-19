@@ -62,6 +62,14 @@ class RecipeImporterTest {
     }
 
     @Test
+    fun marksWhereTheRecipeCameFromSoPublishingCanWarnAboutIt() {
+        val fetcher = FakeFetcher { pageOf(recipeJson(), url = "https://real.example.org/chili") }
+        val recipe = imported(RecipeImporter.importFrom("https://short.link/abc", "Sam", fetcher)).recipe
+        // The page it actually came from, not the link that was pasted.
+        assertEquals("https://real.example.org/chili", recipe.importedFrom)
+    }
+
+    @Test
     fun creditsTheSourceInTheDescriptionSoItTravelsWithThePublishedRecipe() {
         val fetcher = FakeFetcher { pageOf(recipeJson(""","description":"A hearty weeknight chili."""")) }
         val description = imported(RecipeImporter.importFrom("https://example.com/chili", "Sam", fetcher)).recipe.description

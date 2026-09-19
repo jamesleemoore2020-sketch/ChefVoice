@@ -144,6 +144,9 @@ internal fun Recipe.toJson() = JSONObject().apply {
     // recipe, so a restart followed by "Update Community" would also have pushed an
     // empty tag list over the published one.
     put("tags", JSONArray().apply { tags.forEach { put(it) } })
+    // Where an imported recipe came from. Kept so the publish warning survives a restart --
+    // a chef who imports today and publishes next week must still be told.
+    put("importedFrom", importedFrom)
 
     put("ingredients", JSONArray().apply {
         ingredients.forEach { ingredient ->
@@ -430,7 +433,9 @@ internal fun JSONObject.toRecipe(): Recipe {
         likes = optInt("likes", 0),
         commentCount = optInt("commentCount", 0),
         communityUpdatePending = optBoolean("communityUpdatePending", false),
-        tags = tags
+        tags = tags,
+        // Recipes saved before imports existed have no key, which reads as "narrated here".
+        importedFrom = optString("importedFrom")
     )
 }
 

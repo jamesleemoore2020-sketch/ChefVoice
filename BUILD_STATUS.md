@@ -1,3 +1,36 @@
+# Current handoff — 2026-09-18 (recipe import on the PWA, and the publish policy)
+
+PWA 0.5.17 + **Android 78 / 0.11.17** + a **new Cloud Functions codebase, `chefvoice-import`**.
+The last thing Android could do that the PWA could not. A browser refuses to fetch another
+site's page from a script, so this is the one stage that could not be a port: a separately
+deployed function reads the page on the chef's behalf. It is **not a page proxy** — it returns
+a recipe draft or the reason there wasn't one, never the page. Sign-in required, 30 imports
+per chef per day, counted before the fetch. The counter lives at `importUsage/{uid}`, a path
+`firestore.rules` never matches and therefore denies to clients, so **no rules deploy**.
+**The function is deployed and verified live**; `chefvoice-notifications`, `chefvoice-billing`,
+`transcribeChefVoice`, Hosting, rules and App Check were not touched. See
+`PWA_RECIPE_IMPORT_0.5.17.md`.
+
+- **SSRF, where it matters more than on a phone.** On Google's infrastructure "not a public
+  address" also means the metadata server. Android's rules were ported exactly and **one check
+  was added**: every redirect hop's hostname is *resolved first*, and the fetch is refused if
+  any address it resolves to is not public — which a hostname-only rule cannot catch, since
+  `evil.example` can point at `169.254.169.254`. DNS rebinding after the check is still open
+  and is written down in `page-fetcher.js` rather than left implied.
+- **Publish policy decided: warn, but allow.** Publishing an imported recipe now asks first,
+  names the site, and says the method came from someone else's page. Declining keeps it
+  private. Needed one new field, `Recipe.importedFrom`, **local on both platforms** and never
+  written to Firestore, so **no rules change**.
+- **98 import tests / 0 failures** — real behaviour tests, not source-text checks, because the
+  whole importer is pure functions with injectable fetch and DNS. **They caught two real port
+  bugs**: a regex that lost its anchor and threw away the amount on any line containing a
+  hyphen ("all-purpose flour"), and an IPv6 classifier that read `fe80::1` as public.
+- **Verified against the deployed function**: bbcgoodfood.com imported end to end; a site that
+  answered 402 was reported as refusing rather than half-guessed; the publish warning fired and
+  declining left the recipe private.
+- **Android 0.11.17 is not built into a release or uploaded.** The warning only reaches phones
+  with a new Play build.
+
 # Current handoff — 2026-09-18 (PWA parity, stage 3)
 
 PWA 0.5.16 (service-worker cache bumped). **The two swipes.** Swipe a Community card right to

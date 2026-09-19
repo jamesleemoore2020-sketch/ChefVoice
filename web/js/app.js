@@ -703,7 +703,7 @@ function savedCookbookTemplate(){
 /** The shopping-list shortcut, carrying how much is still to buy so the chef can see it from here. */
 function shoppingButtonTemplate(){
   const remaining=shoppingItems.filter(i=>!i.checked).length;
-  return `<button class="secondary wide" id="openShopping">🛒 Shopping list${remaining?` · ${remaining} to buy`:''}</button>`;
+  return `<div class="row wrap"><button class="secondary grow" id="openShopping">🛒 Shopping list${remaining?` · ${remaining} to buy`:''}</button><button class="secondary grow" id="openImport">🔗 Import from a web address</button></div>`;
 }
 
 /**
@@ -732,11 +732,25 @@ function recipesTemplate(){
     :'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>';
   return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${shoppingButtonTemplate()}${collectionsTemplate()}${shown.length?shown.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps · serves ${r.servings||2}</p>${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${(r.steps||[]).length?`<button class="ghost" data-cook-recipe="${r.id}">🍳 Cook</button>`:''}${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">${r.isPublic||r.authorId?'Delete':'Delete local'}</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):emptyNote}${savedCookbookTemplate()}`;
 }
+/** The site name to show a chef: the host without a leading "www.". */
+function importedHost(url){
+  try{return new URL(url).hostname.replace(/^www\./,'')||url;}catch{return url||'another site';}
+}
+
 async function publishLocalRecipe(id,button){
   const r=recipes.find(x=>x.id===id);if(!r||!cloud.api||!cloud.user)return;
   const status=document.querySelector(`[data-recipe-status="${id}"]`);
-  // Free accounts sync a limited number of recipes. The recipe is never lost --
-  // it stays saved in this browser, which is what the copy has to say.
+  // Publishing an imported recipe is allowed, but never by accident. The method came from
+  // someone else's page, and the credit that says so lives in the description -- which the
+  // chef may have edited away. They are told both things and decide.
+  if(!r.isPublic&&r.importedFrom&&!confirm(
+    `This recipe was imported from ${importedHost(r.importedFrom)}.\n\n` +
+    'Publishing it puts another site\'s method on your Community profile under your name. ' +
+    'Keep the "Source:" credit in the description, and only publish it if you are happy to ' +
+    'share it.\n\nPublish anyway?'
+  ))return;
+  // Free accounts sync a limited number of recipes. The recipe is never lost -- it stays
+  // saved in this browser, which is what the copy has to say.
   if(!r.isPublic&&cloudRecipesRemaining(isPro(),cloudRecipeCount())<=0){
     if(status)status.textContent=`Free accounts sync ${FreeTierLimits.CLOUD_RECIPES} recipes to the Community. This recipe stays saved in this browser.`;
     showPaywall(PaywallTrigger.CLOUD_LIMIT);
@@ -760,6 +774,14 @@ async function unpublishLocalRecipe(id,button){
 function bindRecipes(){
   const shopping=main.querySelector('#openShopping');
   if(shopping)shopping.onclick=()=>openShoppingList(()=>{overlayScreen='';render();});
+  const importButton=main.querySelector('#openImport');
+  if(importButton)importButton.onclick=()=>{
+    closeCookAlong();
+    overlayScreen='import';
+    recipeImport={busy:false,message:'',notes:[],host:'',url:''};
+    renderImport();
+    window.scrollTo({top:0,behavior:'smooth'});
+  };
   main.querySelectorAll('[data-collection]').forEach(b=>b.onclick=()=>{activeCollectionId=b.dataset.collection;render();});
   const newCollection=main.querySelector('#newCollection');
   if(newCollection)newCollection.onclick=()=>{
@@ -981,8 +1003,15 @@ function openRecipe(id){
   const factor=servingFactor(baseServingsOf(r),view.servings);
   const shownIngredients=convert(scale(r.ingredients||[],factor),view.system);
   const remoteMedia=(r.remoteMedia||[]).map(m=>m.type==='VIDEO'?`<video class="detail-media" controls src="${escapeHtml(m.url)}"></video>`:`<img class="detail-media" src="${escapeHtml(m.url)}" alt="Recipe media">`).join('');
-  main.innerHTML=`<button id="backRecipes" class="ghost">← Recipes</button><section class="card"><div class="row between"><h1>${escapeHtml(r.title)}</h1>${r.isPublic?'<span class="pill">Community</span>':'<span class="pill">Private</span>'}</div><p class="status">${escapeHtml(r.description||'')}</p><span class="pill">Serves ${r.servings||2}</span>${(r.tags||[]).map(t=>`<span class="pill">#${escapeHtml(t)}</span>`).join('')}</section>${(r.steps||[]).length?'<button id="cookThisRecipe" class="primary wide">🍳 Cook this recipe</button>':''}${collectionPickerTemplate(r.id)}${remoteMedia?`<section class="card"><h2>Recipe media</h2><div class="detail-media-grid">${remoteMedia}</div></section>`:''}${r.sessionAudio?.stored?'<section class="card"><h2>Original chef voice</h2><p class="hint">The full microphone recording is stored separately from the transcript.</p><button id="loadChefVoice" class="secondary wide">▶ Load chef voice</button><div id="chefVoicePlayer"></div></section>':''}<div id="paywall"></div>${secondPassTemplate(r)}<div class="section-title"><h2>Ingredients</h2></div>${scalingTemplate(r)}${shownIngredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${(r.steps||[]).length?'<button id="readAloudBtn" class="secondary wide">🔊 Read steps aloud</button>':''}${(r.steps||[]).map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}<div class="section-title"><h2>Cooking transcript</h2></div><div class="card transcript">${(r.transcript||[]).map(s=>`<div class="transcript-line">${escapeHtml(s.text)}</div>`).join('')||'No transcript saved.'}</div>`;
-  document.querySelector('#backRecipes').onclick=()=>{secondPass={recipeId:'',busy:false,message:'',result:null};shoppingMessage='';render();};
+  // Shown once, on the recipe the import just produced: what the page left out, against the
+  // recipe itself rather than on a screen the chef has already left.
+  const notice=importedNotice?.recipeId===r.id
+    ?`<div class="notice" role="status"><p><strong>Imported from ${escapeHtml(importedNotice.host||'the web')}.</strong> Check it against the original page before you cook.</p>${importedNotice.notes.length?`<ul class="install-list">${importedNotice.notes.map(n=>`<li>${escapeHtml(n)}</li>`).join('')}</ul>`:''}<button class="ghost" id="dismissImportNotice">OK</button></div>`
+    :'';
+  main.innerHTML=`<button id="backRecipes" class="ghost">← Recipes</button>${notice}<section class="card"><div class="row between"><h1>${escapeHtml(r.title)}</h1>${r.isPublic?'<span class="pill">Community</span>':'<span class="pill">Private</span>'}</div><p class="status">${escapeHtml(r.description||'')}</p><span class="pill">Serves ${r.servings||2}</span>${(r.tags||[]).map(t=>`<span class="pill">#${escapeHtml(t)}</span>`).join('')}</section>${(r.steps||[]).length?'<button id="cookThisRecipe" class="primary wide">🍳 Cook this recipe</button>':''}${collectionPickerTemplate(r.id)}${remoteMedia?`<section class="card"><h2>Recipe media</h2><div class="detail-media-grid">${remoteMedia}</div></section>`:''}${r.sessionAudio?.stored?'<section class="card"><h2>Original chef voice</h2><p class="hint">The full microphone recording is stored separately from the transcript.</p><button id="loadChefVoice" class="secondary wide">▶ Load chef voice</button><div id="chefVoicePlayer"></div></section>':''}<div id="paywall"></div>${secondPassTemplate(r)}<div class="section-title"><h2>Ingredients</h2></div>${scalingTemplate(r)}${shownIngredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${(r.steps||[]).length?'<button id="readAloudBtn" class="secondary wide">🔊 Read steps aloud</button>':''}${(r.steps||[]).map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}<div class="section-title"><h2>Cooking transcript</h2></div><div class="card transcript">${(r.transcript||[]).map(s=>`<div class="transcript-line">${escapeHtml(s.text)}</div>`).join('')||'No transcript saved.'}</div>`;
+  document.querySelector('#backRecipes').onclick=()=>{secondPass={recipeId:'',busy:false,message:'',result:null};shoppingMessage='';importedNotice=null;render();};
+  const dismissNotice=document.querySelector('#dismissImportNotice');
+  if(dismissNotice)dismissNotice.onclick=()=>{importedNotice=null;openRecipe(r.id);};
   bindRecipeScaling(r,factor);
   bindCollectionPicker(r);
   const cookBtn=document.querySelector('#cookThisRecipe');
@@ -1119,6 +1148,91 @@ function openShoppingList(back){
   renderShoppingList();
   window.scrollTo({top:0,behavior:'smooth'});
 }
+
+// ---- Recipe import from a web address ---------------------------------------
+// The page is read by the `chefvoice-import` Cloud Function, not here: a browser refuses to
+// fetch another site's page from a script, which is the only reason a function is involved at
+// all (on Android the phone reads the page itself). The function returns a recipe draft or the
+// reason there wasn't one; the words it returns are written for the chef and are shown as they
+// stand. Nothing about the result is special-cased afterwards -- it is saved as an ordinary
+// private recipe, editable, scalable, cookable and shoppable like any other.
+
+let recipeImport={busy:false,message:'',notes:[],host:'',url:''};
+
+function importTemplate(){
+  return `<button id="backImport" class="ghost">← Recipes</button>
+  <div class="section-title"><h1>Import from a web address</h1></div>
+  <section class="card stack">
+    <div class="field"><label for="importUrl">Recipe page</label><input id="importUrl" type="url" inputmode="url" placeholder="https://example.com/best-chili" value="${escapeHtml(recipeImport.url)}"></div>
+    <button class="primary wide" id="runImport" ${recipeImport.busy?'disabled':''}>${recipeImport.busy?'Reading the page…':'Read the recipe'}</button>
+    <p class="hint">ChefVoice reads the recipe the page itself publishes for search engines. It never guesses: anything the page leaves out is left out here too, and named below so you can check it.</p>
+  </section>
+  ${recipeImport.message?`<div class="notice" role="status">${escapeHtml(recipeImport.message)}</div>`:''}
+  ${recipeImport.notes.length?`<section class="card"><strong>Check these before you cook</strong><ul class="install-list">${recipeImport.notes.map(n=>`<li>${escapeHtml(n)}</li>`).join('')}</ul></section>`:''}
+  ${cloud.user?'':'<div class="notice">Sign in from Profile to import a recipe.</div>'}`;
+}
+
+function renderImport(){
+  main.innerHTML=importTemplate();
+  document.querySelector('#backImport').onclick=()=>{overlayScreen='';recipeImport={busy:false,message:'',notes:[],host:'',url:''};render();};
+  const run=document.querySelector('#runImport');
+  if(run)run.onclick=async()=>{
+    const input=document.querySelector('#importUrl');
+    recipeImport.url=input?.value||'';
+    if(!recipeImport.url.trim()){recipeImport.message='Paste the web address of a recipe page first.';renderImport();return;}
+    if(!cloud.user){nav('profile');return;}
+    recipeImport={...recipeImport,busy:true,message:'Reading that page…',notes:[]};
+    renderImport();
+    try{
+      const result=await cloud.api.importRecipeFromUrl(recipeImport.url);
+      if(!result?.ok){
+        recipeImport={...recipeImport,busy:false,message:result?.message||'That page could not be read, so nothing was saved.',notes:[]};
+        renderImport();
+        return;
+      }
+      const saved=await saveImportedRecipe(result);
+      recipeImport={busy:false,message:'',notes:[],host:'',url:''};
+      overlayScreen='';
+      // Straight into the recipe, with the gaps the page left carried along so the chef sees
+      // them against the recipe rather than on a screen they have already left.
+      importedNotice={recipeId:saved.id,host:result.host,notes:result.notes||[]};
+      currentTab='recipes';
+      tabs.forEach(b=>b.classList.toggle('active',b.dataset.tab==='recipes'));
+      openRecipe(saved.id);
+    }catch(e){
+      recipeImport={...recipeImport,busy:false,message:e?.message||'ChefVoice could not reach the import service. Try again in a moment.',notes:[]};
+      renderImport();
+    }
+  };
+}
+
+/** Saves an imported draft as an ordinary private recipe on this device. */
+async function saveImportedRecipe(result){
+  const draft=result.recipe||{};
+  const recipe={
+    id:(globalThis.crypto?.randomUUID?.()??`${Date.now()}-${Math.random().toString(16).slice(2)}`),
+    title:String(draft.title||'Imported recipe'),
+    description:String(draft.description||''),
+    servings:Math.max(1,Number(draft.servings)||2),
+    prepTimeMinutes:Number(draft.prepTimeMinutes)||0,
+    cookTimeMinutes:Number(draft.cookTimeMinutes)||0,
+    ingredients:(draft.ingredients||[]).map(i=>({quantity:String(i.quantity||''),unit:String(i.unit||''),name:String(i.name||'')})),
+    steps:(draft.steps||[]).map(s=>String(s||'')),
+    transcript:[],
+    createdAt:Date.now(),updatedAt:Date.now(),
+    // Private, and owned by no cloud account until the chef chooses to publish.
+    isPublic:false,media:[],tags:draft.tags||[],
+    // What the chef is told before publishing, and the one field that marks an import.
+    importedFrom:String(result.sourceUrl||'')
+  };
+  const updated=[recipe,...recipes];
+  saveRecipes(updated);
+  recipes=updated;
+  return recipe;
+}
+
+/** Shown once on the recipe an import just produced. */
+let importedNotice=null;
 
 // ---- Cook-along -------------------------------------------------------------
 // One method step at a time, for a chef whose hands are in a bowl: the screen is held awake,

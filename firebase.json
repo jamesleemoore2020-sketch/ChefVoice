@@ -16,6 +16,11 @@
       "source": "billing/functions",
       "codebase": "chefvoice-billing",
       "runtime": "nodejs22"
+    },
+    {
+      "source": "import/functions",
+      "codebase": "chefvoice-import",
+      "runtime": "nodejs22"
     }
   ],
   "hosting": [

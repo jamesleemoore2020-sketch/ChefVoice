@@ -79,6 +79,9 @@ object RecipeImporter {
             // Private, and owned by no cloud account until the chef chooses to publish.
             authorName = authorName,
             tags = imported.tags,
+            // Local only, and only so the chef is warned once before publishing someone
+            // else's method under their own name. The credit itself is in the description.
+            importedFrom = sourceUrl,
             createdAt = now,
             updatedAt = now
         )

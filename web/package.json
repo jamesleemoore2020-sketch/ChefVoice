@@ -1,7 +1,7 @@
 {
   "name": "chefvoice-pwa",
   "private": true,
-  "version": "0.5.16",
+  "version": "0.5.17",
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",

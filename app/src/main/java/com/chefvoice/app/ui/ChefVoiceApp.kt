@@ -152,6 +152,7 @@ import com.chefvoice.app.util.tagMatchesQuery
 import com.chefvoice.app.voice.CookingSessionCapture
 import com.chefvoice.app.util.CookCommand
 import com.chefvoice.app.util.IngredientScaling
+import com.chefvoice.app.importer.RecipeUrl
 import com.chefvoice.app.util.MeasurementSystem
 import com.chefvoice.app.util.CookCommands
 import com.chefvoice.app.util.StepTimer
@@ -2690,6 +2691,7 @@ private fun RecipeDetailScreen(
     var viewServings by remember(recipe.id) { mutableIntStateOf(recipe.servings.coerceAtLeast(1)) }
     var measurementSystem by remember(recipe.id) { mutableStateOf(MeasurementSystem.AS_WRITTEN) }
     var showCollectionPicker by remember(recipe.id) { mutableStateOf(false) }
+    var showImportedPublishConfirm by remember(recipe.id) { mutableStateOf(false) }
     val servingFactor = IngredientScaling.servingFactor(recipe.servings, viewServings)
     val shownIngredients = remember(recipe.ingredients, servingFactor, measurementSystem) {
         IngredientScaling.convert(
@@ -3218,7 +3220,13 @@ private fun RecipeDetailScreen(
                     if (recipe.isPublic) {
                         OutlinedButton(enabled = !recipeMutationBusy, onClick = onUnpublish, modifier = Modifier.fillMaxWidth()) { Text(if (recipeMutationBusy) "Updating…" else "Remove from Community") }
                     } else {
-                        Button(enabled = !recipeMutationBusy, onClick = onPublish, modifier = Modifier.fillMaxWidth()) { Text("🌎 Publish to Community") }
+                        Button(
+                            enabled = !recipeMutationBusy,
+                            // An imported recipe is allowed to be published, but never by
+                            // accident: the method came from someone else's page.
+                            onClick = { if (recipe.importedFrom.isNotBlank()) showImportedPublishConfirm = true else onPublish() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("🌎 Publish to Community") }
                     }
                 }
                 item { TextButton(enabled = !recipeMutationBusy, onClick = { showDeleteConfirm = true }, modifier = Modifier.fillMaxWidth()) { Text(if (recipeMutationBusy) "Deleting…" else "Delete recipe") } }
@@ -3233,6 +3241,24 @@ private fun RecipeDetailScreen(
             text = { Text(if (recipe.authorId.isNotBlank()) "ChefVoice will delete the cloud/Community recipe first. Only after that succeeds will it remove the recipe from this phone." else "This local recipe will be removed from this phone. This cannot be undone.") },
             confirmButton = { Button(onClick = { showDeleteConfirm = false; onDelete() }) { Text("Delete recipe") } },
             dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") } }
+        )
+    }
+    if (showImportedPublishConfirm) {
+        AlertDialog(
+            onDismissRequest = { showImportedPublishConfirm = false },
+            title = { Text("Publish an imported recipe?") },
+            text = {
+                Text(
+                    "This recipe was imported from ${RecipeUrl.displayHost(recipe.importedFrom)}.\n\n" +
+                        "Publishing it puts another site's method on your Community profile under your " +
+                        "name. Keep the \"Source:\" credit in the description, and only publish it if " +
+                        "you are happy to share it."
+                )
+            },
+            confirmButton = {
+                Button(onClick = { showImportedPublishConfirm = false; onPublish() }) { Text("Publish anyway") }
+            },
+            dismissButton = { TextButton(onClick = { showImportedPublishConfirm = false }) { Text("Keep it private") } }
         )
     }
     if (showCollectionPicker) {

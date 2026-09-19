@@ -100,7 +100,17 @@ data class Recipe(
     val likes: Int = 0,
     val commentCount: Int = 0,
     val communityUpdatePending: Boolean = false,
-    val tags: List<String> = emptyList()
+    val tags: List<String> = emptyList(),
+    /**
+     * Where this recipe was imported from, or blank for one the chef narrated.
+     *
+     * **Local to this device.** It is never written to Firestore -- the cloud repository
+     * allow-lists the fields it sends, so adding it needs no rules change -- and it exists for
+     * one reason: to warn a chef, once, before they publish another site's method to Community
+     * under their own name. The credit itself lives in the description, which is the field that
+     * travels with a published recipe.
+     */
+    val importedFrom: String = ""
 )
 
 fun Recipe.stableStepIds(): List<String> = steps.indices.map { index ->
