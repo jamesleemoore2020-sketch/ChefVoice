@@ -7,7 +7,7 @@ deployed function reads the page on the chef's behalf. It is **not a page proxy*
 a recipe draft or the reason there wasn't one, never the page. Sign-in required, 30 imports
 per chef per day, counted before the fetch. The counter lives at `importUsage/{uid}`, a path
 `firestore.rules` never matches and therefore denies to clients, so **no rules deploy**.
-**The function is deployed and verified live**; `chefvoice-notifications`, `chefvoice-billing`,
+**The function and PWA 0.5.17 are both deployed and verified live**; `chefvoice-notifications`, `chefvoice-billing`,
 `transcribeChefVoice`, Hosting, rules and App Check were not touched. See
 `PWA_RECIPE_IMPORT_0.5.17.md`.
 

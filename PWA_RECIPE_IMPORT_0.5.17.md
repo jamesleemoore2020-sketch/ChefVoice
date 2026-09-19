@@ -125,6 +125,11 @@ Verified by importing real pages through the deployed function from the PWA:
 
 The test recipe was deleted afterwards and nothing was published.
 
+## Also deployed
+
+PWA **0.5.17** (`hosting:pwa` only); `sw.js` on the deployed site reports `chefvoice-pwa-v0.5.17`
+and the import button is on the live Recipes tab.
+
 ## Still open
 
 **Android 0.11.17 is not built into a release or uploaded.** The publish warning only reaches
