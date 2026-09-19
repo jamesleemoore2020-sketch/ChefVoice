@@ -1,3 +1,26 @@
+# Current handoff — 2026-09-18 (PWA parity, stage 3)
+
+PWA 0.5.16 (service-worker cache bumped). **The two swipes.** Swipe a Community card right to
+keep the dish — it only ever *adds*, never unsaves, because the gesture reads as "keep this"
+not "toggle this". Swipe a notification either way to clear it, with a ✕ for chefs who would
+rather tap and **Clear read notifications** for everything already read. Android untouched
+(still 77 / 0.11.16); parser, corpus, `firestore.rules`, Functions, Live and App Check
+untouched, and **no new backend surface** — the swipes call the `toggleBookmark` and
+`deleteNotification` the client already had. PWA 243 tests / 0 failures (227 before), plus a
+new jsdom check for the Activity tab. **Not deployed yet.** See `PWA_PARITY_STAGE3_0.5.16.md`.
+
+- **The axis lock is the rule that matters on a phone.** A gesture commits to an axis after
+  ten pixels and never changes: a finger that started scrolling the feed keeps scrolling it,
+  even if it later curves sideways. Rows carry `touch-action: pan-y` so the browser owns
+  vertical scrolling and only a sideways gesture reaches the app at all.
+- **A swipe that ends over a button no longer fires it**, so saving a dish cannot also open it.
+- **Notification rows now match Android**: type glyph, title, body, arrival time, ✕. A cleared
+  row is faded out at once rather than after a Firestore round trip, and **a failed delete
+  puts it back** and says why.
+- **The Activity tab cannot be tested against a real account** — notification documents are
+  backend-created, so a client can never make one. `tests/inbox-activity.dom.mjs` is the only
+  coverage it has, and was confirmed to fail on a broken threshold rather than pass regardless.
+
 # Current handoff — 2026-09-18 (PWA parity, stage 2)
 
 PWA 0.5.15 (service-worker cache bumped so phones pick it up). **The PWA can now be cooked

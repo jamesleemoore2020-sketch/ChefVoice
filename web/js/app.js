@@ -15,6 +15,10 @@ import { additionMessage, asShareText, displayText, itemsFor, merge as mergeShop
 import { formatClock } from './step-timers.js';
 import { matchCommand, safeFromPartial } from './cook-commands.js';
 import {
+  beginSwipe, dismissDirection, dismissOffset, isHorizontal, saveOffset, saveProgress,
+  shouldSave, trackSwipe
+} from './swipe-gestures.js';
+import {
   applyCookCommand, clearTimer, currentStep as cookCurrentStep, initialCookState,
   nextStep as cookNextStep, previousStep as cookPreviousStep, setHandsFree, setReadAloud,
   startTimer as startCookTimer, tickTimer, timersForStep, toggleTimerPause
@@ -1369,7 +1373,9 @@ function communityPostTemplate(r){
       <button class="menu-item danger" data-block="${authorId}">🚫 Block chef</button>
     </div>
   </div>`:'';
-  return `<article class="community-card">
+  // The card rides on top of a fixed backdrop that only shows while it is being dragged --
+  // the web equivalent of Android's Box with the label behind the Card.
+  return `<div class="swipe-row" data-swipe-save="${id}"><div class="swipe-backdrop" aria-hidden="true">${bookmarked?'★ Already saved':'★ Save to cookbook'}</div><article class="community-card swipe-card">
     <div class="community-photo thumb-wrap" data-dbl-like="${id}">
       ${hero?`<img class="community-thumb" src="${escapeHtml(hero)}" alt="${escapeHtml(r.title)}" loading="lazy">`:'<div class="community-photo-placeholder" role="img" aria-label="Recipe without a photo">🍽️</div>'}
     </div>
@@ -1391,7 +1397,7 @@ function communityPostTemplate(r){
       <button class="action-btn" data-share="${id}" aria-label="Share">📤</button>
       <button class="action-btn${bookmarked?' saved':''}" data-bookmark="${id}" aria-label="${bookmarked?'Unsave':'Save'}" aria-pressed="${bookmarked}">${bookmarked?'★':'☆'}</button>
     </div>
-  </article>`;
+  </article></div>`;
 }
 
 function communityTemplate(){
@@ -1436,7 +1442,76 @@ function communityTemplate(){
   </section><div id="safetyStatus" class="hint" role="status"></div>${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${modeToggle}${search}${blockedNote}<div class="community-feed">${feed}</div>`;
 }
 function requireCommunitySignIn(){if(cloud.user)return true;nav('profile');return false;}
+
+/**
+ * Pointer-driven horizontal swipe on one row. `onMove` draws the travel and `onEnd` decides
+ * what it meant; both are handed the gesture state from swipe-gestures.js, which is where
+ * every decision about direction, distance and the axis lock lives.
+ *
+ * The row keeps `touch-action: pan-y` in CSS, so a finger moving down the feed still scrolls
+ * it and only a sideways one reaches this code at all.
+ */
+function bindSwipe(row,{onMove,onEnd}){
+  let gesture=null,pointerId=null;
+  row.addEventListener('pointerdown',e=>{
+    if(e.pointerType==='mouse'&&e.button!==0)return;
+    pointerId=e.pointerId;gesture=beginSwipe(e.clientX,e.clientY);
+  });
+  row.addEventListener('pointermove',e=>{
+    if(!gesture||e.pointerId!==pointerId)return;
+    gesture=trackSwipe(gesture,e.clientX,e.clientY);
+    if(!isHorizontal(gesture))return;
+    // Once the gesture is ours, stop the browser making it a text selection or a back swipe.
+    e.preventDefault();
+    onMove(gesture);
+  });
+  const finish=e=>{
+    if(!gesture||e.pointerId!==pointerId)return;
+    const settled=gesture;gesture=null;pointerId=null;
+    // A sideways drag that ends over a button would otherwise also fire that button's click
+    // and, say, open the recipe the chef was only trying to save.
+    if(isHorizontal(settled)&&Math.abs(settled.dx)>4){
+      const swallow=ev=>{ev.stopPropagation();ev.preventDefault();};
+      row.addEventListener('click',swallow,{capture:true,once:true});
+      // A swipe on a touchscreen usually produces no click at all; drop the guard shortly
+      // after so it can never eat the chef's next real tap.
+      setTimeout(()=>row.removeEventListener('click',swallow,{capture:true}),350);
+    }
+    onEnd(settled);
+  };
+  row.addEventListener('pointerup',finish);
+  row.addEventListener('pointercancel',finish);
+  row.addEventListener('pointerleave',finish);
+}
+
+/** Swipe a Community card to the right to keep the dish. It only ever adds -- see shouldSave. */
+function bindSaveSwipes(){
+  main.querySelectorAll('[data-swipe-save]').forEach(row=>{
+    const id=row.dataset.swipeSave;
+    const card=row.querySelector('.swipe-card');
+    if(!card)return;
+    const settle=()=>{card.style.transition='';card.style.transform='';row.style.setProperty('--swipe-progress','0');};
+    bindSwipe(row,{
+      onMove:state=>{
+        card.style.transition='none';
+        card.style.transform=`translateX(${saveOffset(state)}px)`;
+        row.style.setProperty('--swipe-progress',String(saveProgress(state)));
+      },
+      onEnd:async state=>{
+        const save=shouldSave(state,cloud.bookmarks.has(id));
+        settle();
+        if(!save||!requireCommunitySignIn())return;
+        // toggleBookmark is a toggle, but shouldSave has already refused the gesture for a
+        // recipe that is saved, so this can only add -- the same guard Android applies.
+        try{await cloud.api.toggleBookmark(id);}
+        catch(e){safetyStatus(e?.message||'Could not save that recipe.');}
+      }
+    });
+  });
+}
+
 function bindCommunity(){
+  bindSaveSwipes();
   main.querySelectorAll('[data-community-mode]').forEach(b=>b.onclick=()=>{
     if(communityMode===b.dataset.communityMode)return;
     communityMode=b.dataset.communityMode;render();
@@ -1789,6 +1864,11 @@ function updateInboxBadge(){
 const otherUid=c=>otherParticipant(c,cloud.user?.uid);
 const otherName=c=>otherParticipantName(c,cloud.user?.uid);
 
+/** Same glyphs Android's Notifications tab uses, so one alert reads the same on both. */
+const notificationGlyph=type=>({
+  message:'✉',comment:'💬',like:'♥',live:'🔴',follow:'👨‍🍳',reply:'↩'
+}[String(type||'')]||'🔔');
+
 function inboxTemplate(){
   if(!cloud.user){
     return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">Inbox</div><h1>Messages and activity.</h1></section><div class="notice">Sign in from Profile to see your messages and activity.</div>`;
@@ -1800,9 +1880,14 @@ function inboxTemplate(){
 
   if(inboxSection==='activity'){
     const list=cloud.notifications.length
-      ?cloud.notifications.map(n=>`<article class="card ${n.readAt<=0?'unread':''}" data-notification="${escapeHtml(n.id)}"><div class="row between"><strong>${escapeHtml(n.title)}</strong>${n.readAt<=0?'<span class="pill">New</span>':''}</div>${n.body?`<p class="status">${escapeHtml(n.body)}</p>`:''}${n.createdAt?`<p class="hint">${escapeHtml(relativeTime(n.createdAt))}</p>`:''}<div class="row wrap" style="margin-top:8px">${n.readAt<=0?`<button class="secondary" data-read="${escapeHtml(n.id)}">Mark read</button>`:''}<button class="ghost" data-dismiss-notification="${escapeHtml(n.id)}">Dismiss</button></div></article>`).join('')
+      ?cloud.notifications.map(n=>`<div class="swipe-row" data-swipe-dismiss="${escapeHtml(n.id)}"><div class="swipe-backdrop both" aria-hidden="true">Clear</div><article class="card swipe-card ${n.readAt<=0?'unread':''}" data-notification="${escapeHtml(n.id)}"><div class="row" style="align-items:flex-start;gap:10px"><span class="notification-glyph" aria-hidden="true">${notificationGlyph(n.type)}</span><div class="grow"><div class="row between"><strong>${escapeHtml(n.title)}</strong>${n.readAt<=0?'<span class="pill">New</span>':''}</div>${n.body?`<p class="status">${escapeHtml(n.body)}</p>`:''}${n.createdAt?`<p class="hint">${escapeHtml(relativeTime(n.createdAt))}</p>`:''}${n.readAt<=0?`<div class="row wrap" style="margin-top:8px"><button class="secondary" data-read="${escapeHtml(n.id)}">Mark read</button></div>`:''}</div><button class="icon-btn" data-dismiss-notification="${escapeHtml(n.id)}" aria-label="Clear this notification">✕</button></div></article></div>`).join('')
       :'<div class="empty card">No activity yet. Likes, comments, replies, follows and Live alerts show up here.</div>';
-    return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">Inbox</div><h1>Messages and activity.</h1></section>${tabs}<div id="safetyStatus" class="hint"></div>${list}`;
+    // Clearing everything already read, in one go, without touching anything still unread.
+    const clearRead=cloud.notifications.some(n=>n.readAt>0)
+      ?'<button class="ghost wide" id="clearReadNotifications" style="margin-top:12px">Clear read notifications</button>'
+      :'';
+    const swipeHint=cloud.notifications.length?'<p class="hint">Swipe a notification either way to clear it, or use ✕.</p>':'';
+    return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">Inbox</div><h1>Messages and activity.</h1></section>${tabs}<div id="safetyStatus" class="hint"></div>${swipeHint}${list}${clearRead}`;
   }
 
   const visible=cloud.conversations.filter(c=>!cloud.blocked.has(otherUid(c)));
@@ -1830,6 +1915,49 @@ function conversationTemplate(){
   return `<button id="backInbox" class="ghost">← Inbox</button><section class="card"><div class="row between"><h1>${escapeHtml(name)}</h1><span class="pill">${blocked?'Blocked':'Direct messages'}</span></div><div class="row wrap"><button class="ghost" data-report-user="${escapeHtml(otherUid(c))}">⚑ Report chef</button><button class="ghost" data-toggle-block="${escapeHtml(otherUid(c))}">${blocked?'Unblock chef':'Block chef'}</button></div></section><div id="safetyStatus" class="hint"></div>${thread}${composer}`;
 }
 
+/**
+ * Clears one notification, read or not. Backs both the ✕ and the swipe, so a chef can deal
+ * with a single alert without clearing everything they have read.
+ *
+ * The row is faded and taken out of the way straight away rather than after a Firestore round
+ * trip; the listener removes it for real a moment later. A failed delete brings it back,
+ * because a row that vanished and did not actually clear is the worse outcome.
+ */
+async function dismissNotification(id,control){
+  const row=main.querySelector(`[data-swipe-dismiss="${CSS.escape(id)}"]`);
+  if(control)control.disabled=true;
+  if(row)row.classList.add('clearing');
+  try{
+    await cloud.api.deleteNotification(id);
+  }catch(e){
+    if(row)row.classList.remove('clearing');
+    if(control)control.disabled=false;
+    safetyStatus(e?.message||'That notification could not be cleared.');
+  }
+}
+
+/** Swipe a notification row either way to clear it -- both directions mean the same thing. */
+function bindDismissSwipes(){
+  main.querySelectorAll('[data-swipe-dismiss]').forEach(row=>{
+    const id=row.dataset.swipeDismiss;
+    const card=row.querySelector('.swipe-card');
+    if(!card)return;
+    bindSwipe(row,{
+      onMove:state=>{
+        card.style.transition='none';
+        card.style.transform=`translateX(${dismissOffset(state)}px)`;
+        row.style.setProperty('--swipe-progress',String(Math.min(Math.abs(dismissOffset(state))/96,1)));
+      },
+      onEnd:state=>{
+        const direction=dismissDirection(state);
+        card.style.transition='';card.style.transform='';
+        row.style.setProperty('--swipe-progress','0');
+        if(direction)dismissNotification(id,null);
+      }
+    });
+  });
+}
+
 function bindInbox(){
   main.querySelectorAll('[data-inbox]').forEach(b=>b.onclick=()=>{inboxSection=b.dataset.inbox;render();});
   main.querySelectorAll('[data-open-conversation]').forEach(b=>b.onclick=()=>openConversationView(b.dataset.openConversation));
@@ -1837,10 +1965,20 @@ function bindInbox(){
     b.disabled=true;
     try{await cloud.api.markNotificationRead(b.dataset.read);}catch(e){safetyStatus(e?.message||'Could not mark that as read.');b.disabled=false;}
   });
-  main.querySelectorAll('[data-dismiss-notification]').forEach(b=>b.onclick=async()=>{
-    b.disabled=true;
-    try{await cloud.api.deleteNotification(b.dataset.dismissNotification);}catch(e){safetyStatus(e?.message||'Could not dismiss that.');b.disabled=false;}
-  });
+  main.querySelectorAll('[data-dismiss-notification]').forEach(b=>b.onclick=()=>dismissNotification(b.dataset.dismissNotification,b));
+  bindDismissSwipes();
+  const clearRead=document.querySelector('#clearReadNotifications');
+  if(clearRead)clearRead.onclick=async()=>{
+    const ids=cloud.notifications.filter(n=>n.readAt>0).map(n=>n.id);
+    if(!ids.length)return;
+    clearRead.disabled=true;
+    // One at a time rather than a batch: the PWA client exposes a single-document delete,
+    // and a partial failure then leaves the rows it could not clear visibly still there.
+    const failures=[];
+    for(const id of ids){try{await cloud.api.deleteNotification(id);}catch(e){failures.push(e?.message||'unknown error');}}
+    if(failures.length)safetyStatus(`Could not clear read notifications: ${failures[0]}`);
+    clearRead.disabled=false;
+  };
 
   const back=document.querySelector('#backInbox');
   if(back)back.onclick=()=>{history.back();};
