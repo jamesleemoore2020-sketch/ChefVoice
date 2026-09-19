@@ -28,10 +28,10 @@ per chef per day, counted before the fetch. The counter lives at `importUsage/{u
 - **Verified against the deployed function**: bbcgoodfood.com imported end to end; a site that
   answered 402 was reported as refusing rather than half-guessed; the publish warning fired and
   declining left the recipe private.
-- **Android 78 / 0.11.17 is built and signed, not uploaded.** `assembleRelease` and
+- **Android 78 / 0.11.17 is built, signed and uploaded to Play.** `assembleRelease` and
   `bundleRelease` both succeeded; the AAB is at `app/build/outputs/bundle/release/app-release.aab`
   (33.7 MB) with its mapping beside it, and the APK verifies as v2-signed by the release key.
-  The publish warning only reaches phones once 0.11.17 is on Play.
+  James uploaded it; the track and rollout state were not checked from here.
 
 # Current handoff — 2026-09-18 (PWA parity, stage 3)
 

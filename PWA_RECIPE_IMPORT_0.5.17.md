@@ -143,5 +143,5 @@ and the import button is on the live Recipes tab.
 
 ## Still open
 
-**0.11.17 is not uploaded to Play.** The publish warning only reaches phones once it is. The
-PWA half is already live.
+0.11.17 was uploaded to Play by James after this build. The track it went to, and whether it
+is rolled out, were not checked from here.
