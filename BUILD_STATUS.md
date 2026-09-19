@@ -7,7 +7,9 @@ rather tap and **Clear read notifications** for everything already read. Android
 (still 77 / 0.11.16); parser, corpus, `firestore.rules`, Functions, Live and App Check
 untouched, and **no new backend surface** — the swipes call the `toggleBookmark` and
 `deleteNotification` the client already had. PWA 243 tests / 0 failures (227 before), plus a
-new jsdom check for the Activity tab. **Not deployed yet.** See `PWA_PARITY_STAGE3_0.5.16.md`.
+new jsdom check for the Activity tab. **Live: deployed to https://chefvoice-d7fec.web.app/
+(`hosting:pwa` only)**; `sw.js` on the deployed site reports `chefvoice-pwa-v0.5.16`. See
+`PWA_PARITY_STAGE3_0.5.16.md`.
 
 - **The axis lock is the rule that matters on a phone.** A gesture commits to an axis after
   ten pixels and never changes: a finger that started scrolling the feed keeps scrolling it,
