@@ -1,0 +1,139 @@
+# Every ChefVoice gate, on every push and pull request.
+#
+# Until this existed the gates ran only as RUN_*_GATES.cmd on one Windows PC, so the
+# golden-corpus contract -- both parsers must pass every row before either ships -- and
+# the rules gate were enforced by memory. A parser change pushed from a cloud session
+# never ran the Kotlin half. These jobs run the same commands the .cmd scripts run.
+#
+# Nothing here deploys or talks to the production Firebase project. The rules job runs
+# against the local Firestore emulator under a throwaway project id.
+
+name: Gates
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pwa:
+    name: PWA tests (JS parser + golden corpus)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # RUN_PARSER_GATES.cmd step 1. Includes web/tests/golden-corpus.test.mjs, the JS half
+      # of shared/golden-cooking-corpus.tsv.
+      - name: npm test
+        working-directory: web
+        run: npm test
+      # The three jsdom checks were optional and manual, and two of them had silently broken
+      # at HEAD before session 8 repaired them. jsdom is installed outside web/ so the PWA
+      # keeps its no-dependency, no-build-step shape.
+      - name: DOM integration checks (jsdom)
+        working-directory: web
+        run: |
+          npm install --no-save --no-package-lock --prefix "$RUNNER_TEMP/domdeps" jsdom
+          for check in tests/*.dom.mjs; do
+            echo "::group::$check"
+            COOK_TEST_MODULES="$RUNNER_TEMP/domdeps/node_modules" node "$check"
+            echo "::endgroup::"
+          done
+
+  functions:
+    name: Functions gates (notifications, billing, import)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # RUN_NOTIFICATION_GATES.cmd. Globbed rather than listed, so a new gate file cannot be
+      # written and then never run.
+      - name: Notification gates
+        run: node --test "notifications/*.test.js" "notifications/functions/*.test.js"
+      - name: Notification function syntax
+        run: node --check notifications/functions/index.js
+      # RUN_BILLING_GATES.cmd
+      - name: Billing gates
+        run: node --test "billing/*.test.js"
+      - name: Billing function syntax
+        run: node --check billing/functions/index.js
+      # RUN_IMPORT_GATES.cmd. `node --test import/functions` would load index.js and fail on
+      # require("firebase-functions/..."), which is why the glob names only the test files.
+      - name: Import gates
+        run: node --test "import/functions/*.test.js"
+      - name: Import function syntax
+        run: node --check import/functions/index.js
+
+  android:
+    name: Android unit tests (Kotlin parser + golden corpus)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      # gradlew downloads a pinned, SHA-256-checked Gradle into ~/.chefvoice/gradle.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.chefvoice/gradle
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('gradlew', '*.gradle.kts', 'app/build.gradle.kts', 'gradle.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+      # RUN_PARSER_GATES.cmd step 2. Includes GoldenCookingCorpusTest, the Kotlin half of the
+      # shared corpus. No signing variables are set, and none are needed for a debug test run.
+      - name: gradlew :app:testDebugUnitTest
+        run: bash ./gradlew :app:testDebugUnitTest --console=plain
+      - name: Keep the test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          retention-days: 14
+
+  rules:
+    name: Firestore rules (emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: rules-tests/package-lock.json
+      # The Firestore emulator is a Java program.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('rules-tests/package-lock.json') }}
+      # RUN_RULES_GATES.cmd. `npm test` runs firebase emulators:exec from the pinned
+      # firebase-tools devDependency; the emulator reads firestore.rules through the root
+      # firebase.json, so this is the rules file that would be deployed.
+      - name: npm ci
+        working-directory: rules-tests
+        run: npm ci
+      - name: npm test
+        working-directory: rules-tests
+        run: npm test
