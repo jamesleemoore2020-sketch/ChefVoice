@@ -37,8 +37,22 @@ import {
   threadComments, unreadCounts as computeUnreadCounts, withoutBlocked
 } from './inbox.js';
 import { parseTagsInput, tagMatchesQuery } from './tag-utils.js';
-import { LiveViewerController } from './webrtc-live-viewer.js';
-import { LiveHostController } from './webrtc-live-host.js';
+import { mergeFeedPages } from './community-feed.js';
+
+// Nothing imported above may reach firebase-client.js. Its top-level await fetches the
+// Firebase SDK from gstatic, and the two Live controllers used to be static imports here
+// that pulled it into this module's own graph: with the CDN unreachable -- offline, a
+// blocked network, a flaky kitchen connection -- the whole app failed to start, local
+// cooking capture included, and every launch waited on the SDK download before drawing
+// anything. They are loaded when a Live is opened (loadLiveControllers), by which point
+// firebase-client.js is already loaded for the signed-in chef.
+let liveControllers=null;
+function loadLiveControllers(){
+  liveControllers??=Promise.all([import('./webrtc-live-viewer.js'),import('./webrtc-live-host.js')])
+    .then(([viewer,host])=>({LiveViewerController:viewer.LiveViewerController,LiveHostController:host.LiveHostController}))
+    .catch(error=>{liveControllers=null;throw error;});
+  return liveControllers;
+}
 
 const main=document.querySelector('#main');
 const tabs=[...document.querySelectorAll('[data-tab]')];
@@ -79,6 +93,9 @@ let shoppingMessage='';
 let overlayScreen='';
 const cloud={
   state:'connecting',message:'Connecting to ChefVoice Community…',api:null,user:null,profile:null,recipes:[],feedError:'',
+  // `recipes` is what the chef sees: the live newest page, the older pages they loaded, and
+  // any recipe opened from a shared link (mergeFeedPages).
+  feedHead:[],feedOlder:[],feedLinked:[],feedCursor:null,feedHasMore:false,
   liked:new Set(),bookmarks:new Set(),following:new Set(),entitlement:{...FREE_ENTITLEMENT},blocked:new Set(),
   profileLoaded:false,profileError:'',verifyEmailMessage:'',
   conversations:[],messageReads:{},notifications:[],
@@ -136,11 +153,14 @@ function startUserObservers(user){
   });
   cloud.unsubEntitlement=cloud.api.observeProEntitlement(user.uid,e=>{cloud.entitlement=e;if(currentTab==='profile'||onRecipesList())render();});
   cloud.unsubBlocked=cloud.api.observeBlockedUserIds(user.uid,s=>{cloud.blocked=s;if(shouldRenderCommunity()||currentTab==='profile')render();});
-  cloud.unsubConversations=cloud.api.observeConversations(user.uid,items=>{cloud.conversations=items;updateInboxBadge();if(currentTab==='inbox')render();});
-  cloud.unsubMessageReads=cloud.api.observeMessageReads(user.uid,map=>{cloud.messageReads=map;updateInboxBadge();if(currentTab==='inbox')render();});
-  cloud.unsubNotifications=cloud.api.observeNotifications(user.uid,items=>{cloud.notifications=items;updateInboxBadge();if(currentTab==='inbox')render();});
-  cloud.unsubLiked=cloud.api.observeUserRecipeIds(user.uid,'likes',s=>{cloud.liked=s;if(shouldRenderCommunity())render();});
-  cloud.unsubBookmarks=cloud.api.observeUserRecipeIds(user.uid,'bookmarks',s=>{cloud.bookmarks=s;if(shouldRenderCommunity()||onRecipesList())render();});
+  // While a conversation is open these three only refresh the badge: re-rendering the inbox
+  // rebuilt the composer, and every incoming message or read marker wiped a half-written
+  // reply. The open thread patches itself (patchConversationThread).
+  cloud.unsubConversations=cloud.api.observeConversations(user.uid,items=>{cloud.conversations=items;markOpenConversationRead();updateInboxBadge();if(currentTab==='inbox'&&!openConversation)render();});
+  cloud.unsubMessageReads=cloud.api.observeMessageReads(user.uid,map=>{cloud.messageReads=map;updateInboxBadge();if(currentTab==='inbox'&&!openConversation)render();});
+  cloud.unsubNotifications=cloud.api.observeNotifications(user.uid,items=>{cloud.notifications=items;updateInboxBadge();if(currentTab==='inbox'&&!openConversation)render();});
+  cloud.unsubLiked=cloud.api.observeUserRecipeIds(user.uid,'likes',s=>{cloud.liked=s;if(shouldRenderCommunity())render();else patchCommunityDetail();});
+  cloud.unsubBookmarks=cloud.api.observeUserRecipeIds(user.uid,'bookmarks',s=>{cloud.bookmarks=s;if(shouldRenderCommunity()||onRecipesList())render();else patchCommunityDetail();});
   cloud.unsubFollowing=cloud.api.observeUserRecipeIds(user.uid,'following',s=>{cloud.following=s;if(shouldRenderCommunity())render();});
 }
 async function initCloud(){
@@ -149,21 +169,27 @@ async function initCloud(){
     cloud.api=api;cloud.state='ready';cloud.message='Connected to ChefVoice Firebase. Community writes are enabled.';
     cloud.unsubAuth=api.observeAuth(user=>{
       if(liveHostController&&user?.uid!==liveHostController.hostUid)closeLiveRoom();
+      if(cloud.user&&!user)purgeCrossOriginCaches();
       cloud.user=user;startUserObservers(user);
       if(currentTab==='profile'||onRecipesList()||shouldRenderCommunity()||shouldRenderLiveList())render();
     });
-    cloud.unsubFeed=api.observePublicRecipes(items=>{
-      cloud.recipes=items;cloud.feedError='';if(onRecipesList())render();
+    cloud.unsubFeed=api.observePublicRecipes((items,page)=>{
+      cloud.feedHead=items;
+      // Paging continues from the last page the chef loaded, not from the live head.
+      if(!cloud.feedOlder.length){cloud.feedCursor=page.cursor;cloud.feedHasMore=page.hasMore;}
+      cloud.recipes=mergeFeedPages(cloud.feedHead,cloud.feedOlder,cloud.feedLinked);
+      cloud.feedError='';if(onRecipesList())render();
       // A shared link is only actionable once the feed it points into has
       // loaded; only tried once; if the recipe is gone or unlisted, this just
       // falls through to the ordinary feed rather than looping forever.
       if(pendingSharedRecipeId){
-        const shared=items.find(x=>x.id===pendingSharedRecipeId);
+        const shared=pendingSharedRecipeId;
         pendingSharedRecipeId=null;
-        if(shared){openCommunityRecipe(shared.id);return;}
+        openSharedRecipe(shared);
+        return;
       }
-      if(shouldRenderCommunity())render();
-    },err=>{cloud.feedError=err?.message||'Community feed could not be loaded.';if(shouldRenderCommunity())render();});
+      if(shouldRenderCommunity())render();else patchCommunityDetail();
+    },err=>{cloud.feedError=`Community could not load: ${err?.message||'unknown error'}`;if(shouldRenderCommunity())render();});
     // Live sessions are world-readable, so this starts unconditionally like the
     // feed above rather than waiting on sign-in -- browsing Live works signed out.
     cloud.unsubLiveSessions=api.observeLiveSessions(items=>{
@@ -171,7 +197,11 @@ async function initCloud(){
       if(shouldRenderLiveList())render();
     },err=>{liveSessionsError=err?.message||'Live sessions could not be loaded.';if(shouldRenderLiveList())render();});
   }catch(e){
-    cloud.state='offline';cloud.message='Firebase is unavailable right now. Local cooking capture still works.';cloud.feedError=e?.message||String(e);
+    // Said in a chef's words: the raw error was an SDK module URL, shown on the Community tab
+    // to anyone who opened the app offline.
+    console.warn('ChefVoice Community is unavailable:',e);
+    cloud.state='offline';cloud.message='ChefVoice Community cannot be reached right now. Local cooking capture still works.';
+    cloud.feedError='You are offline, or ChefVoice Community cannot be reached right now. Your own recipes and cooking capture still work on this device.';
     if(currentTab==='profile'||shouldRenderCommunity())render();
   }
 }
@@ -183,6 +213,37 @@ try{const recovery=JSON.parse(sessionStorage.getItem('chefvoice.capture.recovery
 document.addEventListener('play',()=>{if(isIOS&&voiceEngineUsed)speechNeedsReset=true;},true);
 
 const escapeHtml=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
+
+/**
+ * Tells a screen reader about a status change: capture started or finished, a recipe
+ * saved or published, an error. <main> is not a live region -- it is rebuilt on every
+ * render, and when it was one VoiceOver and TalkBack re-read the whole screen, every
+ * transcript line included, several times a second during a capture.
+ */
+let lastAnnouncement='';
+function announce(text){
+  const message=String(text||'').trim();
+  const region=document.querySelector('#srStatus');
+  if(!region||!message||message===lastAnnouncement)return;
+  lastAnnouncement=message;
+  region.textContent=message;
+}
+
+/**
+ * The service worker before 0.5.18 cached every GET, Firestore's Listen channel
+ * included, so a browser that ran it may still hold one chef's messages in Cache
+ * Storage. The current worker deletes those caches when it activates; this clears
+ * anything from another origin at sign-out as well, for a shared device.
+ */
+async function purgeCrossOriginCaches(){
+  if(!('caches' in window))return;
+  try{
+    for(const name of await caches.keys()){
+      const cache=await caches.open(name);
+      for(const request of await cache.keys())if(new URL(request.url).origin!==location.origin)await cache.delete(request);
+    }
+  }catch{/* Best effort; the app works the same either way. */}
+}
 
 /**
  * The single way a paywall is raised. Every caller goes through here so that
@@ -245,7 +306,7 @@ function burstHeart(container){
 function likeFromPhoto(recipeId,container){
   if(!requireCommunitySignIn())return;
   burstHeart(container);
-  if(!cloud.liked.has(recipeId))cloud.api.toggleLike(recipeId).catch(()=>{});
+  if(!cloud.liked.has(recipeId))cloud.api.setLike(recipeId,true).catch(()=>{});
 }
 
 /**
@@ -270,7 +331,7 @@ const cloudReady=()=>cloud.state==='ready'&&cloud.api;
 const capture=new VoiceCapture({
   onSegment:s=>{const i=transcript.findIndex(t=>t.id===s.id);if(i>=0)transcript[i]=s;else transcript.push(s);renderCaptureState();},
   onPartial:s=>{livePartial=s;renderCaptureState();},
-  onStatus:s=>{captureStatus=s;renderCaptureState();}
+  onStatus:s=>{captureStatus=s;renderCaptureState();announce(s);}
 });
 
 function captureForm(){
@@ -399,7 +460,7 @@ function renderRecipeReview(){
   el.innerHTML=`<section class="card"><h3>${escapeHtml(form.title.trim()||'Untitled recipe')}</h3>${form.description.trim()?`<p>${escapeHtml(form.description)}</p>`:''}<p>Serves ${Math.max(1,Number(form.servings)||2)}${form.prepTime?` · Prep ${Number(form.prepTime)}m`:''}${form.cookTime?` · Cook ${Number(form.cookTime)}m`:''}</p>${parseTagsInput(form.tags).map(t=>`<span class="pill">#${escapeHtml(t)}</span>`).join(' ')}</section>
     <section class="card"><h3>${ingredients.length} ingredient${ingredients.length===1?'':'s'}</h3>${ingredients.length?`<ul>${ingredients.map(i=>`<li>${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</li>`).join('')}</ul>`:'<p class="hint">No ingredients yet.</p>'}</section>
     <section class="card"><h3>${steps.length} method step${steps.length===1?'':'s'}</h3>${steps.length?`<ol>${steps.map(step=>`<li>${escapeHtml(step)}</li>`).join('')}</ol>`:'<p class="hint">No method steps yet.</p>'}</section>
-    <section class="card"><h3>Media</h3><p>${photos} photo${photos===1?'':'s'} · ${videos} video${videos===1?'':'s'} · ${audioBlob?.size?1:0} voice clip</p></section>`;
+    <section class="card"><h3>Media</h3><p>${photos} photo${photos===1?'':'s'} · ${videos} video${videos===1?'':'s'} · ${audioBlob?.size?'1 voice clip':'No voice clip'}</p></section>`;
   renderCookSaveState();
 }
 function renderCookSaveState(){
@@ -567,7 +628,7 @@ function renderIngredients(){
   el.querySelectorAll('[data-remove]').forEach(b=>b.addEventListener('click',()=>{ingredients.splice(Number(b.dataset.remove),1);renderIngredients();}));
 }
 function renderSteps(){
-  const el=document.querySelector('#stepList');if(!el)return;document.querySelector('#stepCount').textContent=`${steps.length} steps`;
+  const el=document.querySelector('#stepList');if(!el)return;document.querySelector('#stepCount').textContent=`${steps.length} step${steps.length===1?'':'s'}`;
   el.innerHTML=steps.length?steps.map((s,n)=>`<div class="step card"><span class="step-num">${n+1}</span><textarea aria-label="Method step ${n+1}" data-step="${n}">${escapeHtml(s)}</textarea><button class="icon-btn" data-step-remove="${n}" aria-label="Remove method step ${n+1}">×</button></div>`).join(''):'<div class="empty card">Cooking steps from your narration will appear here.</div>';
   el.querySelectorAll('[data-step]').forEach(t=>t.addEventListener('input',e=>steps[Number(e.target.dataset.step)]=e.target.value));
   el.querySelectorAll('[data-step-remove]').forEach(b=>b.addEventListener('click',()=>{steps.splice(Number(b.dataset.stepRemove),1);renderSteps();}));
@@ -615,6 +676,7 @@ async function toggleCapture(){
     const draft=parseCookingSession(transcript);const merged=mergeDraft(ingredients,steps,draft);ingredients=merged.ingredients;steps=merged.steps;
     const metaNote=applyDetectedRecipeMeta(draft);
     captureStatus=(draft.ingredients.length||draft.steps.length?`Draft ready: ${draft.ingredients.length} ingredient${draft.ingredients.length===1?'':'s'} and ${draft.steps.length} step${draft.steps.length===1?'':'s'} detected. Continue to Ingredients/Method to review the draft.`:'Audio saved. Use Transcript recovery in Ingredients/Method if live recognition missed the cooking words.')+metaNote;
+    announce(captureStatus);
     cookEditors.transcriptEditor=null;
     const editor=document.querySelector('#transcriptEditor');if(editor)editor.value=transcript.map(s=>s.text).join(' ');
     renderCookDynamic();
@@ -629,9 +691,9 @@ async function toggleCapture(){
       ChefAnalytics.recipeCaptureStarted();
       renderCookDynamic();
     }
-    catch(e){captureStatus=`Microphone could not start: ${e.message}`;renderCapture();}
+    catch(e){captureStatus=`Microphone could not start: ${e.message}`;renderCapture();announce(captureStatus);}
   }
-  }catch(e){captureStatus=`Capture could not finish: ${e.message||'Please try again.'}`;}
+  }catch(e){captureStatus=`Capture could not finish: ${e.message||'Please try again.'}`;announce(captureStatus);}
   // captureBusy flipping false right here is what unhides the ChefVoice Review
   // card (captureSecondPassTemplate gates on it) -- renderCaptureState() alone
   // never touches #captureSecondPass, only renderCookDynamic() does, so without
@@ -653,7 +715,7 @@ function bindCook(){
   for(const key of Object.keys(cookEditors))document.getElementById(key)?.addEventListener('input',e=>cookEditors[key]=e.target.value);
   document.querySelector('#addIngredient')?.addEventListener('click',()=>{const x=document.querySelector('#manualIngredient');if(x.value.trim()){ingredients.push({...parseIngredient(x.value),confidence:'manual'});x.value='';cookEditors.manualIngredient='';renderIngredients();}});
   document.querySelector('#addStep')?.addEventListener('click',()=>{const x=document.querySelector('#manualStep');if(x.value.trim()){steps.push(x.value.trim());x.value='';cookEditors.manualStep='';renderSteps();}});
-  document.querySelector('#reanalyze')?.addEventListener('click',()=>{const text=document.querySelector('#transcriptEditor').value.trim();if(!text)return;transcript=[{id:crypto.randomUUID(),elapsedMs:0,text}];const d=parseCookingSession(transcript);ingredients=d.ingredients;steps=d.steps;const metaNote=applyDetectedRecipeMeta(d);captureStatus=`Transcript rebuilt: ${ingredients.length} ingredients and ${steps.length} steps.`+metaNote;renderCookDynamic();});
+  document.querySelector('#reanalyze')?.addEventListener('click',()=>{const text=document.querySelector('#transcriptEditor').value.trim();if(!text)return;transcript=[{id:crypto.randomUUID(),elapsedMs:0,text}];const d=parseCookingSession(transcript);ingredients=d.ingredients;steps=d.steps;const metaNote=applyDetectedRecipeMeta(d);captureStatus=`Transcript rebuilt: ${ingredients.length} ingredient${ingredients.length===1?'':'s'} and ${steps.length} step${steps.length===1?'':'s'}.`+metaNote;renderCookDynamic();});
   // Video and per-recipe photo caps are deliberately NOT enforced here. Both limits
   // exist in the tier model on both platforms, but Android raises a paywall only for
   // the Second Pass quota, the cloud-recipe cap and the profile "See Pro" button --
@@ -687,8 +749,8 @@ function bindCook(){
     if(audioUrl)URL.revokeObjectURL(audioUrl);
     // Only a brand-new recipe is a completion. Edits and publishes are not.
     ChefAnalytics.recipeCompleted();
-    captureStatus='Recipe saved on this device.';form.title='';form.description='';form.servings='2';form.tags='';ingredients=[];steps=[];transcript=[];audioBlob=null;audioUrl='';media=[];livePartial='';cookStep=0;form.prepTime='';form.cookTime='';cookEditors.manualIngredient='';cookEditors.manualStep='';cookEditors.transcriptEditor=null;mediaStatus='';draftRecipeId='';captureSecondPass={busy:false,message:'',result:null};nav('recipes');
-    }catch(e){recipeSaveError=`Could not save this recipe: ${e.message||'device storage is unavailable'}. Your draft is still here.`;const error=document.querySelector('#recipeSaveError');if(error){error.hidden=false;error.textContent=recipeSaveError;}}
+    captureStatus='Recipe saved on this device.';announce(captureStatus);form.title='';form.description='';form.servings='2';form.tags='';ingredients=[];steps=[];transcript=[];audioBlob=null;audioUrl='';media=[];livePartial='';cookStep=0;form.prepTime='';form.cookTime='';cookEditors.manualIngredient='';cookEditors.manualStep='';cookEditors.transcriptEditor=null;mediaStatus='';draftRecipeId='';captureSecondPass={busy:false,message:'',result:null};nav('recipes');
+    }catch(e){recipeSaveError=`Could not save this recipe: ${e.message||'device storage is unavailable'}. Your draft is still here.`;announce(recipeSaveError);const error=document.querySelector('#recipeSaveError');if(error){error.hidden=false;error.textContent=recipeSaveError;}}
     finally{savingRecipe=false;renderCookSaveState();}
   });
 }
@@ -696,8 +758,14 @@ function bindCook(){
 function savedCookbookTemplate(){
   if(!cloud.user)return '<div class="section-title"><h2>Saved cookbook</h2></div><div class="empty card">Sign in, then tap ☆ on any Community recipe to keep it here.</div>';
   const saved=cloud.recipes.filter(r=>cloud.bookmarks.has(r.id));
-  const body=saved.length?saved.map(r=>`<article class="card recipe-card"><div><div class="row between"><h3>${escapeHtml(r.title)}</h3><span class="pill">★ Saved</span></div><p>by ${escapeHtml(r.authorName)} · ${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps</p><div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-community-recipe="${escapeHtml(r.id)}">Open</button></div></div></article>`).join(''):`<div class="empty card"><strong>No saved Community recipes yet.</strong><br>Tap ☆ on recipes you want to cook again.${cloud.bookmarks.size?' Your saved recipes are still loading from the Community feed.':''}</div>`;
+  const body=saved.length?saved.map(r=>`<article class="card recipe-card"><div><div class="row between"><h3>${escapeHtml(r.title)}</h3><span class="pill">★ Saved</span></div><p>by ${escapeHtml(r.authorName)} · ${countLabel(r.ingredients?.length,'ingredient')} · ${countLabel(r.steps?.length,'step')}</p><div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-community-recipe="${escapeHtml(r.id)}">Open</button></div></div></article>`).join(''):`<div class="empty card"><strong>No saved Community recipes yet.</strong><br>Tap ☆ on recipes you want to cook again.${cloud.bookmarks.size?' Your saved recipes are still loading from the Community feed.':''}</div>`;
   return `<div class="section-title"><h2>Saved cookbook</h2></div>${body}`;
+}
+
+/** "1 ingredient", "3 steps" -- never "1 ingredients". */
+function countLabel(n,word){
+  const count=Number(n)||0;
+  return `${count} ${word}${count===1?'':'s'}`;
 }
 
 /** The shopping-list shortcut, carrying how much is still to buy so the chef can see it from here. */
@@ -730,7 +798,7 @@ function recipesTemplate(){
   const emptyNote=recipes.length
     ?'<div class="empty card"><strong>Nothing in this collection yet.</strong><br>Open a recipe and tap 🗂 to file it here.</div>'
     :'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>';
-  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${shoppingButtonTemplate()}${collectionsTemplate()}${shown.length?shown.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${r.ingredients?.length||0} ingredients · ${r.steps?.length||0} steps · serves ${r.servings||2}</p>${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${(r.steps||[]).length?`<button class="ghost" data-cook-recipe="${r.id}">🍳 Cook</button>`:''}${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">${r.isPublic||r.authorId?'Delete':'Delete local'}</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):emptyNote}${savedCookbookTemplate()}`;
+  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${shoppingButtonTemplate()}${collectionsTemplate()}${shown.length?shown.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${countLabel(r.ingredients?.length,'ingredient')} · ${countLabel(r.steps?.length,'step')} · serves ${r.servings||2}</p>${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${(r.steps||[]).length?`<button class="ghost" data-cook-recipe="${r.id}">🍳 Cook</button>`:''}${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">${r.isPublic||r.authorId?'Delete':'Delete local'}</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):emptyNote}${savedCookbookTemplate()}`;
 }
 /** The site name to show a chef: the host without a leading "www.". */
 function importedHost(url){
@@ -753,10 +821,11 @@ async function publishLocalRecipe(id,button){
   // saved in this browser, which is what the copy has to say.
   if(!r.isPublic&&cloudRecipesRemaining(isPro(),cloudRecipeCount())<=0){
     if(status)status.textContent=`Free accounts sync ${FreeTierLimits.CLOUD_RECIPES} recipes to the Community. This recipe stays saved in this browser.`;
+    announce(status?.textContent);
     showPaywall(PaywallTrigger.CLOUD_LIMIT);
     return;
   }
-  button.disabled=true;if(status)status.textContent='Uploading recipe media and chef voice…';
+  button.disabled=true;if(status)status.textContent='Uploading recipe media and chef voice…';announce('Publishing. Uploading recipe media and chef voice.');
   try{
     const assets=[];
     for(const item of r.media||[]){const remote=(r.remoteMedia||[]).find(x=>x.id===item.id);assets.push({...item,blob:await loadMediaBlob(r.id,item.id),remoteUrl:remote?.url||'',cloudType:item.type?.startsWith('video/')?'VIDEO':'IMAGE'});}
@@ -764,12 +833,13 @@ async function publishLocalRecipe(id,button){
     const authorName=requireProfileName();
     const result=await cloud.api.publishRecipe(r,authorName,{mediaAssets:assets,voiceBlob});
     Object.assign(r,{isPublic:true,authorId:cloud.user.uid,authorName,updatedAt:result.recipe.updatedAt,remoteMedia:result.recipe.media,voiceClips:result.recipe.voiceClips,likes:result.recipe.likes,commentCount:result.recipe.commentCount});
-    saveRecipes(recipes);if(status)status.textContent=result.warnings.length?`Published. ${result.warnings.join(' ')}`:'Published to ChefVoice Community.';render();
-  }catch(e){if(status)status.textContent=e?.message||'Could not publish recipe.';button.disabled=false;}
+    const published=result.warnings.length?`Published. ${result.warnings.join(' ')}`:'Published to ChefVoice Community.';
+    saveRecipes(recipes);if(status)status.textContent=published;announce(published);render();
+  }catch(e){if(status)status.textContent=e?.message||'Could not publish recipe.';announce(e?.message||'Could not publish recipe.');button.disabled=false;}
 }
 async function unpublishLocalRecipe(id,button){
   const r=recipes.find(x=>x.id===id);if(!r||!cloud.api)return;button.disabled=true;
-  try{await cloud.api.unpublishRecipe(id);r.isPublic=false;r.updatedAt=Date.now();saveRecipes(recipes);render();}catch(e){button.disabled=false;const status=document.querySelector(`[data-recipe-status="${id}"]`);if(status)status.textContent=e?.message||'Could not unpublish.';}
+  try{await cloud.api.unpublishRecipe(id);r.isPublic=false;r.updatedAt=Date.now();saveRecipes(recipes);render();announce('Unpublished. The recipe is private again.');}catch(e){button.disabled=false;const status=document.querySelector(`[data-recipe-status="${id}"]`);if(status)status.textContent=e?.message||'Could not unpublish.';announce(e?.message||'Could not unpublish.');}
 }
 function bindRecipes(){
   const shopping=main.querySelector('#openShopping');
@@ -1174,6 +1244,7 @@ function importTemplate(){
 
 function renderImport(){
   main.innerHTML=importTemplate();
+  if(recipeImport.message)announce(recipeImport.message);
   document.querySelector('#backImport').onclick=()=>{overlayScreen='';recipeImport={busy:false,message:'',notes:[],host:'',url:''};render();};
   const run=document.querySelector('#runImport');
   if(run)run.onclick=async()=>{
@@ -1464,7 +1535,7 @@ function chefProfileTemplate(){
   const initial=(p.displayName||'C').trim().charAt(0).toUpperCase();
   const canModerate=cloud.user&&!self;
   const recipes=openChefRecipes.length
-    ?openChefRecipes.map(r=>`<article class="card"><div class="row between"><strong>${escapeHtml(r.title)}</strong><span class="pill">♥ ${r.likes||0}</span></div><p class="status">${r.ingredients.length} ingredients · ${r.steps.length} steps</p><button class="secondary" data-open-community-recipe="${escapeHtml(r.id)}">Open</button></article>`).join('')
+    ?openChefRecipes.map(r=>`<article class="card"><div class="row between"><strong>${escapeHtml(r.title)}</strong><span class="pill">♥ ${r.likes||0}</span></div><p class="status">${countLabel(r.ingredients.length,'ingredient')} · ${countLabel(r.steps.length,'step')}</p><button class="secondary" data-open-community-recipe="${escapeHtml(r.id)}">Open</button></article>`).join('')
     :'<div class="empty card">No public recipes from this chef yet.</div>';
   const menuId=`profile-${p.uid}`;
   const menu=canModerate?`<button class="kebab" data-menu-toggle="${escapeHtml(menuId)}" aria-label="More options">⋯</button><div class="card-menu" id="menu-${escapeHtml(menuId)}" hidden><button class="menu-item" data-message="${escapeHtml(p.uid)}">✉ Message chef</button><button class="menu-item danger" data-report-user="${escapeHtml(p.uid)}">⚑ Report</button><button class="menu-item danger" data-toggle-block="${escapeHtml(p.uid)}">${blocked?'Unblock chef':'🚫 Block chef'}</button></div>`:'';
@@ -1502,11 +1573,11 @@ function communityPostTemplate(r){
     </div>
     <button class="community-caption" data-open-community-recipe="${id}" aria-label="Open ${escapeHtml(r.title)}">
       <strong class="community-post-title">${escapeHtml(r.title)}</strong>
-      <span class="community-post-meta">${r.ingredients.length} ingredients · 💬 ${formatCount(r.commentCount||0)} · ${relativeTime(r.createdAt)}</span>
+      <span class="community-post-meta">${countLabel(r.ingredients.length,'ingredient')} · 💬 ${formatCount(r.commentCount||0)} · ${relativeTime(r.createdAt)}</span>
       ${r.tags?.length?`<span class="community-post-tags">${r.tags.slice(0,3).map(t=>`#${escapeHtml(t)}`).join(' ')}</span>`:''}
     </button>
     <div class="community-actions" aria-label="Post actions">
-      <button class="action-btn${liked?' active':''}" data-like="${id}" aria-label="${liked?'Unlike':'Like'} · ${formatCount(r.likes||0)} likes" aria-pressed="${liked}"><span aria-hidden="true">${liked?'♥':'♡'} ${formatCount(r.likes||0)}</span></button>
+      <button class="action-btn${liked?' active':''}" data-like="${id}" aria-label="${liked?'Unlike':'Like'} · ${formatCount(shownLikeCount(r))} likes" aria-pressed="${liked}"><span aria-hidden="true">${liked?'♥':'♡'} ${formatCount(shownLikeCount(r))}</span></button>
       <button class="action-btn" data-comments="${id}" aria-label="Comments · ${formatCount(r.commentCount||0)} comments">💬</button>
       <button class="action-btn" data-share="${id}" aria-label="Share">📤</button>
       <button class="action-btn${bookmarked?' saved':''}" data-bookmark="${id}" aria-label="${bookmarked?'Unsave':'Save'}" aria-pressed="${bookmarked}">${bookmarked?'★':'☆'}</button>
@@ -1530,11 +1601,16 @@ function communityTemplate(){
   }):visible;
   const emptyMessage=communityMode==='following'
     ?(!cloud.user?'Sign in to see finished dishes from chefs you follow.':'Follow chefs from Discover to build your Following feed.')
-    :cloud.feedError?`Community could not load: ${escapeHtml(cloud.feedError)}`
+    :cloud.feedError?escapeHtml(cloud.feedError)
     :cloud.state==='connecting'?'Connecting to the real ChefVoice Community…'
     :dishTerm?'No dishes matched that search.'
     :'No public Community recipes were returned.';
   const feed=searched.length?searched.map(communityPostTemplate).join(''):`<div class="empty card">${emptyMessage}</div>`;
+  // Same condition Android shows its "Load more" on: paging applies to the whole Discover
+  // feed, not to a filtered or search view of it.
+  const loadMore=communityMode==='discover'&&!dishTerm&&cloud.feedHasMore
+    ?'<button id="communityLoadMore" class="secondary wide">Load more recipes</button>'
+    :'';
   const blockedNote=hiddenCount?`<div class="notice">${hiddenCount} recipe${hiddenCount===1?'':'s'} from chefs you blocked ${hiddenCount===1?'is':'are'} hidden. Manage blocked chefs from your Profile.</div>`:'';
   const searchResults=chefSearchResults.length
     ?`<div class="section-title"><h2>Chefs</h2><span class="count">${chefSearchResults.length} found</span></div>${chefSearchResults.map(p=>`<article class="card"><div class="row between"><div><strong>${escapeHtml(p.displayName)}</strong><p class="status">${escapeHtml(p.bio||'ChefVoice member')}</p></div><span class="pill">${p.followerCount} follower${p.followerCount===1?'':'s'}</span></div><button class="secondary" data-open-chef="${escapeHtml(p.uid)}">View chef</button></article>`).join('')}`
@@ -1553,9 +1629,43 @@ function communityTemplate(){
       <button id="communityMessages" class="community-banner-action" aria-label="Messages"><span aria-hidden="true">✉</span><small id="communityMessagesBadge" class="community-badge" hidden aria-hidden="true"></small></button>
       <button id="communityNotifications" class="community-banner-action" aria-label="Notifications"><span aria-hidden="true">🔔</span><small id="communityNotificationsBadge" class="community-badge" hidden aria-hidden="true"></small></button>
     </div>
-  </section><div id="safetyStatus" class="hint" role="status"></div>${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${modeToggle}${search}${blockedNote}<div class="community-feed">${feed}</div>`;
+  </section><div id="safetyStatus" class="hint" role="status"></div>${cloud.feedError?`<div class="notice">${escapeHtml(cloud.feedError)}</div>`:''}${modeToggle}${search}${blockedNote}<div class="community-feed">${feed}</div>${loadMore}`;
 }
 function requireCommunitySignIn(){if(cloud.user)return true;nav('profile');return false;}
+
+/** The next page of Discover. Read once, like Android's loadMorePublicRecipes. */
+async function loadMoreCommunity(button){
+  if(!cloud.api||!cloud.feedHasMore||!cloud.feedCursor)return;
+  button.disabled=true;button.textContent='Loading…';
+  try{
+    const page=await cloud.api.loadMorePublicRecipes(cloud.feedCursor);
+    cloud.feedOlder=[...cloud.feedOlder,...page.recipes];
+    cloud.feedCursor=page.cursor;cloud.feedHasMore=page.hasMore;
+    cloud.recipes=mergeFeedPages(cloud.feedHead,cloud.feedOlder,cloud.feedLinked);
+    if(shouldRenderCommunity())render();
+  }catch(e){
+    button.disabled=false;button.textContent='Load more recipes';
+    safetyStatus(e?.message||'Could not load more Community recipes.');
+  }
+}
+
+/**
+ * A shared link opens straight into its recipe. The live feed holds only the newest page,
+ * so a link to anything older is read on its own rather than leaving the chef on the feed
+ * wondering where the dish went.
+ */
+async function openSharedRecipe(id){
+  if(cloud.recipes.some(x=>x.id===id)){openCommunityRecipe(id);return;}
+  if(shouldRenderCommunity())render();
+  try{
+    const recipe=await cloud.api.getPublicRecipe(id);
+    // The chef may have moved on while it loaded; never yank them back.
+    if(!recipe||!shouldRenderCommunity()||openChefProfile)return;
+    cloud.feedLinked=[...cloud.feedLinked.filter(x=>x.id!==id),recipe];
+    cloud.recipes=mergeFeedPages(cloud.feedHead,cloud.feedOlder,cloud.feedLinked);
+    openCommunityRecipe(id);
+  }catch{/* Gone or unlisted: the feed is already showing. */}
+}
 
 /**
  * Pointer-driven horizontal swipe on one row. `onMove` draws the travel and `onEnd` decides
@@ -1615,9 +1725,9 @@ function bindSaveSwipes(){
         const save=shouldSave(state,cloud.bookmarks.has(id));
         settle();
         if(!save||!requireCommunitySignIn())return;
-        // toggleBookmark is a toggle, but shouldSave has already refused the gesture for a
-        // recipe that is saved, so this can only add -- the same guard Android applies.
-        try{await cloud.api.toggleBookmark(id);}
+        // A swipe only ever adds, so it asks for "saved" outright -- even a stale
+        // bookmarks listener cannot turn it into an unsave.
+        try{await cloud.api.setBookmark(id,true);}
         catch(e){safetyStatus(e?.message||'Could not save that recipe.');}
       }
     });
@@ -1630,8 +1740,12 @@ function bindCommunity(){
     if(communityMode===b.dataset.communityMode)return;
     communityMode=b.dataset.communityMode;render();
   });
-  main.querySelectorAll('[data-like]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.toggleLike(b.dataset.like);}catch(e){alert(e?.message||'Could not update like.');b.disabled=false;}});
-  main.querySelectorAll('[data-bookmark]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.toggleBookmark(b.dataset.bookmark);}catch(e){alert(e?.message||'Could not update bookmark.');b.disabled=false;}});
+  // Each button asks for the opposite of what it shows, never for "whatever the server
+  // does not have", so a tap always does what the chef saw.
+  main.querySelectorAll('[data-like]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{notePendingLike(cloud.recipes.find(x=>x.id===b.dataset.like));await cloud.api.setLike(b.dataset.like,!cloud.liked.has(b.dataset.like));}catch(e){alert(e?.message||'Could not update like.');b.disabled=false;}});
+  main.querySelectorAll('[data-bookmark]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.setBookmark(b.dataset.bookmark,!cloud.bookmarks.has(b.dataset.bookmark));}catch(e){alert(e?.message||'Could not update bookmark.');b.disabled=false;}});
+  const loadMore=main.querySelector('#communityLoadMore');
+  if(loadMore)loadMore.onclick=()=>loadMoreCommunity(loadMore);
   main.querySelectorAll('[data-follow]').forEach(b=>b.onclick=async()=>{if(!requireCommunitySignIn())return;b.disabled=true;try{await cloud.api.toggleFollow(b.dataset.follow);}catch(e){alert(e?.message||'Could not update follow.');b.disabled=false;}});
   main.querySelectorAll('[data-comments]').forEach(b=>b.onclick=()=>openCommunityRecipe(b.dataset.comments));
   main.querySelectorAll('[data-share]').forEach(b=>b.onclick=()=>{
@@ -1737,6 +1851,7 @@ function setReplyTarget(target){
 function safetyStatus(message){
   const el=document.querySelector('#safetyStatus');
   if(el)el.textContent=message;
+  announce(message);
 }
 
 /**
@@ -1772,14 +1887,56 @@ async function unblockChef(targetUid){
     render();
   }catch(e){alert(e?.message||'Could not unblock this chef.');}
 }
+// Likes the chef tapped that the backend counter has not caught up with yet, by recipe id:
+// the server count when they tapped and whether they had liked it then. `likes` is
+// maintained by a backend trigger, so it trails the tap by a second or two; the old
+// "count ± 1" guess double-counted a recipe whose count already included the chef.
+const pendingLikes=new Map();
+function shownLikeCount(recipe){
+  const server=Number(recipe?.likes||0);
+  const pending=pendingLikes.get(recipe?.id);
+  if(!pending)return server;
+  if(server!==pending.base){pendingLikes.delete(recipe.id);return server;}
+  return Math.max(0,server+(cloud.liked.has(recipe.id)?1:0)-(pending.wasLiked?1:0));
+}
+function notePendingLike(recipe){
+  if(recipe&&!pendingLikes.has(recipe.id))pendingLikes.set(recipe.id,{base:Number(recipe.likes||0),wasLiked:cloud.liked.has(recipe.id)});
+}
+
+/**
+ * Draws an open Community recipe's like and save buttons from the listeners. The detail
+ * view is deliberately not re-rendered by the feed and social listeners (see
+ * openCommunityRecipeId), so without this its buttons kept whatever state they were drawn
+ * with: a shared link to a saved recipe read "Save" for as long as it stayed open.
+ */
+function patchCommunityDetail(){
+  const likeBtn=document.querySelector('#detailLike');
+  const saveBtn=document.querySelector('#detailSave');
+  if(!openCommunityRecipeId||(!likeBtn&&!saveBtn))return;
+  const recipe=cloud.recipes.find(x=>x.id===openCommunityRecipeId);
+  const liked=cloud.liked.has(openCommunityRecipeId),saved=cloud.bookmarks.has(openCommunityRecipeId);
+  const likes=formatCount(shownLikeCount(recipe));
+  if(likeBtn){
+    likeBtn.classList.toggle('active',liked);
+    likeBtn.innerHTML=`<span aria-hidden="true">${liked?'♥':'♡'} ${likes}</span>`;
+    likeBtn.setAttribute('aria-pressed',String(liked));
+    likeBtn.setAttribute('aria-label',`${liked?'Unlike':'Like'} · ${likes} likes`);
+  }
+  if(saveBtn){
+    saveBtn.classList.toggle('saved',saved);
+    saveBtn.innerHTML=`<span aria-hidden="true">${saved?'★':'☆'}</span>`;
+    saveBtn.setAttribute('aria-pressed',String(saved));
+    saveBtn.setAttribute('aria-label',saved?'Saved to your cookbook':'Save to your cookbook');
+  }
+}
+
 function openCommunityRecipe(id){
   const r=cloud.recipes.find(x=>x.id===id);if(!r)return;
   openCommunityRecipeId=id;
   try{cloud.unsubComments?.();}catch{}
-  const liked=cloud.liked.has(r.id),bookmarked=cloud.bookmarks.has(r.id);
   const mediaHtml=(r.media||[]).map(m=>m.type==='VIDEO'?`<video class="detail-media" controls src="${escapeHtml(m.url)}"></video>`:`<div class="thumb-wrap"><img class="detail-media" data-dbl-like="${r.id}" src="${escapeHtml(m.url)}" alt="Recipe media"></div>`).join('');
   const voiceHtml=(r.voiceClips||[]).map(v=>`<audio class="audio-player" controls src="${escapeHtml(v.url)}"></audio>`).join('');
-  main.innerHTML=`<button id="backCommunity" class="ghost">← Community</button><section class="card"><h1>${escapeHtml(r.title)}</h1><p class="status">by ${escapeHtml(r.authorName)} · serves ${r.servings} · ${relativeTime(r.createdAt)}</p><p>${escapeHtml(r.description||'')}</p><div class="action-row"><button class="action-btn${liked?' active':''}" id="detailLike" aria-label="Like">${liked?'♥':'♡'} ${formatCount(r.likes||0)}</button><button class="action-btn" id="detailShare" aria-label="Share">📤</button><button class="action-btn action-spacer${bookmarked?' saved':''}" id="detailSave" aria-label="${bookmarked?'Saved':'Save'}">${bookmarked?'★':'☆'}</button></div></section>${(r.steps||[]).length?'<button id="cookCommunityRecipe" class="primary wide">🍳 Cook this recipe</button>':''}${mediaHtml?`<section class="card"><div class="detail-media-grid">${mediaHtml}</div></section>`:''}<div class="section-title"><h2>Ingredients</h2></div>${r.ingredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${r.steps.map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}${voiceHtml?`<section class="card"><h2>Chef voice</h2><p class="hint">Original cooking-session audio published by the chef.</p>${voiceHtml}</section>`:''}<div class="section-title"><h2>Comments</h2></div><div id="safetyStatus" class="hint"></div><div id="comments"><div class="empty card">Loading comments…</div></div>${cloud.user?`<section class="card"><div id="replyBanner" class="hint"></div><textarea id="commentText" maxlength="800" placeholder="Add a comment"></textarea><button id="postComment" class="primary wide">Post comment</button><div id="commentStatus" class="hint"></div></section>`:'<div class="notice">Sign in to comment.</div>'}`;
+  main.innerHTML=`<button id="backCommunity" class="ghost">← Community</button><section class="card"><h1>${escapeHtml(r.title)}</h1><p class="status">by ${escapeHtml(r.authorName)} · serves ${r.servings} · ${relativeTime(r.createdAt)}</p><p>${escapeHtml(r.description||'')}</p><div class="action-row"><button class="action-btn" id="detailLike"></button><button class="action-btn" id="detailShare" aria-label="Share"><span aria-hidden="true">📤</span></button><button class="action-btn action-spacer" id="detailSave"></button></div></section>${(r.steps||[]).length?'<button id="cookCommunityRecipe" class="primary wide">🍳 Cook this recipe</button>':''}${mediaHtml?`<section class="card"><div class="detail-media-grid">${mediaHtml}</div></section>`:''}<div class="section-title"><h2>Ingredients</h2></div>${r.ingredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${r.steps.map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}${voiceHtml?`<section class="card"><h2>Chef voice</h2><p class="hint">Original cooking-session audio published by the chef.</p>${voiceHtml}</section>`:''}<div class="section-title"><h2>Comments</h2></div><div id="safetyStatus" class="hint"></div><div id="comments"><div class="empty card">Loading comments…</div></div>${cloud.user?`<section class="card"><div id="replyBanner" class="hint"></div><textarea id="commentText" maxlength="800" placeholder="Add a comment"></textarea><button id="postComment" class="primary wide">Post comment</button><div id="commentStatus" class="hint"></div></section>`:'<div class="notice">Sign in to comment.</div>'}`;
   document.querySelector('#backCommunity').onclick=()=>{try{cloud.unsubComments?.();}catch{}cloud.unsubComments=null;openCommunityRecipeId=null;render();};
   // Cooking from a Community recipe reads it; it never copies it into the chef's own library,
   // which is still the publish/save decision it always was.
@@ -1790,28 +1947,32 @@ function openCommunityRecipe(id){
   // render(): openCommunityRecipeId exists precisely to hold this view steady
   // while the comment thread below stays subscribed, so redrawing the whole
   // view here would defeat that (and blank the thread until its next change).
+  // The listeners keep them current too (patchCommunityDetail).
+  patchCommunityDetail();
   const likeBtn=document.querySelector('#detailLike');
   if(likeBtn)likeBtn.onclick=async()=>{
     if(!requireCommunitySignIn())return;
+    const wanted=!cloud.liked.has(r.id);
     likeBtn.disabled=true;
     try{
-      const nowLiked=await cloud.api.toggleLike(r.id);
-      likeBtn.classList.toggle('active',nowLiked);
-      likeBtn.textContent=`${nowLiked?'♥':'♡'} ${formatCount((r.likes||0)+(nowLiked?1:-1))}`;
+      notePendingLike(cloud.recipes.find(x=>x.id===r.id)||r);
+      await cloud.api.setLike(r.id,wanted);
+      // The listener confirms this a moment later; drawing it now keeps the tap responsive.
+      if(wanted)cloud.liked.add(r.id);else cloud.liked.delete(r.id);
     }catch(e){alert(e?.message||'Could not update like.');}
-    finally{likeBtn.disabled=false;}
+    finally{likeBtn.disabled=false;patchCommunityDetail();}
   };
   const saveBtn=document.querySelector('#detailSave');
   if(saveBtn)saveBtn.onclick=async()=>{
     if(!requireCommunitySignIn())return;
+    const wanted=!cloud.bookmarks.has(r.id);
     saveBtn.disabled=true;
     try{
-      const nowSaved=await cloud.api.toggleBookmark(r.id);
-      saveBtn.classList.toggle('saved',nowSaved);
-      saveBtn.textContent=nowSaved?'★':'☆';
-      saveBtn.setAttribute('aria-label',nowSaved?'Saved':'Save');
+      await cloud.api.setBookmark(r.id,wanted);
+      if(wanted)cloud.bookmarks.add(r.id);else cloud.bookmarks.delete(r.id);
+      announce(wanted?'Saved to your cookbook.':'Removed from your cookbook.');
     }catch(e){alert(e?.message||'Could not update bookmark.');}
-    finally{saveBtn.disabled=false;}
+    finally{saveBtn.disabled=false;patchCommunityDetail();}
   };
   document.querySelector('#detailShare')?.addEventListener('click',()=>shareRecipe(r));
   main.querySelectorAll('[data-dbl-like]').forEach(img=>img.ondblclick=()=>likeFromPhoto(r.id,img.closest('.thumb-wrap')));
@@ -1841,8 +2002,9 @@ function openCommunityRecipe(id){
       await cloud.api.addComment(r.id,box.value,requireProfileName(),replyTarget);
       box.value='';
       status.textContent=replyTarget?'Reply posted.':'Posted.';
+      announce(status.textContent);
       setReplyTarget(null);
-    }catch(e){status.textContent=e?.message||'Could not post comment.';}
+    }catch(e){status.textContent=e?.message||'Could not post comment.';announce(status.textContent);}
     finally{post.disabled=false;}
   };
 }
@@ -1888,9 +2050,9 @@ function profileTemplate(){
     :cloud.user&&cloud.profileLoaded&&!cloud.profile
       ?'<div class="notice">This account has no chef profile yet. Set a display name and save — Community posting, messages and publishing all need it.</div>'
       :'';
-  const firebaseCard=cloud.user?`<section class="card"><div class="quality">Connected to ChefVoice Firebase</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2>${profileNotice}${cloud.user.emailVerified?'':'<div class="notice">Email not verified — required for ChefVoice Review and posting media to Community. Local Cook &amp; Capture works either way.</div>'}<button id="verifyEmail" class="secondary wide" ${cloud.user.emailVerified?'disabled':''}>${cloud.user.emailVerified?'✓ Email verified':'Verify email'}</button><div id="verifyEmailStatus" class="hint">${escapeHtml(cloud.verifyEmailMessage||'')}</div><div class="field" style="margin-top:12px"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><div id="cloudAuthStatus" class="hint">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint"></div></div></section>`;
+  const firebaseCard=cloud.user?`<section class="card"><div class="quality">Connected to ChefVoice Firebase</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2>${profileNotice}${cloud.user.emailVerified?'':'<div class="notice">Email not verified — required for ChefVoice Review and posting media to Community. Local Cook &amp; Capture works either way.</div>'}<button id="verifyEmail" class="secondary wide" ${cloud.user.emailVerified?'disabled':''}>${cloud.user.emailVerified?'✓ Email verified':'Verify email'}</button><div id="verifyEmailStatus" class="hint" role="status">${escapeHtml(cloud.verifyEmailMessage||'')}</div><div class="field" style="margin-top:12px"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint" role="status"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><div id="cloudAuthStatus" class="hint" role="status">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint" role="status"></div></div></section>`;
   const pushCard=cloud.user
-    ?`<section class="card"><h2>Notifications</h2><p class="status">The Activity tab in your Inbox always works. Push also alerts you when ChefVoice is closed.</p><div id="pushStatus" class="hint">${escapeHtml(pushMessage||'')}</div><div class="row wrap" style="margin-top:8px"><button class="secondary" id="enablePush">Turn on push</button><button class="ghost" id="disablePush">Turn off on this device</button></div></section>`
+    ?`<section class="card"><h2>Notifications</h2><p class="status">The Activity tab in your Inbox always works. Push also alerts you when ChefVoice is closed.</p><div id="pushStatus" class="hint" role="status">${escapeHtml(pushMessage||'')}</div><div class="row wrap" style="margin-top:8px"><button class="secondary" id="enablePush">Turn on push</button><button class="ghost" id="disablePush">Turn off on this device</button></div></section>`
     :'';
   const blockedCard=cloud.user
     ?`<section class="card"><h2>Blocked chefs</h2>${cloud.blocked.size
@@ -2016,17 +2178,36 @@ function inboxTemplate(){
   return `<section class="hero" style="--hero:url('../assets/community-hero.webp')"><div class="eyebrow">Inbox</div><h1>Messages and activity.</h1></section>${tabs}<div id="safetyStatus" class="hint"></div>${blockedNote}${list}`;
 }
 
+// Unsent replies, by conversation id. Held outside the DOM so nothing that redraws the
+// Inbox can take a half-written message with it.
+const messageDrafts={};
+
+function threadMarkup(){
+  return threadMessages.length
+    ?threadMessages.map(m=>`<div class="card ${m.senderId===cloud.user.uid?'mine':''}"><div class="row between"><strong>${escapeHtml(m.senderName)}</strong><small>${new Date(m.createdAt).toLocaleString()}</small></div><p class="status">${escapeHtml(m.text)}</p></div>`).join('')
+    :'<div class="empty card">No messages yet. Say hello.</div>';
+}
+
 function conversationTemplate(){
   const c=openConversation;
   const name=otherName(c);
   const blocked=cloud.blocked.has(otherUid(c));
-  const thread=threadMessages.length
-    ?threadMessages.map(m=>`<div class="card ${m.senderId===cloud.user.uid?'mine':''}"><div class="row between"><strong>${escapeHtml(m.senderName)}</strong><small>${new Date(m.createdAt).toLocaleString()}</small></div><p class="status">${escapeHtml(m.text)}</p></div>`).join('')
-    :'<div class="empty card">No messages yet. Say hello.</div>';
   const composer=blocked
     ?'<div class="notice">You blocked this chef. Unblock them to send messages again. Your history stays visible.</div>'
-    :`<section class="card"><textarea id="messageText" maxlength="2000" placeholder="Write a message"></textarea><button id="sendMessage" class="primary wide">Send</button></section>`;
-  return `<button id="backInbox" class="ghost">← Inbox</button><section class="card"><div class="row between"><h1>${escapeHtml(name)}</h1><span class="pill">${blocked?'Blocked':'Direct messages'}</span></div><div class="row wrap"><button class="ghost" data-report-user="${escapeHtml(otherUid(c))}">⚑ Report chef</button><button class="ghost" data-toggle-block="${escapeHtml(otherUid(c))}">${blocked?'Unblock chef':'Block chef'}</button></div></section><div id="safetyStatus" class="hint"></div>${thread}${composer}`;
+    :`<section class="card"><textarea id="messageText" maxlength="2000" aria-label="Message to ${escapeHtml(name)}" placeholder="Write a message">${escapeHtml(messageDrafts[c.id]||'')}</textarea><button id="sendMessage" class="primary wide">Send</button></section>`;
+  return `<button id="backInbox" class="ghost">← Inbox</button><section class="card"><div class="row between"><h1>${escapeHtml(name)}</h1><span class="pill">${blocked?'Blocked':'Direct messages'}</span></div><div class="row wrap"><button class="ghost" data-report-user="${escapeHtml(otherUid(c))}">⚑ Report chef</button><button class="ghost" data-toggle-block="${escapeHtml(otherUid(c))}">${blocked?'Unblock chef':'Block chef'}</button></div></section><div id="safetyStatus" class="hint"></div><div id="messageThread">${threadMarkup()}</div>${composer}`;
+}
+
+/**
+ * Redraws only the open thread's messages. The composer below it -- its text, its focus,
+ * the keyboard -- is left alone, the way the Live room patches its chat. Returns false when
+ * the thread is not on screen, so the caller can fall back to a full render.
+ */
+function patchConversationThread(){
+  const el=document.querySelector('#messageThread');
+  if(!el)return false;
+  el.innerHTML=threadMarkup();
+  return true;
 }
 
 /**
@@ -2103,17 +2284,40 @@ function bindInbox(){
     else await blockChef(uid);
   });
   const send=document.querySelector('#sendMessage');
+  const box=document.querySelector('#messageText');
+  if(box)box.oninput=()=>{if(openConversation)messageDrafts[openConversation.id]=box.value;};
   if(send)send.onclick=async()=>{
-    const box=document.querySelector('#messageText');
     const text=box.value;
     if(!text.trim())return;
+    const conversation=openConversation;
     send.disabled=true;
     try{
-      await cloud.api.sendDirectMessage(openConversation,text,requireProfileName());
-      box.value='';
+      await cloud.api.sendDirectMessage(conversation,text,requireProfileName());
+      // Clear only what was sent; anything typed while it was sending stays.
+      if(box.value===text){box.value='';delete messageDrafts[conversation.id];}
     }catch(e){safetyStatus(e?.message||'Could not send the message.');}
     finally{send.disabled=false;}
   };
+}
+
+/**
+ * Marks the open conversation read up to its own updatedAt, which is the time unread is
+ * measured against -- the same value Android's markConversationReadIfNeeded writes. Taking
+ * the newest message's createdAt instead meant a conversation with no messages could never
+ * be marked read at all. Recorded locally first, so the badge clears at once and the next
+ * snapshot does not write again; put back if the write fails.
+ */
+function markOpenConversationRead(){
+  if(!openConversation||!cloud.api)return;
+  const current=cloud.conversations.find(x=>x.id===openConversation.id)||openConversation;
+  if(!conversationUnread(current))return;
+  const previous=cloud.messageReads[current.id]||0;
+  cloud.messageReads={...cloud.messageReads,[current.id]:current.updatedAt};
+  updateInboxBadge();
+  cloud.api.markConversationRead(current.id,current.updatedAt).catch(()=>{
+    cloud.messageReads={...cloud.messageReads,[current.id]:previous};
+    updateInboxBadge();
+  });
 }
 
 function openConversationView(conversationId){
@@ -2124,13 +2328,11 @@ function openConversationView(conversationId){
   threadMessages=[];
   cloud.unsubThread=cloud.api.observeDirectMessages(c.id,items=>{
     threadMessages=items;
-    // Mark read against the newest message actually seen, not "now" -- the rule
-    // keeps the marker monotonic and this keeps it honest.
-    const newest=items.reduce((max,m)=>Math.max(max,m.createdAt),0);
-    if(newest>(cloud.messageReads[c.id]||0))cloud.api.markConversationRead(c.id,newest).catch(()=>{});
-    if(currentTab==='inbox')render();
+    markOpenConversationRead();
+    if(currentTab==='inbox'&&!patchConversationThread())render();
   },err=>safetyStatus(err?.message||'Conversation could not be loaded.'));
   render();
+  markOpenConversationRead();
   pushViewState();
 }
 function closeConversationView(){
@@ -2248,11 +2450,16 @@ function liveHostTemplate(){
     </section>`;
 }
 
-function openLiveHostSetup(){
+async function openLiveHostSetup(){
   if(!requireCommunitySignIn())return;
   if(capturing){liveHostingNotice='Finish your cooking recording before opening the Live camera.';render();return;}
   let name;
   try{name=requireProfileName();}catch(error){liveHostingNotice=error.message;render();return;}
+  let LiveHostController;
+  try{({LiveHostController}=await loadLiveControllers());}
+  catch{liveHostingNotice='Live could not load. Check your connection and try again.';if(shouldRenderLiveList())render();return;}
+  // The chef may have left the Live tab, or opened a room, while that loaded.
+  if(!shouldRenderLiveList())return;
   closeLiveRoom();
   liveHostingNotice='';
   main.innerHTML=liveHostTemplate();
@@ -2403,20 +2610,26 @@ function bindLiveRoomChrome(session){
 
 function startLiveViewer(session){
   if(!cloud.user){liveViewerStatus='Sign in to watch Live.';const el=document.querySelector('#liveViewerStatus');if(el)el.textContent=liveViewerStatus;return;}
-  liveViewerController=new LiveViewerController({
-    sessionId:session.id,
-    viewerUid:cloud.user.uid,
-    onStatus:message=>{liveViewerStatus=message;const el=document.querySelector('#liveViewerStatus');if(el)el.textContent=message;},
-    onTrack:stream=>{const video=document.querySelector('#liveVideo');if(video){video.srcObject=stream;video.play().catch(()=>{});}}
-  });
-  const controller=liveViewerController;
-  // A rapid leave/rejoin can reuse the same session/uid document path. Finish
-  // the previous cleanup before creating the replacement peer on that path.
-  liveViewerShutdown.then(()=>{
-    if(liveViewerController===controller)return controller.start();
-  }).catch(error=>{
-    if(liveViewerController===controller)controller.status(`Could not join Live: ${error?.message||'unknown error'}`);
-  });
+  const viewerUid=cloud.user.uid;
+  const setStatus=message=>{liveViewerStatus=message;const el=document.querySelector('#liveViewerStatus');if(el)el.textContent=message;};
+  loadLiveControllers().then(({LiveViewerController})=>{
+    // The chef left, switched rooms or accounts, or the Live ended while this loaded.
+    if(openLiveSession?.id!==session.id||openLiveSession.status==='ENDED'||liveViewerController||cloud.user?.uid!==viewerUid)return;
+    liveViewerController=new LiveViewerController({
+      sessionId:session.id,
+      viewerUid,
+      onStatus:setStatus,
+      onTrack:stream=>{const video=document.querySelector('#liveVideo');if(video){video.srcObject=stream;video.play().catch(()=>{});}}
+    });
+    const controller=liveViewerController;
+    // A rapid leave/rejoin can reuse the same session/uid document path. Finish
+    // the previous cleanup before creating the replacement peer on that path.
+    liveViewerShutdown.then(()=>{
+      if(liveViewerController===controller)return controller.start();
+    }).catch(error=>{
+      if(liveViewerController===controller)controller.status(`Could not join Live: ${error?.message||'unknown error'}`);
+    });
+  },()=>{if(openLiveSession?.id===session.id)setStatus('Live could not load. Check your connection and try again.');});
 }
 
 function openLiveRoom(session){

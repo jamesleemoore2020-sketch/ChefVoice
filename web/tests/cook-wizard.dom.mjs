@@ -25,7 +25,7 @@ let stored=[];let mediaWrites=0;let voiceWrites=0;let saveFails=false;let starts
 let transcribeCalls=[];let transcribeResult=null;let paywallCalls=[];let secondPassAcceptedCalls=[];
 Object.assign(w,{parseIngredient,parseCookingSession,mergeDraft,parseTagsInput,structuredClone,
   applySuggestion,applyMethodSuggestion,fromCloudTranscript,secondPassRemaining,secondPassMonthlyLimit,recordSecondPassUse,PaywallTrigger,SecondPassLimits,
-  isPro:()=>false,safetyStatus:()=>{},showPaywall:t=>{paywallCalls.push(t)},
+  isPro:()=>false,safetyStatus:()=>{},showPaywall:t=>{paywallCalls.push(t)},announce:()=>{},
   // Collections and the shopping list are read at module load; the Cook wizard never touches
   // either, so an empty stand-in for each is all this slice of app.js needs.
   loadCollections:()=>[],loadShoppingItems:()=>[],

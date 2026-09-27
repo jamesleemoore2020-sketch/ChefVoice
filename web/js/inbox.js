@@ -22,6 +22,11 @@ export function otherParticipantName(conversation, uid) {
  */
 export function conversationUnread(conversation, uid, readMap = {}) {
   if (!conversation || !uid) return false;
+  // A conversation opened with "Message chef" and never written in has no last message and
+  // no sender. It used to read as unread to both chefs, and opening it cleared nothing
+  // because there was no message to take a read time from, so the badge never went away.
+  // Android's DirectConversation.isUnreadFor has had this guard all along.
+  if (!String(conversation.lastMessage || '').trim() || !String(conversation.lastSenderId || '').trim()) return false;
   if (conversation.lastSenderId === uid) return false;
   return Number(conversation.updatedAt || 0) > Number(readMap[conversation.id] || 0);
 }

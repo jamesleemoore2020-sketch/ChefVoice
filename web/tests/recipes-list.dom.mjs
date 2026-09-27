@@ -31,6 +31,7 @@ Object.assign(w,{
     }
   }},
   saveRecipes:x=>{stored=x;},
+  announce:()=>{},
   deleteAudioBlob:async id=>{deletedAudioIds.push(id);},
   deleteRecipeMedia:async r=>{deletedMediaRecipeIds.push(r?.id);},
   confirm:()=>{confirmCalls++;return confirmResult;},

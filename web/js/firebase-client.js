@@ -142,12 +142,40 @@ export function observeProEntitlement(uid,onChange){
   );
 }
 
+// Same page size as Android's communityPageSize.
+export const COMMUNITY_PAGE_SIZE=60;
+
+/**
+ * The newest public recipes, live, exactly as Android asks for them
+ * (FirebaseSocialRepository.listenPublicRecipes). Without the orderBy Firestore returned
+ * the first 100 by document id -- random UUIDs -- so once there were more than 100 public
+ * recipes a newly published dish appeared on the web only if its id happened to sort
+ * early. The composite index this needs (isPublic ASC, updatedAt DESC) is the one Android's
+ * feed already runs on, so no index deploy is involved.
+ */
 export function observePublicRecipes(onChange,onError=()=>{}){
-  const q=query(collection(db,'recipes'),where('isPublic','==',true),limit(100));
+  const q=query(collection(db,'recipes'),where('isPublic','==',true),orderBy('updatedAt','desc'),limit(COMMUNITY_PAGE_SIZE));
   return onSnapshot(q,snapshot=>{
-    const recipes=snapshot.docs.map(d=>normalizeCloudRecipe(d.id,d.data())).sort((a,b)=>b.updatedAt-a.updatedAt);
-    onChange(recipes);
+    const recipes=snapshot.docs.map(d=>normalizeCloudRecipe(d.id,d.data()));
+    onChange(recipes,{cursor:snapshot.docs[snapshot.docs.length-1]||null,hasMore:snapshot.size===COMMUNITY_PAGE_SIZE});
   },onError);
+}
+
+/** The next page after `cursor`, read once. Older recipes change rarely, so they are not kept live. */
+export async function loadMorePublicRecipes(cursor){
+  const snap=await getDocs(query(collection(db,'recipes'),where('isPublic','==',true),orderBy('updatedAt','desc'),startAfter(cursor),limit(COMMUNITY_PAGE_SIZE)));
+  return {
+    recipes:snap.docs.map(d=>normalizeCloudRecipe(d.id,d.data())),
+    cursor:snap.docs[snap.docs.length-1]||cursor,
+    hasMore:snap.size===COMMUNITY_PAGE_SIZE
+  };
+}
+
+/** One public recipe by id, for a shared link to a dish older than the first page. */
+export async function getPublicRecipe(recipeId){
+  const snap=await getDoc(doc(db,'recipes',recipeId));
+  if(!snap.exists()||snap.data()?.isPublic!==true)return null;
+  return normalizeCloudRecipe(snap.id,snap.data());
 }
 
 export function observeUserRecipeIds(uid,kind,onChange,onError=()=>{}){
@@ -231,13 +259,17 @@ export async function unpublishRecipe(recipeId){
   await updateDoc(doc(db,'recipes',recipeId),{isPublic:false,updatedAt:Date.now(),authorId:user.uid});
 }
 
-export async function toggleLike(recipeId){
+/**
+ * Sets whether this chef likes a recipe. The caller says which state it wants rather
+ * than flipping whatever the server holds: the old toggle inverted server state, so a
+ * button drawn from a stale snapshot did the opposite of what it showed. Asking for the
+ * state that already holds writes nothing.
+ */
+export async function setLike(recipeId,liked){
   assertWrites();
   const user=requireUser('Sign in to like recipes.');
-  const recipeRef=doc(db,'recipes',recipeId);
   const likeRef=doc(db,'recipes',recipeId,'likes',user.uid);
   const userLikeRef=doc(db,'users',user.uid,'likes',recipeId);
-  let likedAfter=false;
   // The `likes` counter on the recipe is backend-maintained. A client write to it
   // is rejected outright: validOwnerRecipeUpdate requires likes to be unchanged and
   // only lets the author update the recipe at all, so touching the counter here
@@ -246,21 +278,27 @@ export async function toggleLike(recipeId){
   // together through getAfter().
   await runTransaction(db,async tx=>{
     const likeSnap=await tx.get(likeRef);
-    if(likeSnap.exists()){
-      likedAfter=false;tx.delete(likeRef);tx.delete(userLikeRef);
-    }else{
-      likedAfter=true;const data={createdAt:Date.now()};tx.set(likeRef,data);tx.set(userLikeRef,data);
+    if(liked&&!likeSnap.exists()){
+      const data={createdAt:Date.now()};tx.set(likeRef,data);tx.set(userLikeRef,data);
+    }else if(!liked&&likeSnap.exists()){
+      tx.delete(likeRef);tx.delete(userLikeRef);
     }
   });
-  return likedAfter;
+  return liked;
 }
 
-export async function toggleBookmark(recipeId){
+/**
+ * Sets whether a Community recipe is in this chef's saved cookbook. Same reasoning as
+ * setLike: a toggle read the server and inverted it, so tapping a "Save" button drawn
+ * before the bookmarks listener caught up removed the bookmark it promised to add.
+ */
+export async function setBookmark(recipeId,saved){
   assertWrites();
   const user=requireUser('Sign in to save Community recipes.');
   const target=doc(db,'users',user.uid,'bookmarks',recipeId);
-  const existing=await getDoc(target);
-  if(existing.exists()){await deleteDoc(target);return false;}
+  if(!saved){await deleteDoc(target);return false;}
+  // The rule allows create and never update, so an existing bookmark is left as it is.
+  if((await getDoc(target)).exists())return true;
   // firestore.rules requires recipeId in the document and equal to the path id, exactly as
   // Android writes it. Without it every Save from the PWA was rejected as "Missing or
   // insufficient permissions".

@@ -82,3 +82,14 @@ test('blocked authors are filtered out of any list', () => {
   const conversations = [{ other: 'blocked' }, { other: 'ok' }];
   assert.deepEqual(withoutBlocked(conversations, new Set(['blocked']), 'other').map((c) => c.other), ['ok']);
 });
+
+test('a conversation nobody has written in is never unread', () => {
+  // "Message chef" creates the conversation with no message. It used to badge both chefs
+  // for good: unread by the updatedAt rule, and opening it marked nothing read.
+  const empty = conversation({ lastMessage: '', lastSenderId: '' });
+  assert.equal(conversationUnread(empty, ME, {}), false);
+  assert.equal(conversationUnread(empty, THEM, {}), false);
+  assert.equal(conversationUnread(conversation({ lastMessage: '   ' }), ME, {}), false);
+  assert.equal(conversationUnread(conversation({ lastSenderId: '' }), ME, {}), false);
+  assert.deepEqual(unreadCounts([empty], [], ME, {}), { messages: 0, activity: 0 });
+});

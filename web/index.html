@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f06423">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -16,10 +16,13 @@
   <div id="app" class="app-shell">
     <header class="topbar">
       <div class="brand"><img src="assets/chefvoice-icon.png" alt=""><div><strong>ChefVoice</strong><small>Cook it. Say it. Save it.</small></div></div>
-      <span id="modeBadge" class="badge">PWA 0.2 · Firebase</span>
+      <span id="modeBadge" class="badge">PWA 0.5.18</span>
     </header>
 
-    <main id="main" class="main" aria-live="polite"></main>
+    <main id="main" class="main"></main>
+    <!-- Status announcements for screen readers. <main> is rebuilt on every render, so a
+         live region there re-read the whole screen, every transcript line included. -->
+    <div id="srStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
     <nav class="bottom-nav" aria-label="Primary">
       <button data-tab="cook" class="active"><span>🎙</span>Cook</button>

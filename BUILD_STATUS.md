@@ -1,3 +1,26 @@
+# Current handoff — 2026-09-26 (audit implementation, part 1: CI, browser tests, PWA 0.5.18)
+
+Implementing the 2026-09-26 full audit (a chat-side session's report, kept out of the repo on
+purpose: the repo is public and the report lists open security findings). Findings are cited
+by number (F1-F31). This entry grows as the work lands; each item says whether it is deployed.
+
+- **CI (F1).** `.github/workflows/gates.yml` runs every gate on every push and pull request:
+  PWA tests + the jsdom DOM checks, the notification/billing/import gates, the Android unit
+  tests (the Kotlin half of the golden corpus) and the rules emulator suite. The notification
+  gates had been red since 0.11.7 on stale version pins; they are unpinned and globbed.
+- **PWA 0.5.18 — audit fix bundle (F3, F4, F6, F7, F8, F9, part of F27). Not deployed yet.**
+  The service worker caches only the app's own files (never Firestore's message channel) and a
+  first visit is enough to reopen offline; `<main>` is no longer a live region and the screen
+  can be zoomed; Like/Save set the state they show and the open recipe follows the listeners;
+  a half-written DM survives incoming messages; an empty conversation no longer badges forever;
+  the feed is newest-first with Load more. **Plus a bug the audit missed:** the Live
+  controllers pulled the Firebase SDK into app.js's static import graph, so with the CDN
+  unreachable the whole app failed to start. See `PWA_AUDIT_FIX_BUNDLE_0.5.18.md`.
+  PWA 256 / 0, jsdom 74 / 35 / 46. Android, parser, rules, Functions, Live, App Check untouched.
+- **Browser smoke tests (F2, web half).** `e2e/`: Playwright in headless Chromium with every
+  non-local request refused, 9 / 0. Found the start-up bug above, the always-visible Inbox
+  badge and the sideways-scrolling offline Community tab on its first run.
+
 # Current handoff — 2026-09-18 (recipe import on the PWA, and the publish policy)
 
 PWA 0.5.17 + **Android 78 / 0.11.17** + a **new Cloud Functions codebase, `chefvoice-import`**.

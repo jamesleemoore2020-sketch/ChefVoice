@@ -34,6 +34,7 @@ Object.assign(w,{
   conversationUnread:()=>false,otherUid:()=>'',otherName:()=>'',
   openConversation:null,threadMessages:[],
   safetyStatus:m=>{statuses.push(m);},
+  announce:()=>{},updateInboxBadge:()=>{},
   render:()=>{w.renderInbox();},
   reportTarget:()=>{},blockChef:()=>{},unblockChef:()=>{},requireProfileName:()=>'Chef',
   openConversationView:()=>{},
@@ -157,6 +158,55 @@ w.cloud.notifications=[];
 run('renderInbox();');
 check(get('.empty').textContent.includes('No activity yet'),'an empty tab says so');
 check(!document.querySelector('[data-swipe-dismiss]'),'and has no rows to swipe');
+
+// ---- An open conversation --------------------------------------------------------------
+// Every incoming message and read marker used to re-render the whole Inbox, taking a
+// half-written reply with it. The thread now patches itself and the composer is left alone.
+const inbox=await import('../js/inbox.js');
+const reads=[];let sent=[];
+Object.assign(w.cloud.api,{
+  markConversationRead:async(id,at)=>{reads.push([id,at]);},
+  sendDirectMessage:async(c,text)=>{sent.push(text);}
+});
+Object.assign(w,{
+  conversationUnread:c=>inbox.conversationUnread(c,'me',w.cloud.messageReads),
+  otherName:()=>'Them',otherUid:()=>'them'
+});
+const convo={id:'me--them',participantIds:['me','them'],participantNames:{me:'Me',them:'Them'},lastMessage:'hi',lastSenderId:'them',createdAt:1000,updatedAt:5000};
+w.cloud.conversations=[convo];w.cloud.messageReads={};
+w.openConversation=convo;
+w.threadMessages=[{id:'m1',senderId:'them',senderName:'Them',text:'hi',createdAt:4000}];
+run('renderInbox();');
+const composer=get('#messageText');
+composer.value='half a repl';composer.dispatchEvent(new w.Event('input'));
+w.threadMessages=[...w.threadMessages,{id:'m2',senderId:'them',senderName:'Them',text:'you there?',createdAt:5000}];
+check(run('patchConversationThread()')===true,'an open thread patches in place');
+check(document.querySelector('#messageText')===composer,'the composer is the same element after a new message arrives');
+check(composer.value==='half a repl','and still holds what the chef was typing');
+check(get('#messageThread').textContent.includes('you there?'),'the new message is shown');
+run('renderInbox();');
+check(get('#messageText').value==='half a repl','a full redraw brings the unsent draft back');
+
+// Read markers use the conversation's own updatedAt, exactly as Android does.
+run('markOpenConversationRead();');
+check(reads.length===1&&reads[0][0]==='me--them'&&reads[0][1]===5000,'an unread conversation is marked read at its updatedAt');
+run('markOpenConversationRead();');
+check(reads.length===1,'and is not written again once read');
+const untouched={...convo,id:'me--new',lastMessage:'',lastSenderId:'',updatedAt:9000};
+w.cloud.conversations=[untouched];w.openConversation=untouched;
+run('markOpenConversationRead();');
+check(reads.length===1,'a conversation nobody has written in needs no read marker');
+
+// Sending clears the composer, and the sent text does not come back as a draft.
+w.cloud.conversations=[convo];w.openConversation=convo;
+run('renderInbox();');
+get('#sendMessage').click();
+await tick();
+check(sent.join()==='half a repl','the draft is what gets sent');
+check(get('#messageText').value==='','sending clears the composer');
+run('renderInbox();');
+check(get('#messageText').value==='','and a redraw does not restore what was already sent');
+w.openConversation=null;
 
 console.log(`${checks} Inbox activity DOM checks passed.`);
 dom.window.close();
