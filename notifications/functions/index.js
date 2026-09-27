@@ -26,6 +26,14 @@ const STORAGE_MONTHLY_BYTES = 20 * 1024 * 1024 * 1024;
 const STORAGE_DAILY_OPERATIONS = 120;
 const STORAGE_MONTHLY_OPERATIONS = 1200;
 
+// Every subcollection under users/{uid} that account deletion clears: all eleven that
+// firestore.rules declares, plus the two backend-only ones the upload permits use.
+const ACCOUNT_SUBCOLLECTIONS = Object.freeze([
+  "bookmarks", "blocks", "messageReads", "notifications", "notificationDevices", "settings",
+  "following", "followers", "likes", "entitlements", "purchases",
+  "privateOperations", "storageUploadPermits",
+]);
+
 // Moderation state lives in top-level collections. The previous layout used
 // "moderation/userRestrictions/{uid}" (three segments) and "moderation/events"
 // (two segments); neither is a legal Firestore reference, so every call that
@@ -900,10 +908,23 @@ exports.deleteChefVoiceAccount = onCall(
     }
 
     // Known private user subcollections. Reports are retained for safety/moderation,
-    // but raw account UID references are pseudonymized below.
-    for (const name of ["bookmarks", "blocks", "messageReads", "notifications", "notificationDevices", "settings", "privateOperations", "storageUploadPermits", "following", "followers", "likes"]) {
+    // but raw account UID references are pseudonymized below. Deleting users/{uid} does
+    // not delete its subcollections, so every one declared under users/{uid} in
+    // firestore.rules must be listed here (notifications/account-deletion-completeness
+    // .test.js checks it); entitlements and purchases were missing and outlived the account.
+    for (const name of ACCOUNT_SUBCOLLECTIONS) {
       await deleteCollectionFully(db.collection(`users/${uid}/${name}`));
     }
+
+    // Billing and usage records kept outside users/{uid}. importUsage is the recipe
+    // importer's daily counter. purchaseTokens rows only tell Play notifications which
+    // account verified a purchase; an account that later restores the same purchase writes
+    // its own. The Play subscription itself is not cancelled by this -- that is the chef's
+    // to do in Google Play, which the deletion page says.
+    await Promise.all([
+      db.doc(`importUsage/${uid}`).delete(),
+      deleteQueryInBatches(db.collection("purchaseTokens").where("uid", "==", uid)),
+    ]);
 
     await Promise.all([
       deleteStoragePrefix(`profiles/${uid}/`),
@@ -923,6 +944,19 @@ exports.deleteChefVoiceAccount = onCall(
     }
     const targeting = await db.collection("reports").where("targetUid", "==", uid).get();
     for (const doc of targeting.docs) {
+      const data = doc.data() || {};
+      await doc.ref.update({
+        targetUid: pseudonym,
+        targetId: cleanText(data.targetId, 180) === uid ? pseudonym : cleanText(data.targetId, 180),
+        contextId: cleanText(data.contextId, 180).split(uid).join(pseudonym),
+        targetAccountDeletedAt: Date.now(),
+      });
+    }
+
+    // The moderation audit trail is kept for the same reason reports are, and with the
+    // same pseudonym, so the two still line up.
+    const moderated = await db.collection(MODERATION_EVENTS_COLLECTION).where("targetUid", "==", uid).get();
+    for (const doc of moderated.docs) {
       const data = doc.data() || {};
       await doc.ref.update({
         targetUid: pseudonym,
