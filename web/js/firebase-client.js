@@ -14,7 +14,7 @@ const [appSdk,authSdk,firestoreSdk,storageSdk]=await Promise.all([
 ]);
 
 const {initializeApp}=appSdk;
-const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,sendEmailVerification,reload,getIdToken}=authSdk;
+const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,sendEmailVerification,sendPasswordResetEmail,reload,getIdToken}=authSdk;
 const {
   getFirestore,collection,doc,increment,limit,limitToLast,onSnapshot,query,setDoc,where,orderBy,
   getDoc,getDocs,deleteDoc,updateDoc,runTransaction,writeBatch,documentId,startAfter
@@ -51,6 +51,17 @@ export async function signUp(email,password,displayName){
   return user;
 }
 export async function signOutUser(){await signOut(auth);}
+
+/**
+ * Sends Firebase's password-reset email, as Android's FirebaseSocialRepository.sendPasswordReset
+ * does. The PWA had no way back in for a chef who forgot their password -- and since the
+ * account-deletion page needs a sign-in, no way to delete that account either.
+ */
+export async function sendPasswordReset(email){
+  const clean=String(email||'').trim();
+  if(!clean)throw new Error('Enter your email first.');
+  await sendPasswordResetEmail(auth,clean);
+}
 
 // Ported from FirebaseSocialRepository.kt's sendVerificationEmail/
 // refreshEmailVerification -- the PWA had the emailVerified *enforcement*

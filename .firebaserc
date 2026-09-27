@@ -10,6 +10,9 @@
         ],
         "delete-account": [
           "chefvoice-delete-account"
+        ],
+        "legal": [
+          "chefvoice-d7fec-legal"
         ]
       }
     }

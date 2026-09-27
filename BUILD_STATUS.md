@@ -1,5 +1,8 @@
 # Current handoff — 2026-09-26 (audit implementation, part 1: CI, browser tests, PWA 0.5.18)
 
+Tests at this point: PWA 265 / 0, jsdom 74 / 35 / 46, e2e 10 / 0, Android 209 / 0,
+notification gates 78 / 0, rules emulator 53 / 0, import 98 / 0, billing 17 / 0.
+
 Implementing the 2026-09-26 full audit (a chat-side session's report, kept out of the repo on
 purpose: the repo is public and the report lists open security findings). Findings are cited
 by number (F1-F31). This entry grows as the work lands; each item says whether it is deployed.
@@ -16,9 +19,25 @@ by number (F1-F31). This entry grows as the work lands; each item says whether i
   the feed is newest-first with Load more. **Plus a bug the audit missed:** the Live
   controllers pulled the Firebase SDK into app.js's static import graph, so with the CDN
   unreachable the whole app failed to start. See `PWA_AUDIT_FIX_BUNDLE_0.5.18.md`.
-  PWA 256 / 0, jsdom 74 / 35 / 46. Android, parser, rules, Functions, Live, App Check untouched.
+  Android, parser, rules, Functions, Live, App Check untouched by the bundle itself.
+- **Account deletion and privacy (F15, F16, F24). Not deployed yet.** Deletion now also
+  removes entitlement and purchase records, the import counter and the account's
+  `purchaseTokens` rows, and pseudonymizes moderation events like reports
+  (`chefvoice-notifications`). The deletion page gains "Forgot your password?", says the whole
+  conversation goes (the other chef's messages too), what is kept, and that a Play
+  subscription is not cancelled. The PWA gains a password reset and links to the policy and the
+  deletion page; Android links the policy in-app, which Play requires. The privacy policy
+  (`legal/privacy.html`, until now only in one uncommitted checkout) is in the repo with its
+  pinned `legal` Hosting target, and corrected: it said there was no Google Play Billing flow.
+  **Deploy order matters:** `DEPLOY_NOTIFICATIONS.cmd` first, then
+  `DEPLOY_ACCOUNT_DELETION_PAGE.cmd` and `DEPLOY_LEGAL_PAGE.cmd`, because the page and policy
+  promise the purchase-record deletion that only the new function does. **James should read
+  the policy diff before it goes live** — it is legal text.
+- **Threads show their newest items (F5), both platforms, and no advertising ID on Android
+  (F13).** Android is 0.11.18 / 79, not built for release: see `ANDROID_AUDIT_FIXES_0.11.18.md`,
+  which also lists the Play Console answers that must change with that upload.
 - **Browser smoke tests (F2, web half).** `e2e/`: Playwright in headless Chromium with every
-  non-local request refused, 9 / 0. Found the start-up bug above, the always-visible Inbox
+  non-local request refused, 10 / 0. Found the start-up bug above, the always-visible Inbox
   badge and the sideways-scrolling offline Community tab on its first run.
 
 # Current handoff — 2026-09-18 (recipe import on the PWA, and the publish policy)

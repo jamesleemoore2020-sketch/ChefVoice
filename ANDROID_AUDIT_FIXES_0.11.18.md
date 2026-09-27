@@ -41,3 +41,11 @@ the release manifest: no AD_ID or AdServices permission remains (only an optiona
    entitlement is stored). Both are collected, linked to the account and not shared. Videos are
    deleted with the account today; purchase records only once the F15 change to
    `chefvoice-notifications` is deployed, so answer "deleted on request" after that deploy.
+
+## F16 — the privacy policy is reachable in the app
+
+Play requires the privacy policy to be linked inside the app, not only from the listing, and
+Android linked it nowhere. Profile now ends with a **Privacy policy** link (signed in or not)
+and the app's real version, replacing a stale "v0.10.1 adds optional prep/cook time metadata…"
+note that had been shown to every chef since 0.10.1. The Account & privacy card also says that
+deleting the account does not cancel a Google Play subscription.

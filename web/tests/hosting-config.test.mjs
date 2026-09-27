@@ -16,27 +16,32 @@ const readRoot = (name) => readFileSync(new URL(name, root), 'utf8');
 const firebaseJson = JSON.parse(readRoot('firebase.json'));
 const firebaserc = JSON.parse(readRoot('.firebaserc'));
 
-test('hosting declares both sites as separate pinned targets', () => {
+test('hosting declares every site as a separate pinned target', () => {
   assert.ok(Array.isArray(firebaseJson.hosting), 'hosting must be an array for multi-site deploys');
   const targets = firebaseJson.hosting.map((h) => h.target);
-  assert.deepEqual([...targets].sort(), ['delete-account', 'pwa']);
+  // The privacy policy site (legal) was live but existed only as uncommitted edits in one
+  // checkout, so a deploy from any other checkout silently dropped its target.
+  assert.deepEqual([...targets].sort(), ['delete-account', 'legal', 'pwa']);
   // Every entry must be pinned. An untargeted entry is the destructive case.
   assert.ok(firebaseJson.hosting.every((h) => typeof h.target === 'string' && h.target));
 });
 
 test('each hosting target serves its own directory', () => {
-  const pwa = firebaseJson.hosting.find((h) => h.target === 'pwa');
-  const deleteAccount = firebaseJson.hosting.find((h) => h.target === 'delete-account');
-  assert.equal(pwa.public, 'web');
-  assert.equal(deleteAccount.public, 'hosting');
-  assert.notEqual(pwa.public, deleteAccount.public, 'the two sites must never share a public directory');
+  const dir = (target) => firebaseJson.hosting.find((h) => h.target === target).public;
+  assert.equal(dir('pwa'), 'web');
+  assert.equal(dir('delete-account'), 'hosting');
+  assert.equal(dir('legal'), 'legal');
+  const dirs = firebaseJson.hosting.map((h) => h.public);
+  assert.equal(new Set(dirs).size, dirs.length, 'no two sites may share a public directory');
+  assert.ok(existsSync(new URL('legal/privacy.html', root)), 'the privacy policy the Play listing links to must be in the repo');
 });
 
-test('.firebaserc maps both targets to distinct sites', () => {
+test('.firebaserc maps every target to its own site', () => {
   const hosting = firebaserc.targets?.['chefvoice-d7fec']?.hosting;
   assert.ok(hosting, '.firebaserc must declare hosting targets or --only hosting:<target> cannot resolve');
   assert.deepEqual(hosting.pwa, ['chefvoice-d7fec']);
   assert.deepEqual(hosting['delete-account'], ['chefvoice-delete-account']);
+  assert.deepEqual(hosting.legal, ['chefvoice-d7fec-legal']);
   assert.equal(firebaserc.projects?.default, 'chefvoice-d7fec');
 });
 
@@ -84,11 +89,14 @@ test('the app shell and its JS/CSS are served no-cache', () => {
 test('deploy scripts stay pinned to their own target', () => {
   const pwaScript = readRoot('DEPLOY_PWA.cmd');
   const deleteScript = readRoot('DEPLOY_ACCOUNT_DELETION_PAGE.cmd');
+  const legalScript = readRoot('DEPLOY_LEGAL_PAGE.cmd');
   assert.match(pwaScript, /--only hosting:pwa/);
   assert.match(deleteScript, /--only hosting:delete-account/);
-  // An unpinned `--only hosting` would deploy both sites at once.
+  assert.match(legalScript, /--only hosting:legal/);
+  // An unpinned `--only hosting` would deploy every site at once.
   assert.ok(!/--only hosting\s+--project/.test(pwaScript), 'DEPLOY_PWA must not deploy hosting unpinned');
   assert.ok(!/--only hosting\s+--project/.test(deleteScript), 'deletion page must not deploy hosting unpinned');
+  assert.ok(!/--only hosting\s+--project/.test(legalScript), 'the privacy policy must not deploy hosting unpinned');
 });
 
 test('the superseded standalone PWA hosting config is gone', () => {

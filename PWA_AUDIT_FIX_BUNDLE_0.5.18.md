@@ -105,6 +105,18 @@ Direct messages, recipe comments and Live chat listened with `orderBy('createdAt
 thread silently stopped showing anything new. All three use `limitToLast(n)` now. Android had
 the same bug and the same fix lands in 0.11.18; `thread-windows.test.mjs` checks both.
 
+## F16 — account, privacy and a way back in
+
+- **Forgot password?** on the sign-in card. The PWA had no reset at all, and because the
+  deletion page needs a sign-in, a web chef who forgot their password could not delete their
+  account either. The reply is the same whether or not the address has an account.
+- Profile has an **Account & privacy** card linking the privacy policy and the deletion page;
+  the PWA linked neither, so a web-only chef had no route to deleting their account.
+- Profile no longer shows engineering copy: the "Protected voice behavior" card ("ASR homophone
+  repair" read as the automatic correction ChefVoice promises not to do), "Connected to
+  ChefVoice Firebase", and Recipes' "Publishing now uses the verified ChefVoice Firebase
+  project" are gone or in plain words (part of F27).
+
 ## Smaller fixes
 
 - **The Inbox badge always showed**, reading "0" for anyone with nothing unread:

@@ -166,7 +166,7 @@ function startUserObservers(user){
 async function initCloud(){
   try{
     const api=await import('./firebase-client.js');
-    cloud.api=api;cloud.state='ready';cloud.message='Connected to ChefVoice Firebase. Community writes are enabled.';
+    cloud.api=api;cloud.state='ready';cloud.message='Connected to ChefVoice Community.';
     cloud.unsubAuth=api.observeAuth(user=>{
       if(liveHostController&&user?.uid!==liveHostController.hostUid)closeLiveRoom();
       if(cloud.user&&!user)purgeCrossOriginCaches();
@@ -793,7 +793,7 @@ function collectionsTemplate(){
 }
 
 function recipesTemplate(){
-  const cloudNote=cloud.user?`<div class="quality">Signed in as ${escapeHtml(cloud.user.email||'ChefVoice member')}. Publishing now uses the verified ChefVoice Firebase project.</div>`:`<div class="notice">Local recipes stay private on this device. Sign in from Profile to publish to Community.</div>`;
+  const cloudNote=cloud.user?`<div class="quality">Signed in as ${escapeHtml(cloud.user.email||'ChefVoice member')}. Recipes stay private on this device until you publish one.</div>`:`<div class="notice">Local recipes stay private on this device. Sign in from Profile to publish to Community.</div>`;
   const shown=recipesInCollection(recipes,collections,activeCollectionId);
   const emptyNote=recipes.length
     ?'<div class="empty card"><strong>Nothing in this collection yet.</strong><br>Open a recipe and tap 🗂 to file it here.</div>'
@@ -2042,6 +2042,14 @@ function membershipTemplate(){
   return `<section class="card"><div class="row between"><strong>${escapeHtml(title)}</strong>${pro?'<span class="pill">Pro</span>':'<span class="pill">Free</span>'}</div><p class="status">${escapeHtml(body)}</p>${pro?'':'<button id="showPaywall" class="secondary wide">What is Pro?</button>'}</section>`;
 }
 
+// Where a chef finds the privacy policy and the account-deletion page -- the PWA had
+// neither, so a web-only chef had no route to deleting their account (audit F16).
+const PRIVACY_POLICY_URL='https://chefvoice-d7fec-legal.web.app/privacy.html';
+const ACCOUNT_DELETION_URL='https://chefvoice-delete-account.web.app/';
+function accountPrivacyTemplate(){
+  return `<section class="card"><h2>Account &amp; privacy</h2><p class="status">How ChefVoice handles your recipes, your voice and your account.</p><div class="row wrap"><a class="secondary link-btn grow" href="${PRIVACY_POLICY_URL}" target="_blank" rel="noopener">Privacy policy</a><a class="danger link-btn grow" href="${ACCOUNT_DELETION_URL}" target="_blank" rel="noopener">Delete my account</a></div><p class="hint">Deleting your account removes your cloud account and Community data; recipes kept only in this browser stay here. It does not cancel a Google Play subscription.</p></section>`;
+}
+
 function profileTemplate(){
   const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
   const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
@@ -2050,7 +2058,7 @@ function profileTemplate(){
     :cloud.user&&cloud.profileLoaded&&!cloud.profile
       ?'<div class="notice">This account has no chef profile yet. Set a display name and save — Community posting, messages and publishing all need it.</div>'
       :'';
-  const firebaseCard=cloud.user?`<section class="card"><div class="quality">Connected to ChefVoice Firebase</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2>${profileNotice}${cloud.user.emailVerified?'':'<div class="notice">Email not verified — required for ChefVoice Review and posting media to Community. Local Cook &amp; Capture works either way.</div>'}<button id="verifyEmail" class="secondary wide" ${cloud.user.emailVerified?'disabled':''}>${cloud.user.emailVerified?'✓ Email verified':'Verify email'}</button><div id="verifyEmailStatus" class="hint" role="status">${escapeHtml(cloud.verifyEmailMessage||'')}</div><div class="field" style="margin-top:12px"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint" role="status"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><div id="cloudAuthStatus" class="hint" role="status">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint" role="status"></div></div></section>`;
+  const firebaseCard=cloud.user?`<section class="card"><div class="quality">Signed in to ChefVoice</div><h2>${escapeHtml(cloud.user.email||'ChefVoice member')}</h2>${profileNotice}${cloud.user.emailVerified?'':'<div class="notice">Email not verified — required for ChefVoice Review and posting media to Community. Local Cook &amp; Capture works either way.</div>'}<button id="verifyEmail" class="secondary wide" ${cloud.user.emailVerified?'disabled':''}>${cloud.user.emailVerified?'✓ Email verified':'Verify email'}</button><div id="verifyEmailStatus" class="hint" role="status">${escapeHtml(cloud.verifyEmailMessage||'')}</div><div class="field" style="margin-top:12px"><label>Chef display name</label><input id="profileName" value="${escapeHtml(cloud.profile?.displayName||chefName())}"></div><div class="field"><label>Bio</label><textarea id="profileBio" placeholder="Tell the Community about your cooking">${escapeHtml(cloud.profile?.bio||'')}</textarea></div><button id="saveProfile" class="primary wide">Save profile</button><div id="profileStatus" class="hint" role="status"></div><button id="cloudSignOut" class="secondary wide" style="margin-top:10px">Sign out</button></section>`:`<section class="card"><h2>Sign in</h2><p class="status">Use the same Email/Password ChefVoice account you use on Android.</p><div class="stack"><div class="field"><label>Email</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="chef@example.com"></div><div class="field"><label>Password</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password"></div><button id="cloudSignIn" class="primary wide">Sign in</button><button id="cloudForgot" class="ghost wide" type="button">Forgot password?</button><div id="cloudAuthStatus" class="hint" role="status">${escapeHtml(cloud.message)}</div></div></section><section class="card"><h2>Create account</h2><div class="stack"><div class="field"><label>Chef name</label><input id="newChefName" placeholder="Chef Jamie"></div><div class="field"><label>Email</label><input id="newEmail" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="newPassword" type="password" autocomplete="new-password" minlength="6"></div><button id="cloudSignUp" class="secondary wide">Create ChefVoice account</button><div id="cloudSignUpStatus" class="hint" role="status"></div></div></section>`;
   const pushCard=cloud.user
     ?`<section class="card"><h2>Notifications</h2><p class="status">The Activity tab in your Inbox always works. Push also alerts you when ChefVoice is closed.</p><div id="pushStatus" class="hint" role="status">${escapeHtml(pushMessage||'')}</div><div class="row wrap" style="margin-top:8px"><button class="secondary" id="enablePush">Turn on push</button><button class="ghost" id="disablePush">Turn off on this device</button></div></section>`
     :'';
@@ -2059,7 +2067,7 @@ function profileTemplate(){
         ?`<p class="hint">Their recipes and comments are hidden from you, and neither of you can interact with the other.</p>${[...cloud.blocked].map(uid=>`<div class="row between" style="margin-top:8px"><code>${escapeHtml(uid.slice(0,12))}…</code><button class="secondary" data-unblock="${escapeHtml(uid)}">Unblock</button></div>`).join('')}`
         :'<p class="status">You have not blocked anyone. You can block a chef from any recipe in Community.</p>'}</section>`
     :'';
-  return `<div id="paywall"></div>${membershipTemplate()}${firebaseCard}${pushCard}${blockedCard}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Voice → ingredient parsing remains local and protected from Firebase changes.</div></section><section class="card"><h2>Protected voice behavior</h2><p class="status">Measurement-preserving recognition, spoken fractions, ASR homophone repair, cross-segment ingredient recovery, shared measurements, and spoken corrections remain unchanged by the Community integration.</p></section>`;
+  return `<div id="paywall"></div>${membershipTemplate()}${firebaseCard}${pushCard}${blockedCard}${accountPrivacyTemplate()}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Cooking capture and recipe building work on this device, even offline.</div></section>`;
 }
 function bindProfile(){
   document.querySelector('#showPaywall')?.addEventListener('click',()=>showPaywall(PaywallTrigger.PROFILE));
@@ -2084,6 +2092,20 @@ function bindProfile(){
       setPushMessage('Push is off for this browser. The Activity tab still works.');
     }catch(e){setPushMessage(e?.message||'Push could not be turned off.');}
     finally{disable.disabled=false;}
+  };
+  // The same answer whether or not an account uses the address, so this cannot be used to
+  // find out who has a ChefVoice account.
+  const forgot=document.querySelector('#cloudForgot');
+  if(forgot)forgot.onclick=async()=>{
+    const status=document.querySelector('#cloudAuthStatus');
+    if(!cloud.api){status.textContent='ChefVoice has not finished loading. Try again in a moment.';return;}
+    const email=document.querySelector('#cloudEmail').value.trim();
+    if(!email){status.textContent='Enter your email above, then tap Forgot password.';return;}
+    const sent=`If a ChefVoice account uses ${email}, a password-reset link is on its way. Set a new password from that email, then sign in here.`;
+    forgot.disabled=true;
+    try{await cloud.api.sendPasswordReset(email);status.textContent=sent;}
+    catch(e){status.textContent=e?.code==='auth/invalid-email'?'That email address does not look right.':e?.code==='auth/too-many-requests'?'Too many attempts. Wait a few minutes and try again.':sent;}
+    finally{forgot.disabled=false;}
   };
   const signIn=document.querySelector('#cloudSignIn');if(signIn)signIn.onclick=async()=>{const status=document.querySelector('#cloudAuthStatus');if(!cloud.api){status.textContent='Firebase has not finished loading.';return;}const email=document.querySelector('#cloudEmail').value.trim();const password=document.querySelector('#cloudPassword').value;if(!email||!password){status.textContent='Enter your email and password.';return;}signIn.disabled=true;status.textContent='Signing in…';try{await cloud.api.signIn(email,password);status.textContent='Signed in.';}catch(e){status.textContent=e?.message||'Could not sign in.';signIn.disabled=false;}};
   const signUp=document.querySelector('#cloudSignUp');if(signUp)signUp.onclick=async()=>{const status=document.querySelector('#cloudSignUpStatus');const name=document.querySelector('#newChefName').value.trim();const email=document.querySelector('#newEmail').value.trim();const password=document.querySelector('#newPassword').value;if(!email||password.length<6){status.textContent='Enter an email and a password of at least 6 characters.';return;}signUp.disabled=true;status.textContent='Creating account…';try{await cloud.api.signUp(email,password,name);status.textContent='Account created.';}catch(e){status.textContent=e?.message||'Could not create account.';signUp.disabled=false;}};

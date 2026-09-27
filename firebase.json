@@ -96,6 +96,15 @@
           "destination": "/index.html"
         }
       ]
+    },
+    {
+      "target": "legal",
+      "public": "legal",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ]
     }
   ]
 }

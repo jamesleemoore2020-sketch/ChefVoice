@@ -145,3 +145,5 @@ details[open]>summary::after{content:" ▴"}
 /* Long unbroken text -- an email address, a pasted link, an error -- wraps instead of pushing
    the page sideways on a phone. */
 .notice,.empty,.status,.hint,.card h1,.card h2,.card h3{overflow-wrap:anywhere}
+/* A link styled as a button (Account & privacy). */
+a.link-btn{display:inline-flex;align-items:center;justify-content:center;text-align:center;text-decoration:none}

@@ -100,3 +100,14 @@ test('nothing on any tab scrolls sideways on a phone', async ({ page }) => {
     expect(overflow, `${name} scrolls sideways by ${overflow}px`).toBeLessThanOrEqual(0);
   }
 });
+
+test('Profile links the privacy policy and the deletion page, and offers a password reset', async ({ page }) => {
+  await page.goto('/?tab=profile');
+  await expect(page.getByRole('link', { name: 'Privacy policy' })).toHaveAttribute('href', 'https://chefvoice-d7fec-legal.web.app/privacy.html');
+  await expect(page.getByRole('link', { name: 'Delete my account' })).toHaveAttribute('href', 'https://chefvoice-delete-account.web.app/');
+  const forgot = page.getByRole('button', { name: 'Forgot password?' });
+  await expect(forgot).toBeVisible();
+  // Asking without an email explains what to do instead of failing silently.
+  await forgot.click();
+  await expect(page.locator('#cloudAuthStatus')).not.toBeEmpty();
+});

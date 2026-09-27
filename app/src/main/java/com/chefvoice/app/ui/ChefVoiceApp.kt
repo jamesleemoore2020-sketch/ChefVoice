@@ -96,6 +96,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -4080,6 +4081,7 @@ private fun ProfileScreen(
                             OutlinedButton(enabled = !accountBusy, onClick = { onResetPassword(signedInEmail) }, modifier = Modifier.weight(1f)) { Text("Reset password") }
                         }
                         Text("Deleting your cloud account removes owned Community data but intentionally keeps local Cook & Capture recipes on this phone.", style = MaterialTheme.typography.bodySmall)
+                        Text("It does not cancel a Google Play subscription. If you pay for ChefVoice Pro, cancel it in Google Play too.", style = MaterialTheme.typography.bodySmall)
                         if (needsReauthForDelete) {
                             Text("For security, enter your password to confirm this is you before we permanently delete your account.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                             OutlinedTextField(
@@ -4182,9 +4184,24 @@ private fun ProfileScreen(
 
         if (cloudMessage.isNotBlank()) item { Text(cloudMessage, style = MaterialTheme.typography.bodySmall) }
         if (isSignedIn) item { OutlinedButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) { Text("Sign out") } }
-        item { Text("v0.10.1 adds optional prep/cook time metadata and keeps saved photo/video editing, parser behavior, and Second Pass review intact.", style = MaterialTheme.typography.bodySmall) }
+        item {
+            // Play requires the privacy policy to be reachable inside the app, signed in or
+            // not, as well as from the listing. This used to be a stale "v0.10.1 adds..."
+            // release note.
+            val uriHandler = LocalUriHandler.current
+            val context = LocalContext.current
+            val version = remember {
+                runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                TextButton(onClick = { runCatching { uriHandler.openUri(PRIVACY_POLICY_URL) } }) { Text("Privacy policy") }
+                if (version.isNotBlank()) Text("ChefVoice $version", style = MaterialTheme.typography.bodySmall)
+            }
+        }
     }
 }
+
+private const val PRIVACY_POLICY_URL = "https://chefvoice-d7fec-legal.web.app/privacy.html"
 
 @Composable
 private fun ChefProfileSummaryCard(profile: ChefProfile) {

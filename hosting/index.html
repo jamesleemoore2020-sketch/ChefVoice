@@ -125,23 +125,35 @@
   <div class="card">
     <h2>What this removes</h2>
     <ul class="what-goes">
-      <li>Your ChefVoice profile, published recipes, photos and video</li>
-      <li>Likes, follows, bookmarks, comments and messages you sent</li>
-      <li>Any Live broadcasting history tied to your account</li>
+      <li>Your ChefVoice profile, published recipes, photos, video and chef-voice audio</li>
+      <li>Your likes, follows, saved recipes, comments and replies</li>
+      <li>Your direct-message conversations &mdash; the whole conversation, including the other chef&rsquo;s messages in it</li>
+      <li>Your Pro membership record and ChefVoice&rsquo;s copy of your purchase history</li>
+      <li>Any Live broadcasts you hosted</li>
       <li>Your sign-in itself &mdash; you will be signed out everywhere</li>
     </ul>
-    <p class="fine-print">This does not affect cooking recipes saved only on your phone &mdash; those live locally on-device and are unrelated to this cloud account.</p>
+  </div>
+
+  <div class="card">
+    <h2>What is kept</h2>
+    <ul class="what-goes">
+      <li>Safety reports you made, or that were made about you or your content, and the record of any moderation action. Your account is replaced in them by an anonymous identifier.</li>
+      <li>Recipes saved only on your phone or in your browser. They were never in your cloud account; uninstall the app or clear this site&rsquo;s data to remove them.</li>
+    </ul>
+    <p class="fine-print"><strong>This does not cancel a Google Play subscription.</strong> If you pay for ChefVoice Pro, cancel it in Google Play &rarr; Payments &amp; subscriptions as well, or it will keep renewing. Google keeps its own record of your purchases.</p>
+    <p class="fine-print">More detail is in the <a href="https://chefvoice-d7fec-legal.web.app/privacy.html">ChefVoice Privacy Policy</a>.</p>
   </div>
 
   <div class="card" id="signInCard">
     <h2>Step 1 &middot; Sign in</h2>
-    <p class="fine-print">Use the same email and password you use to sign in to ChefVoice on Android.</p>
+    <p class="fine-print">Use the same email and password you use to sign in to ChefVoice, in the app or on the web.</p>
     <label for="email">Email</label>
     <input id="email" type="email" autocomplete="username" />
     <label for="password">Password</label>
     <input id="password" type="password" autocomplete="current-password" />
     <button class="primary" id="signInBtn">Sign in</button>
-    <div class="msg" id="signInMsg" hidden></div>
+    <button class="secondary" id="forgotBtn" type="button">Forgot your password?</button>
+    <div class="msg" id="signInMsg" role="status" hidden></div>
   </div>
 
   <div class="card" id="deleteCard" hidden>
@@ -154,7 +166,7 @@
       <button class="danger" id="deleteBtn" disabled>Permanently delete my account</button>
     </div>
     <button class="secondary" id="signOutBtn">Sign out instead</button>
-    <div class="msg" id="deleteMsg" hidden></div>
+    <div class="msg" id="deleteMsg" role="status" hidden></div>
   </div>
 
   <div class="card" id="reauthCard" hidden>
@@ -164,12 +176,13 @@
     <input id="reauthPassword" type="password" autocomplete="current-password" />
     <button class="danger" id="reauthDeleteBtn">Confirm delete</button>
     <button class="secondary" id="reauthCancelBtn">Cancel</button>
-    <div class="msg" id="reauthMsg" hidden></div>
+    <div class="msg" id="reauthMsg" role="status" hidden></div>
   </div>
 
   <div class="card" id="doneCard" hidden>
     <h2>Account deleted</h2>
-    <div class="msg success" id="doneMsg">Your ChefVoice cloud account has been permanently deleted.</div>
+    <div class="msg success" id="doneMsg" role="status">Your ChefVoice cloud account has been permanently deleted.</div>
+    <p class="fine-print">If you paid for ChefVoice Pro through Google Play, cancel the subscription in Google Play &rarr; Payments &amp; subscriptions too.</p>
   </div>
 </main>
 
@@ -240,6 +253,30 @@
         setBusy(btn, false);
         btn.textContent = "Sign in";
       });
+  });
+
+  // Without this, a chef who had forgotten their password had no way to delete their
+  // account at all: the page needs a sign-in, and nothing here could reset one. The
+  // answer is the same whether or not an account uses the address, so the page cannot be
+  // used to find out who has a ChefVoice account.
+  document.getElementById("forgotBtn").addEventListener("click", function () {
+    var email = document.getElementById("email").value.trim();
+    hideMsg(signInMsg);
+    if (!email) {
+      showMsg(signInMsg, "Enter your email above first, then tap “Forgot your password?”.", "error");
+      return;
+    }
+    var btn = document.getElementById("forgotBtn");
+    btn.disabled = true;
+    var sent = "If a ChefVoice account uses " + email + ", a password-reset link is on its way. Set a new password from that email, then come back here to sign in.";
+    auth.sendPasswordResetEmail(email)
+      .then(function () { showMsg(signInMsg, sent, "success"); })
+      .catch(function (error) {
+        if (error && error.code === "auth/invalid-email") showMsg(signInMsg, "That email address doesn’t look right.", "error");
+        else if (error && error.code === "auth/too-many-requests") showMsg(signInMsg, "Too many attempts. Wait a few minutes and try again.", "error");
+        else showMsg(signInMsg, sent, "success");
+      })
+      .finally(function () { btn.disabled = false; });
   });
 
   document.getElementById("signOutBtn").addEventListener("click", function () {
