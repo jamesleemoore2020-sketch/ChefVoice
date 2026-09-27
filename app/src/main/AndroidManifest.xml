@@ -70,9 +70,13 @@
             </intent-filter>
         </service>
 
+        <!-- uiMode: since 0.11.19 the app follows the phone's dark theme, and the phone can
+             switch on a schedule. Without it Android recreated the activity on every switch,
+             which disposed the Create screen and stopped a cooking capture mid-session.
+             Compose re-themes in place from the new configuration instead. -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

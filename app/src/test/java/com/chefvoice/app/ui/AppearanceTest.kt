@@ -1,6 +1,14 @@
 package com.chefvoice.app.ui
 
+import android.content.ComponentName
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -13,7 +21,9 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import com.chefvoice.app.MainActivity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -89,6 +99,45 @@ class AppearanceTest {
         assertEquals(true, darkScreens.last())
         openAppearance()
         option("Blackout").assertIsSelected()
+    }
+
+    @Test
+    fun aDarkThemeSwitchWhileOpenRethemesWithoutRebuildingTheApp() {
+        // What the activity receives once it handles uiMode itself: a new configuration, in
+        // place. Rebuilding ChefAppState would mean the activity had been recreated, and with
+        // it the Create screen, which stops a cooking capture.
+        val light = Configuration(compose.activity.resources.configuration)
+        val night = Configuration(light).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or Configuration.UI_MODE_NIGHT_YES
+        }
+        var configuration by mutableStateOf(light)
+        var statesBuilt = 0
+        compose.setContent {
+            CompositionLocalProvider(LocalConfiguration provides configuration) {
+                ChefVoiceApp(
+                    onDarkThemeChange = { darkScreens += it },
+                    createAppState = { context -> statesBuilt++; ChefAppState(context) }
+                )
+            }
+        }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        assertEquals(false, darkScreens.last())
+
+        compose.runOnUiThread { configuration = night }
+        compose.waitForIdle()
+        assertEquals(true, darkScreens.last())
+        assertEquals(1, statesBuilt)
+    }
+
+    @Test
+    fun mainActivityHandlesADarkThemeSwitchItself() {
+        // Read from the merged manifest without starting MainActivity, whose App Check
+        // bootstrap would initialise Firebase against production.
+        val info = compose.activity.packageManager.getActivityInfo(
+            ComponentName(compose.activity, MainActivity::class.java), 0
+        )
+        assertTrue("MainActivity must declare uiMode in configChanges", (info.configChanges and ActivityInfo.CONFIG_UI_MODE) != 0)
     }
 
     @Test
