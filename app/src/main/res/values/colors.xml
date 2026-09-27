@@ -3,4 +3,11 @@
     <!-- Sampled from the ChefVoice brand artwork so the adaptive icon's background
          layer matches the logo instead of the launcher's default white plate. -->
     <color name="ic_launcher_background">#160E0B</color>
+
+    <!-- The light theme's background. Kept equal to MainActivity.LIGHT_WINDOW;
+         values-night/colors.xml holds Blackout's. -->
+    <color name="chefvoice_window">#FFFBF8</color>
+
+    <!-- BrandCoverScreen's black, which the app always opens on. -->
+    <color name="chefvoice_brand_cover">#000000</color>
 </resources>

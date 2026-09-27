@@ -22,6 +22,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
@@ -66,9 +67,13 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -187,31 +192,110 @@ private val AndroidPrimaryTabs = listOf(Tab.LIBRARY, Tab.CREATE, Tab.COMMUNITY, 
 
 private enum class SpeechTarget { INGREDIENT, STEP }
 
+// Both schemes name every role Material 3 components read. They used to set ten, and the
+// rest fell back to Material's baseline purples: lavender-grey cards, nav bar and selected-tab
+// pill in light, purple-grey ones in Blackout. The added roles are the neutral and container
+// tones Material's own tonal-spot algorithm derives from the brand orange #F06423; Blackout's
+// containers sit a few tones darker, to stay near-black.
+//
+// primary is #B03E0E, not the brand #F06423 (audit F20). White on #F06423 is 3.2:1, below
+// the 4.5:1 a button label needs. The audit's #C94A12 fixes white labels (4.7:1), but
+// Material also draws every TextButton label in primary, on tinted cards and dialogs, where
+// #C94A12 is 3.6-3.8:1. #B03E0E is at least 4.58:1 on every surface here and 5.9:1 under
+// white. The brand orange stays in the artwork.
 private val ChefVoiceColorScheme = lightColorScheme(
-    primary = Color(0xFFF06423),
+    primary = Color(0xFFB03E0E),
     onPrimary = Color.White,
+    primaryContainer = Color(0xFFFFDBCE),
+    onPrimaryContainer = Color(0xFF71361D),
+    inversePrimary = Color(0xFFFFB599),
     secondary = Color(0xFFD93A22),
     onSecondary = Color.White,
+    secondaryContainer = Color(0xFFFFDBCE),
+    onSecondaryContainer = Color(0xFF5D4035),
+    tertiary = Color(0xFF685E30),
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFF1E3A8),
+    onTertiaryContainer = Color(0xFF4F471A),
     background = Color(0xFFFFFBF8),
     onBackground = Color(0xFF241A16),
     surface = Color(0xFFFFFBF8),
     onSurface = Color(0xFF241A16),
     surfaceVariant = Color(0xFFFFEEE6),
-    onSurfaceVariant = Color(0xFF665049)
+    onSurfaceVariant = Color(0xFF665049),
+    surfaceTint = Color(0xFFB03E0E),
+    inverseSurface = Color(0xFF392E2A),
+    inverseOnSurface = Color(0xFFFFEDE7),
+    outline = Color(0xFF85736D),
+    outlineVariant = Color(0xFFD8C2BB),
+    surfaceBright = Color(0xFFFFFBF8),
+    surfaceDim = Color(0xFFE8D6D1),
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color(0xFFFFF1EC),
+    surfaceContainer = Color(0xFFFCEAE4),
+    surfaceContainerHigh = Color(0xFFF6E4DF),
+    surfaceContainerHighest = Color(0xFFF1DFD9)
 )
 
 private val ChefVoiceBlackoutColorScheme = darkColorScheme(
     primary = Color(0xFFFF8A50),
     onPrimary = Color(0xFF1C0D06),
+    primaryContainer = Color(0xFF71361D),
+    onPrimaryContainer = Color(0xFFFFDBCE),
+    inversePrimary = Color(0xFFB03E0E),
     secondary = Color(0xFFFF7665),
     onSecondary = Color(0xFF240704),
+    secondaryContainer = Color(0xFF5D4035),
+    onSecondaryContainer = Color(0xFFFFDBCE),
+    tertiary = Color(0xFFD4C78E),
+    onTertiary = Color(0xFF383006),
+    tertiaryContainer = Color(0xFF4F471A),
+    onTertiaryContainer = Color(0xFFF1E3A8),
     background = Color(0xFF050505),
     onBackground = Color(0xFFF7F1ED),
     surface = Color(0xFF0D0D0D),
     onSurface = Color(0xFFF7F1ED),
     surfaceVariant = Color(0xFF1A1411),
-    onSurfaceVariant = Color(0xFFD0C1BA)
+    onSurfaceVariant = Color(0xFFD0C1BA),
+    surfaceTint = Color(0xFFFF8A50),
+    inverseSurface = Color(0xFFF1DFD9),
+    inverseOnSurface = Color(0xFF392E2A),
+    outline = Color(0xFFA08D86),
+    outlineVariant = Color(0xFF40322D),
+    surfaceBright = Color(0xFF322824),
+    surfaceDim = Color(0xFF050505),
+    surfaceContainerLowest = Color.Black,
+    surfaceContainerLow = Color(0xFF140C09),
+    surfaceContainer = Color(0xFF1A110E),
+    surfaceContainerHigh = Color(0xFF231A16),
+    surfaceContainerHighest = Color(0xFF2B221E)
 )
+
+/** What the chef picked in Profile. SYSTEM follows the phone's dark theme (audit F26). */
+internal enum class Appearance(val label: String) {
+    SYSTEM("Auto"),
+    LIGHT("Light"),
+    BLACKOUT("Blackout")
+}
+
+private const val APPEARANCE_PREF = "appearance"
+
+/**
+ * Before 0.11.19 the only setting was a "blackout" flag, written when the chef pressed the
+ * switch. A stored flag is therefore a choice they made and is kept; a chef who never
+ * touched it follows the phone.
+ */
+private fun loadAppearance(prefs: android.content.SharedPreferences): Appearance =
+    when (prefs.getString(APPEARANCE_PREF, null)) {
+        "system" -> Appearance.SYSTEM
+        "light" -> Appearance.LIGHT
+        "blackout" -> Appearance.BLACKOUT
+        else -> when {
+            !prefs.contains("blackout") -> Appearance.SYSTEM
+            prefs.getBoolean("blackout", false) -> Appearance.BLACKOUT
+            else -> Appearance.LIGHT
+        }
+    }
 
 @Composable
 fun ChefVoiceApp(
@@ -219,6 +303,9 @@ fun ChefVoiceApp(
     onLiveNotificationConsumed: (String) -> Unit = {},
     pendingNotificationEventId: String = "",
     onNotificationEventConsumed: (String) -> Unit = {},
+    // True while the screen is dark (Blackout, or the black brand cover), so MainActivity can
+    // match the system bar icons and window background to the app rather than to the phone.
+    onDarkThemeChange: (Boolean) -> Unit = {},
     // Tests hand in a factory so they can keep the state and feed it (an unread alert, a
     // shopping line). MainActivity never passes one.
     createAppState: (android.content.Context) -> ChefAppState = ::ChefAppState
@@ -226,7 +313,13 @@ fun ChefVoiceApp(
     val context = LocalContext.current
     val appState = remember { createAppState(context.applicationContext) }
     val appearancePrefs = remember { context.applicationContext.getSharedPreferences("chefvoice_appearance", 0) }
-    var blackoutMode by remember { mutableStateOf(appearancePrefs.getBoolean("blackout", false)) }
+    var appearance by remember { mutableStateOf(loadAppearance(appearancePrefs)) }
+    val systemDark = isSystemInDarkTheme()
+    val blackoutMode = when (appearance) {
+        Appearance.SYSTEM -> systemDark
+        Appearance.LIGHT -> false
+        Appearance.BLACKOUT -> true
+    }
     var tab by remember { mutableStateOf(Tab.LIBRARY) }
     val tabHistory = remember { mutableStateListOf<Tab>() }
     var showBrandCover by remember { mutableStateOf(true) }
@@ -311,6 +404,9 @@ fun ChefVoiceApp(
         delay(800)
         showBrandCover = false
     }
+
+    val screenDark = blackoutMode || showBrandCover
+    LaunchedEffect(screenDark) { onDarkThemeChange(screenDark) }
 
     LaunchedEffect(pendingLiveSessionId, appState.liveSessionsReady) {
         if (pendingLiveSessionId.isBlank()) return@LaunchedEffect
@@ -630,10 +726,11 @@ fun ChefVoiceApp(
                                 cloudRecipeCount = appState.cloudRecipeCount,
                                 unreadMessageCount = appState.unreadConversationCount,
                                 unreadNotificationCount = appState.unreadNotificationCount,
-                                blackoutMode = blackoutMode,
-                                onBlackoutModeChange = { enabled ->
-                                    blackoutMode = enabled
-                                    appearancePrefs.edit().putBoolean("blackout", enabled).apply()
+                                appearance = appearance,
+                                darkTheme = blackoutMode,
+                                onAppearanceChange = { choice ->
+                                    appearance = choice
+                                    appearancePrefs.edit().putString(APPEARANCE_PREF, choice.name.lowercase(Locale.ROOT)).apply()
                                 },
                                 onSaveProfile = appState::saveProfile,
                                 onUploadProfilePhoto = appState::uploadProfilePhoto,
@@ -1757,7 +1854,10 @@ private fun ChefVoiceNavigationBar(selected: Tab, communityUnread: Int, onSelect
                         }
                     ) { Text(item.glyph) }
                 },
-                label = { Text(item.label, modifier = Modifier.clearAndSetSemantics { }) }
+                label = { Text(item.label, modifier = Modifier.clearAndSetSemantics { }) },
+                // Material draws the selected label in secondary; ChefVoice's red is 3.9:1 on
+                // the bar, below the 4.5:1 a label needs. primary is 5.1:1.
+                colors = NavigationBarItemDefaults.colors(selectedTextColor = MaterialTheme.colorScheme.primary)
             )
         }
     }
@@ -1994,7 +2094,7 @@ private fun CommunityScreen(
                         ) {
                             val hero = recipe.media.firstOrNull { it.type == MediaType.IMAGE } ?: recipe.media.firstOrNull()
                             if (hero != null) RecipeMediaBanner(hero, Modifier.fillMaxSize())
-                            else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondary), contentAlignment = Alignment.Center) { Text("🍽️", style = MaterialTheme.typography.displayMedium, color = Color.White, modifier = Modifier.clearAndSetSemantics { }) }
+                            else Box(Modifier.fillMaxSize().background(Color(0xFF6D4C3B)), contentAlignment = Alignment.Center) { Text("🍽️", style = MaterialTheme.typography.displayMedium, color = Color.White, modifier = Modifier.clearAndSetSemantics { }) }
                             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.16f)))
                             HeartBurstOverlay(heartTrigger, Modifier.align(Alignment.Center))
                             Row(
@@ -4006,8 +4106,9 @@ private fun ProfileScreen(
     cloudRecipeCount: Int,
     unreadMessageCount: Int,
     unreadNotificationCount: Int,
-    blackoutMode: Boolean,
-    onBlackoutModeChange: (Boolean) -> Unit,
+    appearance: Appearance,
+    darkTheme: Boolean,
+    onAppearanceChange: (Appearance) -> Unit,
     onSaveProfile: (String, String, List<String>) -> Unit,
     onUploadProfilePhoto: (String, Uri) -> Unit,
     onMessages: () -> Unit,
@@ -4052,12 +4153,28 @@ private fun ProfileScreen(
 
         item {
             Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column {
                         Text("Appearance", fontWeight = FontWeight.Bold)
-                        Text(if (blackoutMode) "Blackout mode is on" else "Reduce bright white screens", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            when (appearance) {
+                                Appearance.SYSTEM -> if (darkTheme) "Blackout while your phone is in dark theme" else "Light while your phone is in light theme"
+                                Appearance.LIGHT -> "Always light"
+                                Appearance.BLACKOUT -> "Always Blackout: no bright white screens"
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
-                    OutlinedButton(onClick = { onBlackoutModeChange(!blackoutMode) }) { Text(if (blackoutMode) "☀ Light" else "🌙 Blackout") }
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        Appearance.entries.forEachIndexed { index, option ->
+                            SegmentedButton(
+                                selected = appearance == option,
+                                onClick = { onAppearanceChange(option) },
+                                shape = SegmentedButtonDefaults.itemShape(index, Appearance.entries.size),
+                                label = { Text(option.label, maxLines = 1) }
+                            )
+                        }
+                    }
                 }
             }
         }

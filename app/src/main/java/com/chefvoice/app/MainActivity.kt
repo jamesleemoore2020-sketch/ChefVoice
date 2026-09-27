@@ -3,9 +3,12 @@ package com.chefvoice.app
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,9 +44,24 @@ class MainActivity : ComponentActivity() {
                 pendingLiveSessionId = pendingLiveSessionId,
                 onLiveNotificationConsumed = ::consumeLiveNotificationRoute,
                 pendingNotificationEventId = pendingNotificationEventId,
-                onNotificationEventConsumed = ::consumeNotificationEventRoute
+                onNotificationEventConsumed = ::consumeNotificationEventRoute,
+                onDarkThemeChange = ::matchSystemBarsToApp
             )
         }
+    }
+
+    /**
+     * enableEdgeToEdge() above picks status and navigation bar icon colours from the phone's
+     * theme. The app's can differ -- Blackout chosen on a light phone, Light on a dark one --
+     * and dark icons on Blackout's near-black were invisible. The window background follows
+     * too, so nothing light shows around the keyboard while it animates.
+     */
+    private fun matchSystemBarsToApp(dark: Boolean) {
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+            navigationBarStyle = SystemBarStyle.auto(LIGHT_NAV_SCRIM, DARK_NAV_SCRIM) { dark }
+        )
+        window.setBackgroundDrawable(ColorDrawable(if (dark) BLACKOUT_WINDOW else LIGHT_WINDOW))
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -87,5 +105,14 @@ class MainActivity : ComponentActivity() {
         if (prefs.getBoolean("permission_prompted", false)) return
         prefs.edit().putBoolean("permission_prompted", true).apply()
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private companion object {
+        // The scrims enableEdgeToEdge() uses by default behind three-button navigation.
+        val LIGHT_NAV_SCRIM = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)
+        val DARK_NAV_SCRIM = Color.argb(0x80, 0x1b, 0x1b, 0x1b)
+        // Kept equal to values/colors.xml and values-night/colors.xml (chefvoice_window).
+        val LIGHT_WINDOW = Color.rgb(0xFF, 0xFB, 0xF8)
+        val BLACKOUT_WINDOW = Color.rgb(0x05, 0x05, 0x05)
     }
 }

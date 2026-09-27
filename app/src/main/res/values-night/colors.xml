@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Blackout's background. Kept equal to MainActivity.BLACKOUT_WINDOW. -->
+    <color name="chefvoice_window">#050505</color>
+</resources>

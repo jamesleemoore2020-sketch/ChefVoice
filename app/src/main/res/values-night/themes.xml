@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Dark theme counterpart of values/themes.xml. -->
+    <style name="Theme.ChefVoice" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/chefvoice_window</item>
+        <item name="android:windowSplashScreenBackground" tools:targetApi="31">@color/chefvoice_brand_cover</item>
+    </style>
+</resources>

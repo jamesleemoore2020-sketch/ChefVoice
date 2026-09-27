@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- The window behind the Compose UI: what shows before the first frame and around the
+         keyboard. values-night/themes.xml swaps in the dark parent and Blackout's black, so
+         a phone in dark theme no longer opens on a white window (audit F26). The launch
+         splash is black in both, matching the brand cover the app opens on. -->
+    <style name="Theme.ChefVoice" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/chefvoice_window</item>
+        <item name="android:windowSplashScreenBackground" tools:targetApi="31">@color/chefvoice_brand_cover</item>
+    </style>
+</resources>
