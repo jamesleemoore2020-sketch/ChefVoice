@@ -44,8 +44,11 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
@@ -102,9 +105,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -213,10 +218,13 @@ fun ChefVoiceApp(
     pendingLiveSessionId: String = "",
     onLiveNotificationConsumed: (String) -> Unit = {},
     pendingNotificationEventId: String = "",
-    onNotificationEventConsumed: (String) -> Unit = {}
+    onNotificationEventConsumed: (String) -> Unit = {},
+    // Tests hand in a factory so they can keep the state and feed it (an unread alert, a
+    // shopping line). MainActivity never passes one.
+    createAppState: (android.content.Context) -> ChefAppState = ::ChefAppState
 ) {
     val context = LocalContext.current
-    val appState = remember { ChefAppState(context.applicationContext) }
+    val appState = remember { createAppState(context.applicationContext) }
     val appearancePrefs = remember { context.applicationContext.getSharedPreferences("chefvoice_appearance", 0) }
     var blackoutMode by remember { mutableStateOf(appearancePrefs.getBoolean("blackout", false)) }
     var tab by remember { mutableStateOf(Tab.LIBRARY) }
@@ -475,16 +483,15 @@ fun ChefVoiceApp(
                     // must not add the same padding a second time.
                     contentWindowInsets = WindowInsets(0, 0, 0, 0),
                     bottomBar = {
-                        NavigationBar {
-                            AndroidPrimaryTabs.forEach { item ->
-                                NavigationBarItem(
-                                    selected = tab == item,
-                                    onClick = { navigateTab(item) },
-                                    icon = { Text(item.glyph) },
-                                    label = { Text(item.label) }
-                                )
-                            }
-                        }
+                        ChefVoiceNavigationBar(
+                            // Messages and Notifications are opened from Community's banner or
+                            // from Profile, never from the bar, so on either of them no tab was
+                            // highlighted. The tab they were opened from stays highlighted now.
+                            selected = if (tab in AndroidPrimaryTabs) tab
+                                else tabHistory.lastOrNull { it in AndroidPrimaryTabs } ?: Tab.COMMUNITY,
+                            communityUnread = appState.unreadConversationCount + appState.unreadNotificationCount,
+                            onSelect = { navigateTab(it) }
+                        )
                     }
                 ) { padding ->
                     Box(Modifier.padding(padding)) {
@@ -878,10 +885,10 @@ private fun RecipeCard(recipe: Recipe, onClick: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(recipe.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("${recipe.ingredients.size} ingredients · ${recipe.steps.size} steps · Serves ${recipe.servings}")
+                        Text("${spokenCount(recipe.ingredients.size, "ingredient")} · ${spokenCount(recipe.steps.size, "step")} · Serves ${recipe.servings}")
                         recipeTimeSummary(recipe).takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     }
-                    if (recipe.isPublic) Text("🌎")
+                    if (recipe.isPublic) Text("🌎", modifier = Modifier.clearAndSetSemantics { contentDescription = "Published" })
                 }
                 if (recipe.description.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
@@ -921,7 +928,8 @@ private fun HeartBurstOverlay(trigger: Int, modifier: Modifier = Modifier) {
         delay(350)
         alpha.animateTo(0f, tween(300))
     }
-    Text("❤", color = Color.White.copy(alpha = alpha.value), style = MaterialTheme.typography.displayLarge, modifier = modifier)
+    // Decoration only: the Like button beside it is what TalkBack announces.
+    Text("❤", color = Color.White.copy(alpha = alpha.value), style = MaterialTheme.typography.displayLarge, modifier = modifier.clearAndSetSemantics { })
 }
 
 // CreateRecipeScreen was one long scrolling flow covering capture, details,
@@ -1649,7 +1657,7 @@ private fun MediaPreview(attachment: MediaAttachment, onRemove: (() -> Unit)? = 
                 contentDescription = null,
                 modifier = Modifier.size(72.dp)
             ) {
-                Text(if (attachment.type == MediaType.VIDEO) "🎬" else "📷")
+                Text(if (attachment.type == MediaType.VIDEO) "🎬" else "📷", modifier = Modifier.clearAndSetSemantics { })
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -1703,6 +1711,53 @@ private fun CommunityBannerAction(icon: String, label: String, unreadCount: Int 
                     .background(Color(0xFFD93A22), CircleShape)
                     .padding(horizontal = 5.dp, vertical = 2.dp)
                     .clearAndSetSemantics { }
+            )
+        }
+    }
+}
+
+/**
+ * What TalkBack says for a count. Icon-only controls describe themselves with words and hide
+ * the glyph that is drawn: TalkBack reads an emoji by its Unicode name ("white heart suit",
+ * "outbox tray") and says nothing of whether it is liked or saved. Exact, too, where the
+ * screen shows "1.2K".
+ */
+private fun spokenCount(count: Int, one: String, many: String = "${one}s"): String {
+    val value = count.coerceAtLeast(0)
+    return "$value ${if (value == 1) one else many}"
+}
+
+/**
+ * The bottom bar. Messages and Notifications have no tab of their own, so their unread count
+ * rides on Community, where the banner opens both; before this, a reply that arrived by push
+ * left no mark anywhere in the bar. The count is part of what TalkBack reads for the tab.
+ */
+@Composable
+private fun ChefVoiceNavigationBar(selected: Tab, communityUnread: Int, onSelect: (Tab) -> Unit) {
+    NavigationBar {
+        AndroidPrimaryTabs.forEach { item ->
+            val unread = if (item == Tab.COMMUNITY) communityUnread.coerceAtLeast(0) else 0
+            NavigationBarItem(
+                selected = selected == item,
+                onClick = { onSelect(item) },
+                // The tab is described once, here. Material already hides the icon (and so
+                // the badge inside it) from TalkBack, and the label is hidden below, so the
+                // name is never read twice.
+                modifier = Modifier.semantics {
+                    contentDescription = if (unread > 0) "${item.label}, $unread unread" else item.label
+                },
+                icon = {
+                    BadgedBox(
+                        badge = {
+                            if (unread > 0) {
+                                Badge(containerColor = Color(0xFFD93A22), contentColor = Color.White) {
+                                    Text(if (unread > 99) "99+" else unread.toString())
+                                }
+                            }
+                        }
+                    ) { Text(item.glyph) }
+                },
+                label = { Text(item.label, modifier = Modifier.clearAndSetSemantics { }) }
             )
         }
     }
@@ -1939,7 +1994,7 @@ private fun CommunityScreen(
                         ) {
                             val hero = recipe.media.firstOrNull { it.type == MediaType.IMAGE } ?: recipe.media.firstOrNull()
                             if (hero != null) RecipeMediaBanner(hero, Modifier.fillMaxSize())
-                            else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondary), contentAlignment = Alignment.Center) { Text("🍽️", style = MaterialTheme.typography.displayMedium, color = Color.White) }
+                            else Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.secondary), contentAlignment = Alignment.Center) { Text("🍽️", style = MaterialTheme.typography.displayMedium, color = Color.White, modifier = Modifier.clearAndSetSemantics { }) }
                             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.16f)))
                             HeartBurstOverlay(heartTrigger, Modifier.align(Alignment.Center))
                             Row(
@@ -1965,7 +2020,8 @@ private fun CommunityScreen(
                                         TextButton(
                                             onClick = { menuOpen = true },
                                             modifier = Modifier.background(Color.Black.copy(alpha = 0.58f), CircleShape)
-                                        ) { Text("⋯", color = Color.White, fontWeight = FontWeight.Bold) }
+                                                .semantics { contentDescription = "More options" }
+                                        ) { Text("⋯", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.clearAndSetSemantics { }) }
                                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                                             DropdownMenuItem(text = { Text("✉ Message chef") }, onClick = { menuOpen = false; onMessageChef(recipe.authorId, recipe.authorName) })
                                             DropdownMenuItem(text = { Text("⚑ Report") }, onClick = { menuOpen = false; onReportRecipe(recipe) })
@@ -1979,16 +2035,48 @@ private fun CommunityScreen(
                             }
                             Column(modifier = Modifier.align(Alignment.BottomStart).padding(14.dp).background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(16.dp)).padding(10.dp)) {
                                 Text(recipe.title, color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Text("${recipe.ingredients.size} ingredients · 💬 ${formatCount(recipe.commentCount)} · ${relativeTime(recipe.createdAt)}", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                                val posted = relativeTime(recipe.createdAt)
+                                Text(
+                                    "${spokenCount(recipe.ingredients.size, "ingredient")} · 💬 ${formatCount(recipe.commentCount)}${if (posted.isNotBlank()) " · $posted" else ""}",
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.clearAndSetSemantics {
+                                        contentDescription = listOf(
+                                            spokenCount(recipe.ingredients.size, "ingredient"),
+                                            spokenCount(recipe.commentCount, "comment"),
+                                            posted
+                                        ).filter { it.isNotBlank() }.joinToString(", ")
+                                    }
+                                )
                                 if (recipe.tags.isNotEmpty()) {
                                     Text(recipe.tags.take(3).joinToString(" ") { "#$it" }, color = Color.White, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                             Column(modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp)), horizontalAlignment = Alignment.CenterHorizontally) {
-                                TextButton(onClick = { onLike(recipe) }) { Text(if (isLiked(recipe.id)) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}", color = Color.White) }
-                                TextButton(onClick = { onOpen(recipe) }) { Text("💬", color = Color.White) }
-                                TextButton(onClick = { shareRecipe(context, recipe) }) { Text("📤", color = Color.White) }
-                                TextButton(onClick = { onBookmark(recipe) }) { Text(if (isBookmarked(recipe.id)) "★" else "☆", color = Color.White) }
+                                val liked = isLiked(recipe.id)
+                                val saved = isBookmarked(recipe.id)
+                                TextButton(
+                                    onClick = { onLike(recipe) },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "Like, ${spokenCount(recipe.likes, "like")}"
+                                        stateDescription = if (liked) "Liked" else "Not liked"
+                                    }
+                                ) { Text(if (liked) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}", color = Color.White, modifier = Modifier.clearAndSetSemantics { }) }
+                                TextButton(
+                                    onClick = { onOpen(recipe) },
+                                    modifier = Modifier.semantics { contentDescription = "Open recipe and comments, ${spokenCount(recipe.commentCount, "comment")}" }
+                                ) { Text("💬", color = Color.White, modifier = Modifier.clearAndSetSemantics { }) }
+                                TextButton(
+                                    onClick = { shareRecipe(context, recipe) },
+                                    modifier = Modifier.semantics { contentDescription = "Share recipe" }
+                                ) { Text("📤", color = Color.White, modifier = Modifier.clearAndSetSemantics { }) }
+                                TextButton(
+                                    onClick = { onBookmark(recipe) },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "Save to cookbook"
+                                        stateDescription = if (saved) "Saved" else "Not saved"
+                                    }
+                                ) { Text(if (saved) "★" else "☆", color = Color.White, modifier = Modifier.clearAndSetSemantics { }) }
                             }
                         }
                     }
@@ -2099,17 +2187,24 @@ private fun NotificationPreferenceRow(
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    // One control, not two: the switch alone was a separate TalkBack stop that announced
+    // "On, switch" without saying what it switched. The whole row toggles and is read as
+    // its title, subtitle and state.
+    Row(
+        Modifier.fillMaxWidth().toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onCheckedChange),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.SemiBold)
             Text(subtitle, style = MaterialTheme.typography.bodySmall)
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
     }
 }
 
+// Internal, not private, so a test can draw a signed-in list: the demo app is signed out.
 @Composable
-private fun NotificationsScreen(
+internal fun NotificationsScreen(
     notifications: List<ChefNotification>,
     isSignedIn: Boolean,
     loading: Boolean,
@@ -2150,6 +2245,7 @@ private fun NotificationsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { settingsExpanded = !settingsExpanded }
+                        .semantics { stateDescription = if (settingsExpanded) "Expanded" else "Collapsed" }
                         .padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -2157,7 +2253,7 @@ private fun NotificationsScreen(
                         Text("Notification settings", fontWeight = FontWeight.Bold)
                         Text("$enabledPreferenceCount of 6 activity alerts on · account synced", style = MaterialTheme.typography.bodySmall)
                     }
-                    Text(if (settingsExpanded) "▲" else "▼", style = MaterialTheme.typography.labelLarge)
+                    Text(if (settingsExpanded) "▲" else "▼", style = MaterialTheme.typography.labelLarge, modifier = Modifier.clearAndSetSemantics { })
                 }
                 if (settingsExpanded) {
                     HorizontalDivider()
@@ -2238,7 +2334,9 @@ private fun NotificationsScreen(
                         ) {
                             Card(Modifier.fillMaxWidth().clickable { onOpen(notification) }) {
                                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
-                                    Text(glyph, style = MaterialTheme.typography.titleLarge)
+                                    // The title already says what happened; read aloud, the glyph
+                                    // was only its Unicode name in front of it.
+                                    Text(glyph, style = MaterialTheme.typography.titleLarge, modifier = Modifier.clearAndSetSemantics { })
                                     Spacer(Modifier.width(10.dp))
                                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2260,11 +2358,15 @@ private fun NotificationsScreen(
                                     }
                                     // Clearing one alert without touching the rest, for
                                     // chefs who would rather tap than swipe.
-                                    IconButton(onClick = { onDismiss(notification) }) {
+                                    IconButton(
+                                        onClick = { onDismiss(notification) },
+                                        modifier = Modifier.semantics { contentDescription = "Clear notification" }
+                                    ) {
                                         Text(
                                             "✕",
                                             style = MaterialTheme.typography.titleMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.clearAndSetSemantics { }
                                         )
                                     }
                                 }
@@ -2498,7 +2600,10 @@ private fun LiveHubScreen(
                             if (session.tags.isNotEmpty()) {
                                 Text(session.tags.take(3).joinToString(" ") { "#$it" }, style = MaterialTheme.typography.bodySmall)
                             }
-                            Text("♥ ${session.heartCount} · 🔥 ${session.fireCount} · 👏 ${session.clapCount}")
+                            Text(
+                                "♥ ${session.heartCount} · 🔥 ${session.fireCount} · 👏 ${session.clapCount}",
+                                modifier = Modifier.clearAndSetSemantics { contentDescription = liveReactionSummary(session) }
+                            )
                             Button(onClick = { onOpenLive(session) }, modifier = Modifier.fillMaxWidth()) { Text("Watch Live") }
                         }
                     }
@@ -2568,7 +2673,8 @@ private fun LiveRoomScreen(
                         }
                         if (isHost) {
                             Column(
-                                Modifier.align(Alignment.CenterEnd).padding(10.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp)).padding(8.dp),
+                                Modifier.align(Alignment.CenterEnd).padding(10.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp)).padding(8.dp)
+                                    .clearAndSetSemantics { contentDescription = "Reactions: ${liveReactionSummary(session)}" },
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
@@ -2577,14 +2683,11 @@ private fun LiveRoomScreen(
                                 Text("👏 ${session.clapCount}", color = Color.White, fontWeight = FontWeight.Bold)
                             }
                         } else if (isLive && isSignedIn) {
-                            Column(
-                                Modifier.align(Alignment.CenterEnd).padding(10.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp)),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                TextButton(onClick = { onReact("heart") }) { Text("♥ ${session.heartCount}", color = Color.White) }
-                                TextButton(onClick = { onReact("fire") }) { Text("🔥 ${session.fireCount}", color = Color.White) }
-                                TextButton(onClick = { onReact("clap") }) { Text("👏 ${session.clapCount}", color = Color.White) }
-                            }
+                            LiveReactionButtons(
+                                session = session,
+                                onReact = onReact,
+                                modifier = Modifier.align(Alignment.CenterEnd).padding(10.dp).background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(18.dp))
+                            )
                         }
                     }
                 }
@@ -2604,6 +2707,29 @@ private fun LiveRoomScreen(
             if (cloudMessage.isNotBlank()) item { Text(cloudMessage, style = MaterialTheme.typography.bodySmall) }
             if (isHost && isLive) item { Button(enabled = !liveBusy, onClick = onEnd, modifier = Modifier.fillMaxWidth()) { Text(if (liveBusy) "Ending…" else "End Live session") } }
             item { Spacer(Modifier.height(18.dp)) }
+        }
+    }
+}
+
+private fun liveReactionSummary(session: LiveSession): String =
+    "${spokenCount(session.heartCount, "heart")}, ${spokenCount(session.fireCount, "fire reaction")}, ${spokenCount(session.clapCount, "clap")}"
+
+/**
+ * A viewer's reactions. Drawn, each is an emoji and a number; read aloud they were the emoji's
+ * Unicode name and a number, with nothing saying that tapping sends one. Internal so the
+ * navigation tests can check what TalkBack is told without starting a WebRTC viewer.
+ */
+@Composable
+internal fun LiveReactionButtons(session: LiveSession, onReact: (String) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        listOf(
+            Triple("heart", "♥ ${session.heartCount}", "Send a heart, ${spokenCount(session.heartCount, "heart")}"),
+            Triple("fire", "🔥 ${session.fireCount}", "Send fire, ${spokenCount(session.fireCount, "fire reaction")}"),
+            Triple("clap", "👏 ${session.clapCount}", "Send applause, ${spokenCount(session.clapCount, "clap")}")
+        ).forEach { (reaction, drawn, spoken) ->
+            TextButton(onClick = { onReact(reaction) }, modifier = Modifier.semantics { contentDescription = spoken }) {
+                Text(drawn, color = Color.White, modifier = Modifier.clearAndSetSemantics { })
+            }
         }
     }
 }
@@ -3001,13 +3127,15 @@ private fun RecipeDetailScreen(
                             }
                             OutlinedButton(
                                 enabled = viewServings > 1,
-                                onClick = { viewServings = (viewServings - 1).coerceAtLeast(1) }
-                            ) { Text("−") }
+                                onClick = { viewServings = (viewServings - 1).coerceAtLeast(1) },
+                                modifier = Modifier.semantics { contentDescription = "Fewer servings" }
+                            ) { Text("−", modifier = Modifier.clearAndSetSemantics { }) }
                             Spacer(Modifier.width(6.dp))
                             OutlinedButton(
                                 enabled = viewServings < 99,
-                                onClick = { viewServings = (viewServings + 1).coerceAtMost(99) }
-                            ) { Text("+") }
+                                onClick = { viewServings = (viewServings + 1).coerceAtMost(99) },
+                                modifier = Modifier.semantics { contentDescription = "More servings" }
+                            ) { Text("+", modifier = Modifier.clearAndSetSemantics { }) }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             MeasurementSystem.values().forEach { system ->
@@ -3115,8 +3243,14 @@ private fun RecipeDetailScreen(
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = onShare, modifier = Modifier.weight(1f)) { Text("Share") }
-                    OutlinedButton(onClick = onLike, modifier = Modifier.weight(1f)) {
-                        Text(if (isLiked) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}")
+                    OutlinedButton(
+                        onClick = onLike,
+                        modifier = Modifier.weight(1f).semantics {
+                            contentDescription = "Like, ${spokenCount(recipe.likes, "like")}"
+                            stateDescription = if (isLiked) "Liked" else "Not liked"
+                        }
+                    ) {
+                        Text(if (isLiked) "♥ ${formatCount(recipe.likes)}" else "♡ ${formatCount(recipe.likes)}", modifier = Modifier.clearAndSetSemantics { })
                     }
                 }
             }
@@ -3275,12 +3409,12 @@ private fun RecipeDetailScreen(
                     )
                     collections.forEach { collection ->
                         val isIn = collectionIdsForRecipe.contains(collection.id)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            Modifier.fillMaxWidth().toggleable(value = isIn, role = Role.Switch) { onSetInCollection(collection.id, it) },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(collection.name, Modifier.weight(1f))
-                            Switch(
-                                checked = isIn,
-                                onCheckedChange = { onSetInCollection(collection.id, it) }
-                            )
+                            Switch(checked = isIn, onCheckedChange = null)
                         }
                     }
                     if (collections.isEmpty()) {
@@ -3617,13 +3751,16 @@ private fun ShoppingListScreen(
                             }
                         ) {
                             Card(Modifier.fillMaxWidth()) {
+                                // One TalkBack stop per line: the row and its switch were two,
+                                // and the switch on its own did not say which line it ticked.
                                 Row(
                                     Modifier.fillMaxWidth()
-                                        .clickable { onToggle(item.id, !item.checked) }
+                                        .toggleable(value = item.checked, role = Role.Switch) { onToggle(item.id, it) }
+                                        .semantics { stateDescription = if (item.checked) "In the basket" else "To buy" }
                                         .padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Switch(checked = item.checked, onCheckedChange = { onToggle(item.id, it) })
+                                    Switch(checked = item.checked, onCheckedChange = null)
                                     Spacer(Modifier.width(12.dp))
                                     Column(Modifier.weight(1f)) {
                                         Text(
@@ -3801,7 +3938,9 @@ private fun PublicChefProfileScreen(
                         if (!isSelf && isSignedIn) {
                             var menuOpen by remember { mutableStateOf(false) }
                             Box {
-                                TextButton(onClick = { menuOpen = true }) { Text("⋯", fontWeight = FontWeight.Bold) }
+                                TextButton(onClick = { menuOpen = true }, modifier = Modifier.semantics { contentDescription = "More options" }) {
+                                    Text("⋯", fontWeight = FontWeight.Bold, modifier = Modifier.clearAndSetSemantics { })
+                                }
                                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                                     DropdownMenuItem(text = { Text("⚑ Report chef", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onReport() })
                                     DropdownMenuItem(text = { Text(if (isBlocked) "Unblock chef" else "🚫 Block chef", color = MaterialTheme.colorScheme.error) }, onClick = { menuOpen = false; onToggleBlock() })
@@ -4028,7 +4167,10 @@ private fun ProfileScreen(
             if (proPreviewAvailable) {
                 item {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            Modifier.fillMaxWidth().toggleable(value = proPreviewOverride, role = Role.Switch, onValueChange = onProPreviewChange).padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Column(Modifier.weight(1f)) {
                                 Text("Preview ChefVoice Pro", fontWeight = FontWeight.Bold)
                                 Text(
@@ -4037,7 +4179,7 @@ private fun ProfileScreen(
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
-                            Switch(checked = proPreviewOverride, onCheckedChange = onProPreviewChange)
+                            Switch(checked = proPreviewOverride, onCheckedChange = null)
                         }
                     }
                 }

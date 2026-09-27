@@ -50,7 +50,7 @@ test('reply-only fields are mapped only onto RecipeComment, not DirectMessage or
 
 test('NotificationsScreen clear-read parameter is wired consistently across call, signature, state, and repository', () => {
   const state = fs.readFileSync(path.join(root, 'app/src/main/java/com/chefvoice/app/ui/ChefAppState.kt'), 'utf8');
-  const start = app.indexOf('private fun NotificationsScreen(');
+  const start = app.indexOf('fun NotificationsScreen('); // internal since 0.11.19, so a test can draw it
   assert.notEqual(start, -1);
   const end = app.indexOf(') {', start);
   const signature = app.slice(start, end);

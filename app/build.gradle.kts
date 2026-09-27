@@ -30,8 +30,8 @@ android {
         applicationId = "com.chefvoice.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 79
-        versionName = "0.11.18"
+        versionCode = 80
+        versionName = "0.11.19"
     }
 
     buildFeatures {
@@ -48,6 +48,16 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests {
+            // The Compose navigation tests run under Robolectric on the JVM, so they fit
+            // the same testDebugUnitTest task (and CI job) as the parser tests. Robolectric
+            // needs the merged resources to draw the app: its drawables and the strings the
+            // google-services plugin generates.
+            isIncludeAndroidResources = true
+        }
     }
 
     signingConfigs {
@@ -183,7 +193,26 @@ dependencies {
     // classpath is the standard fix; it is never packaged into the app.
     testImplementation("org.json:json:20240303")
 
+    // UI smoke tests without an emulator: Robolectric supplies the Android framework on
+    // the JVM and the Compose test rule drives the real ChefVoiceApp composable. The test
+    // manifest declares the empty activity the rule hosts the app in; it is debug-only
+    // and never ships in a release build.
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+// Robolectric's Android 16 runtime reaches into the JDK's FileDescriptor internals while it
+// sets the test application up, which Java 17+ refuses unless the package is exported to it.
+// Without this every Robolectric test fails before it starts, on the JDK 21 in CI and on
+// Android Studio's bundled runtime alike.
+tasks.withType<Test>().configureEach {
+    jvmArgs(
+        "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+        "--enable-native-access=ALL-UNNAMED"
+    )
 }
 
 // Refuse to produce an unsigned release artifact. tools/BuildProductionTrust.ps1 already

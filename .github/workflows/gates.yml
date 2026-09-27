@@ -120,16 +120,20 @@ jobs:
           distribution: temurin
           java-version: 21
       # gradlew downloads a pinned, SHA-256-checked Gradle into ~/.chefvoice/gradle.
+      # Robolectric fetches its Android runtime (about 200 MB) into ~/.m2 on first use.
       - uses: actions/cache@v4
         with:
           path: |
             ~/.chefvoice/gradle
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('gradlew', '*.gradle.kts', 'app/build.gradle.kts', 'gradle.properties') }}
+            ~/.m2/repository/org/robolectric
+          key: gradle-${{ runner.os }}-${{ hashFiles('gradlew', '*.gradle.kts', 'app/build.gradle.kts', 'gradle.properties', 'app/src/test/resources/robolectric.properties') }}
           restore-keys: gradle-${{ runner.os }}-
       # RUN_PARSER_GATES.cmd step 2. Includes GoldenCookingCorpusTest, the Kotlin half of the
-      # shared corpus. No signing variables are set, and none are needed for a debug test run.
+      # shared corpus, and the Robolectric UI tests in app/src/test/.../ui (bottom-bar
+      # navigation, what TalkBack is told). No signing variables are set, and none are needed
+      # for a debug test run.
       - name: gradlew :app:testDebugUnitTest
         run: bash ./gradlew :app:testDebugUnitTest --console=plain
       - name: Keep the test report

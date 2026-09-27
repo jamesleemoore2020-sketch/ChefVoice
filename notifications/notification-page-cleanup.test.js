@@ -8,7 +8,7 @@ const root=path.resolve(__dirname,"..");
 const app=fs.readFileSync(path.join(root,"app/src/main/java/com/chefvoice/app/ui/ChefVoiceApp.kt"),"utf8");
 
 function notificationScreen(){
-  const start=app.indexOf("private fun NotificationsScreen(");
+  const start=app.indexOf("fun NotificationsScreen("); // internal since 0.11.19, so a test can draw it
   const end=app.indexOf("private fun ConversationScreen(",start);
   assert.ok(start>=0&&end>start,"NotificationsScreen should exist");
   return app.slice(start,end);
