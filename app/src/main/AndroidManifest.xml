@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -15,6 +16,14 @@
          changes the audio mode when a Live call starts. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- ChefVoice shows no ads and never uses the advertising ID. firebase-analytics merges
+         these three in anyway, and a manifest that declares AD_ID has to be declared as
+         advertising-ID use in Play's Data safety form. Removed here, with ad-ID collection
+         switched off below, so the honest answer on that form is "No". -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION" tools:node="remove" />
 
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
@@ -38,6 +47,15 @@
         <meta-data
             android:name="firebase_messaging_installation_id_enabled"
             android:value="true" />
+
+        <!-- See the AD_ID removal above: Analytics keeps counting the activation funnel,
+             without the advertising ID and without ad-personalization signals. -->
+        <meta-data
+            android:name="google_analytics_adid_collection_enabled"
+            android:value="false" />
+        <meta-data
+            android:name="google_analytics_default_allow_ad_personalization_signals"
+            android:value="false" />
 
         <service
             android:name=".notifications.ChefVoiceForegroundService"

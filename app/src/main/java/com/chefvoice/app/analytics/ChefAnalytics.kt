@@ -27,6 +27,8 @@ import com.google.firebase.analytics.FirebaseAnalytics
  *    and counters only -- never a recipe title, transcript, ingredient, display name,
  *    email or uid. The recorded cooking audio and the transcript derived from it
  *    belong to the chef, and nothing drawn from them belongs in an analytics event.
+ *    Nor does the advertising ID: AndroidManifest.xml removes the AD_ID permission
+ *    firebase-analytics merges in and switches ad-ID collection off.
  *
  * `install` is deliberately not emitted. Firebase Analytics logs `first_open`
  * automatically on the first launch after an install, carrying campaign attribution
@@ -56,9 +58,9 @@ object ChefAnalytics {
     const val PAYWALL_DISMISSED = "paywall_dismissed"
 
     // ---- Billing -------------------------------------------------------------
-    // Declared but not yet emitted: there is no Play Billing integration in the app
-    // and no billing Functions codebase. These are the names that work should call,
-    // fixed now so the event vocabulary does not drift when it lands.
+    // Declared but not yet emitted. Play Billing (billing/) and the chefvoice-billing
+    // Functions codebase both exist now, but the purchase flow does not call these yet;
+    // they are the names it should call, fixed so the vocabulary cannot drift.
 
     const val CHECKOUT_STARTED = "checkout_started"
     const val PURCHASE_COMPLETED = "purchase_completed"

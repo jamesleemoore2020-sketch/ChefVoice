@@ -34,3 +34,15 @@ test('follower cleanup is deletion-safe and account deletion sweeps recipe-side 
   assert.match(functions,/async function syncFollowerCount\(uid\)[\s\S]*if \(\!user\.exists\) return 0;[\s\S]*userRef\.update\(\{ followerCount: count \}\)/);
   assert.match(functions,/async function deleteUserLikes\(uid\)[\s\S]*collection\("recipes"\)[\s\S]*collection\("likes"\)\.doc\(uid\)/);
 });
+
+test('the advertising ID is removed from the merged manifest and never collected',()=>{
+  // ChefVoice has no ads. firebase-analytics merges AD_ID and the two AdServices permissions
+  // in, and a manifest that declares AD_ID must be declared as advertising-ID use on Play's
+  // Data safety form. Removing them is what lets that answer honestly be "No".
+  for(const permission of ['com.google.android.gms.permission.AD_ID','android.permission.ACCESS_ADSERVICES_AD_ID','android.permission.ACCESS_ADSERVICES_ATTRIBUTION']){
+    assert.ok(manifest.includes(`<uses-permission android:name="${permission}" tools:node="remove" />`),`${permission} must be removed from the merged manifest`);
+  }
+  assert.match(manifest,/xmlns:tools="http:\/\/schemas\.android\.com\/tools"/);
+  assert.match(manifest,/android:name="google_analytics_adid_collection_enabled"\s+android:value="false"/);
+  assert.match(manifest,/android:name="google_analytics_default_allow_ad_personalization_signals"\s+android:value="false"/);
+});
