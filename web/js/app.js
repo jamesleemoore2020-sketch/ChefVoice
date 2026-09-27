@@ -2046,6 +2046,34 @@ function membershipTemplate(){
 // neither, so a web-only chef had no route to deleting their account (audit F16).
 const PRIVACY_POLICY_URL='https://chefvoice-d7fec-legal.web.app/privacy.html';
 const ACCOUNT_DELETION_URL='https://chefvoice-delete-account.web.app/';
+// Auto / Light / Blackout, the same three choices as Android's Profile. The choice itself lives
+// in js/theme-boot.js, which applies it before the page is drawn; this is only the control.
+// Real radio inputs, so the keyboard and screen readers get a radio group with no ARIA.
+const APPEARANCE_OPTIONS=[['auto','Auto'],['light','Light'],['dark','Blackout']];
+function appearanceNote(choice){
+  if(choice==='light')return 'Always light';
+  if(choice==='dark')return 'Always Blackout: no bright white screens';
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches
+    ?'Blackout while your device is in dark theme'
+    :'Light while your device is in light theme';
+}
+function appearanceTemplate(){
+  const choice=window.ChefVoiceAppearance?.read()||'auto';
+  return `<section class="card"><h2>Appearance</h2><p class="status" id="appearanceNote">${appearanceNote(choice)}</p><fieldset class="segmented"><legend class="sr-only">Appearance</legend>${APPEARANCE_OPTIONS.map(([value,label])=>`<label><input type="radio" name="appearance" value="${value}"${choice===value?' checked':''}><span>${label}</span></label>`).join('')}</fieldset></section>`;
+}
+function bindAppearance(){
+  main.querySelectorAll('input[name="appearance"]').forEach(input=>input.onchange=()=>{
+    window.ChefVoiceAppearance?.set(input.value);
+    const note=document.querySelector('#appearanceNote');
+    if(note)note.textContent=appearanceNote(input.value);
+  });
+}
+// Auto follows the device; keep the note true if the device switches while Profile is open.
+window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change',()=>{
+  const note=document.querySelector('#appearanceNote');
+  if(note)note.textContent=appearanceNote(window.ChefVoiceAppearance?.read()||'auto');
+});
+
 function accountPrivacyTemplate(){
   return `<section class="card"><h2>Account &amp; privacy</h2><p class="status">How ChefVoice handles your recipes, your voice and your account.</p><div class="row wrap"><a class="secondary link-btn grow" href="${PRIVACY_POLICY_URL}" target="_blank" rel="noopener">Privacy policy</a><a class="danger link-btn grow" href="${ACCOUNT_DELETION_URL}" target="_blank" rel="noopener">Delete my account</a></div><p class="hint">Deleting your account removes your cloud account and Community data; recipes kept only in this browser stay here. It does not cancel a Google Play subscription.</p></section>`;
 }
@@ -2067,9 +2095,10 @@ function profileTemplate(){
         ?`<p class="hint">Their recipes and comments are hidden from you, and neither of you can interact with the other.</p>${[...cloud.blocked].map(uid=>`<div class="row between" style="margin-top:8px"><code>${escapeHtml(uid.slice(0,12))}…</code><button class="secondary" data-unblock="${escapeHtml(uid)}">Unblock</button></div>`).join('')}`
         :'<p class="status">You have not blocked anyone. You can block a chef from any recipe in Community.</p>'}</section>`
     :'';
-  return `<div id="paywall"></div>${membershipTemplate()}${firebaseCard}${pushCard}${blockedCard}${accountPrivacyTemplate()}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Cooking capture and recipe building work on this device, even offline.</div></section>`;
+  return `<div id="paywall"></div>${membershipTemplate()}${firebaseCard}${pushCard}${blockedCard}${appearanceTemplate()}${accountPrivacyTemplate()}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Cooking capture and recipe building work on this device, even offline.</div></section>`;
 }
 function bindProfile(){
+  bindAppearance();
   document.querySelector('#showPaywall')?.addEventListener('click',()=>showPaywall(PaywallTrigger.PROFILE));
   main.querySelectorAll('[data-unblock]').forEach(b=>b.onclick=()=>unblockChef(b.dataset.unblock));
 

@@ -6,7 +6,7 @@
 // 0.5.18 cached every GET, so a shared browser kept another chef's messages in Cache
 // Storage after they signed out. Firestore, Storage, the Firebase SDK on gstatic and
 // Analytics now go straight to the network, untouched.
-const CACHE='chefvoice-pwa-v0.5.18';
+const CACHE='chefvoice-pwa-v0.5.19';
 
 // Everything the app needs to boot offline. web/tests/hosting-config.test.mjs fails when a
 // file under web/js/ or web/css/ is missing from this list: the worker does not control the
@@ -18,7 +18,7 @@ const CORE=['./','./index.html','./manifest.webmanifest',
   './js/cooking-session-parser.js','./js/entitlement.js','./js/firebase-client.js','./js/firebase-config.js',
   './js/inbox.js','./js/ingredient-parser.js','./js/ingredient-scaling.js','./js/second-pass-reviewer.js',
   './js/shopping-list.js','./js/step-timers.js','./js/storage.js','./js/swipe-gestures.js','./js/tag-utils.js',
-  './js/voice-capture.js','./js/webm-duration-fix.js','./js/webrtc-live-host.js','./js/webrtc-live-viewer.js',
+  './js/theme-boot.js','./js/voice-capture.js','./js/webm-duration-fix.js','./js/webrtc-live-host.js','./js/webrtc-live-viewer.js',
   './js/webrtc-signaling.js',
   './assets/chefvoice-icon.png','./assets/chefvoice-cover.webp','./assets/community-hero.webp','./assets/live-hero.webp'];
 
