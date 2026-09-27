@@ -1,3 +1,30 @@
+# Current handoff — 2026-09-26 (audit implementation, part 2: the UI batch, Android 0.11.19 / PWA 0.5.19)
+
+Session handoff: `HANDOFF_2026-09-26_SESSION10.md`. Writeup:
+`ACCESSIBILITY_AND_DARK_MODE_0.5.19_0.11.19.md`.
+
+Tests at this point: Android 226 / 0 (2 skipped), PWA 276 / 0, jsdom 74 / 35 / 46, e2e 17 / 0,
+notification gates 78 / 0. CI green. **Nothing here is deployed yet**: PWA 0.5.19 waits on
+`DEPLOY_PWA.cmd`, Android 0.11.19 (versionCode 80) on a release build and a device check.
+Parser, corpus, rules, Functions, Live signaling and App Check untouched; no backend deploy.
+
+- **Android UI tests on the JVM (F2).** Robolectric runs the real `ChefVoiceApp` inside
+  `testDebugUnitTest`, in demo mode, so CI's android job runs it with no emulator and nothing
+  can reach production: tab navigation, Create, Back, Messages and Notifications, and what
+  TalkBack is told. An opt-in `RenderScreensTest` draws every tab in light and Blackout to PNGs.
+- **TalkBack (F12).** Icon-only controls say what they do and whether they are on ("Like,
+  2 likes, Liked"), instead of emoji names; switch rows are one stop, not an unlabeled switch.
+- **Tab bar (F19).** The Community tab badges unread messages plus alerts, and the tab that
+  opened Messages or Notifications stays highlighted.
+- **Contrast (F20).** PWA buttons use `#c94a12` under white (4.7:1, was 3.2:1). Android uses
+  `#B03E0E`, because Material draws every text button in the same colour on tinted cards, where
+  `#C94A12` is 3.6:1. Android's schemes also leaked Material's baseline lavender into cards, nav
+  bar and tab pill; both schemes now name every role, in warm tones derived from the brand.
+- **Dark mode (F26).** Both platforms follow the device by default, with Auto / Light / Blackout
+  in Profile; an old Blackout switch is kept. Android's bar icons, window and splash follow.
+  **And a dark-theme switch no longer stops a cooking capture:** `MainActivity` did not handle
+  `uiMode`, so every switch recreated it and disposed the Create screen mid-session.
+
 # Current handoff — 2026-09-26 (audit implementation, part 1: CI, browser tests, PWA 0.5.18)
 
 Session handoff: `HANDOFF_2026-09-26_SESSION9.md`.
