@@ -16,7 +16,7 @@ const [appSdk,authSdk,firestoreSdk,storageSdk]=await Promise.all([
 const {initializeApp}=appSdk;
 const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,sendEmailVerification,reload,getIdToken}=authSdk;
 const {
-  getFirestore,collection,doc,increment,limit,onSnapshot,query,setDoc,where,orderBy,
+  getFirestore,collection,doc,increment,limit,limitToLast,onSnapshot,query,setDoc,where,orderBy,
   getDoc,getDocs,deleteDoc,updateDoc,runTransaction,writeBatch,documentId,startAfter
 }=firestoreSdk;
 const {getStorage,ref:storageRef,uploadBytes,getDownloadURL,deleteObject}=storageSdk;
@@ -317,8 +317,17 @@ export async function toggleFollow(targetUid){
   const data={createdAt:Date.now()};batch.set(followingRef,data);batch.set(followerRef,data);await batch.commit();return true;
 }
 
+// How many of the newest items each thread keeps live. These queries used
+// orderBy('createdAt') with limit(N), which returns the OLDEST N: once a thread passed its
+// cap, new messages and comments were silently never shown, and a busy Live lost its chat
+// at comment 151. limitToLast keeps the newest N, still in time order. Android's
+// FirebaseSocialRepository uses the same three windows.
+const RECIPE_COMMENT_WINDOW=100;
+const DIRECT_MESSAGE_WINDOW=250;
+const LIVE_COMMENT_WINDOW=150;
+
 export function observeComments(recipeId,onChange,onError=()=>{}){
-  const q=query(collection(db,'recipes',recipeId,'comments'),orderBy('createdAt'),limit(100));
+  const q=query(collection(db,'recipes',recipeId,'comments'),orderBy('createdAt'),limitToLast(RECIPE_COMMENT_WINDOW));
   return onSnapshot(q,snap=>onChange(snap.docs.map(d=>({id:d.id,...normalizeComment(d.data())}))),onError);
 }
 /**
@@ -601,7 +610,7 @@ export function observeConversations(uid,onChange,onError=()=>{}){
 }
 
 export function observeDirectMessages(conversationId,onChange,onError=()=>{}){
-  const q=query(collection(db,'conversations',conversationId,'messages'),orderBy('createdAt'),limit(250));
+  const q=query(collection(db,'conversations',conversationId,'messages'),orderBy('createdAt'),limitToLast(DIRECT_MESSAGE_WINDOW));
   return onSnapshot(q,snap=>onChange(snap.docs.map(d=>({
     id:d.id,
     senderId:String(d.data().senderId||''),
@@ -832,7 +841,7 @@ export function observeLiveSession(sessionId,onChange,onError=()=>{}){
 }
 
 export function observeLiveComments(sessionId,onChange,onError=()=>{}){
-  const q=query(collection(db,'liveSessions',sessionId,'comments'),orderBy('createdAt'),limit(150));
+  const q=query(collection(db,'liveSessions',sessionId,'comments'),orderBy('createdAt'),limitToLast(LIVE_COMMENT_WINDOW));
   return onSnapshot(q,snap=>onChange(snap.docs.map(d=>({
     id:d.id,
     authorId:String(d.data().authorId||''),

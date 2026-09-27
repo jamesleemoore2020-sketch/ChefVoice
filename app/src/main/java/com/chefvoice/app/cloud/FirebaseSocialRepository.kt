@@ -93,6 +93,15 @@ class FirebaseSocialRepository(private val context: Context) {
         // cloud copy written at publish time. It is a storage bound only, not a speech
         // bound, so it stays where it was.
         private const val PRIVATE_SESSION_MAX_DECLARED_DURATION_MS = 90L * 60L * 1000L
+
+        // How many of the newest items each thread keeps live. These listeners used
+        // orderBy("createdAt").limit(n), which returns the OLDEST n: once a thread passed its
+        // cap, new messages and comments were silently never shown, and a busy Live lost its
+        // chat at comment 151. limitToLast keeps the newest n, still oldest-first. The PWA
+        // (web/js/firebase-client.js) uses the same three windows.
+        private const val RECIPE_COMMENT_WINDOW = 100L
+        private const val DIRECT_MESSAGE_WINDOW = 250L
+        private const val LIVE_COMMENT_WINDOW = 150L
     }
 
     private var publicRecipeCursor: DocumentSnapshot? = null
@@ -1137,7 +1146,7 @@ class FirebaseSocialRepository(private val context: Context) {
         val db = dbOrNull() ?: return null
         return db.collection("conversations").document(conversationId).collection("messages")
             .orderBy("createdAt")
-            .limit(250)
+            .limitToLast(DIRECT_MESSAGE_WINDOW)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     onError(error.message ?: "Conversation could not be loaded.")
@@ -1185,7 +1194,7 @@ class FirebaseSocialRepository(private val context: Context) {
         val db = dbOrNull() ?: return null
         return db.collection("recipes").document(recipeId).collection("comments")
             .orderBy("createdAt")
-            .limit(100)
+            .limitToLast(RECIPE_COMMENT_WINDOW)
             .addSnapshotListener { snapshot, _ ->
                 val comments = snapshot?.documents.orEmpty().mapNotNull { doc ->
                     val data = doc.data ?: return@mapNotNull null
@@ -1337,7 +1346,7 @@ class FirebaseSocialRepository(private val context: Context) {
         val db = dbOrNull() ?: return null
         return db.collection("liveSessions").document(sessionId).collection("comments")
             .orderBy("createdAt")
-            .limit(150)
+            .limitToLast(LIVE_COMMENT_WINDOW)
             .addSnapshotListener { snapshot, _ ->
                 val comments = snapshot?.documents.orEmpty().mapNotNull { doc ->
                     val data = doc.data ?: return@mapNotNull null

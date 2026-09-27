@@ -1,7 +1,7 @@
 # PWA audit fix bundle (PWA 0.5.18)
 
-The first batch of fixes from the 2026-09-26 full audit (F3, F4,
-F6, F7, F8, F9 and part of F27), plus one bug the audit missed that the new browser smoke
+The first batch of fixes from the 2026-09-26 full audit (F3, F4, F5, F6, F7, F8, F9 and
+part of F27), plus one bug the audit missed that the new browser smoke
 tests found on their first run. Everything here is in `web/`; it ships as one pinned
 `DEPLOY_PWA.cmd` (`hosting:pwa` only).
 
@@ -98,6 +98,13 @@ read on its own instead of dropping the chef on the feed. (F28, moving the first
 live listener, is deliberately left for later: at today's size the listener costs nothing and
 it is what keeps like counts current.)
 
+## F5 — threads show their newest messages, not their oldest
+
+Direct messages, recipe comments and Live chat listened with `orderBy('createdAt')` +
+`limit(n)`, which is the **oldest** n: past 250 messages, 100 comments or 150 Live comments a
+thread silently stopped showing anything new. All three use `limitToLast(n)` now. Android had
+the same bug and the same fix lands in 0.11.18; `thread-windows.test.mjs` checks both.
+
 ## Smaller fixes
 
 - **The Inbox badge always showed**, reading "0" for anyone with nothing unread:
@@ -112,7 +119,7 @@ it is what keeps like counts current.)
 
 ## Tests
 
-- PWA **256 / 0** (243 before): precache completeness, no cross-origin caching, version
+- PWA **258 / 0** (243 before): precache completeness, no cross-origin caching, version
   agreement, the startup import graph, set-not-toggle, the detail listeners, feed order and
   paging, the empty-conversation rule.
 - jsdom checks **74 / 35 / 46** (the Inbox check grew by 11: the composer survives a new message
