@@ -1,5 +1,7 @@
 # Current handoff — 2026-09-26 (audit implementation, part 1: CI, browser tests, PWA 0.5.18)
 
+Session handoff: `HANDOFF_2026-09-26_SESSION9.md`.
+
 Tests at this point: PWA 265 / 0, jsdom 74 / 35 / 46, e2e 10 / 0, Android 209 / 0,
 notification gates 78 / 0, rules emulator 53 / 0, import 98 / 0, billing 17 / 0.
 
@@ -11,7 +13,8 @@ by number (F1-F31). This entry grows as the work lands; each item says whether i
   PWA tests + the jsdom DOM checks, the notification/billing/import gates, the Android unit
   tests (the Kotlin half of the golden corpus) and the rules emulator suite. The notification
   gates had been red since 0.11.7 on stale version pins; they are unpinned and globbed.
-- **PWA 0.5.18 — audit fix bundle (F3, F4, F6, F7, F8, F9, part of F27). Not deployed yet.**
+- **PWA 0.5.18 — audit fix bundle (F3, F4, F6, F7, F8, F9, part of F27). Live 2026-09-26**
+  (the deployed `sw.js` reports `chefvoice-pwa-v0.5.18`).
   The service worker caches only the app's own files (never Firestore's message channel) and a
   first visit is enough to reopen offline; `<main>` is no longer a live region and the screen
   can be zoomed; Like/Save set the state they show and the open recipe follows the listeners;
@@ -20,7 +23,8 @@ by number (F1-F31). This entry grows as the work lands; each item says whether i
   controllers pulled the Firebase SDK into app.js's static import graph, so with the CDN
   unreachable the whole app failed to start. See `PWA_AUDIT_FIX_BUNDLE_0.5.18.md`.
   Android, parser, rules, Functions, Live, App Check untouched by the bundle itself.
-- **Account deletion and privacy (F15, F16, F24). Not deployed yet.** Deletion now also
+- **Account deletion and privacy (F15, F16, F24).** The deletion page and the corrected policy
+  are live (2026-09-26); the `chefvoice-notifications` deploy was not verified from here. Deletion now also
   removes entitlement and purchase records, the import counter and the account's
   `purchaseTokens` rows, and pseudonymizes moderation events like reports
   (`chefvoice-notifications`). The deletion page gains "Forgot your password?", says the whole
@@ -34,7 +38,8 @@ by number (F1-F31). This entry grows as the work lands; each item says whether i
   promise the purchase-record deletion that only the new function does. **James should read
   the policy diff before it goes live** — it is legal text.
 - **Threads show their newest items (F5), both platforms, and no advertising ID on Android
-  (F13).** Android is 0.11.18 / 79, not built for release: see `ANDROID_AUDIT_FIXES_0.11.18.md`,
+  (F13).** Android 0.11.18 / 79 was built, tested on a device by James and uploaded to Play
+  on 2026-09-26: see `ANDROID_AUDIT_FIXES_0.11.18.md`,
   which also lists the Play Console answers that must change with that upload.
 - **Browser smoke tests (F2, web half).** `e2e/`: Playwright in headless Chromium with every
   non-local request refused, 10 / 0. Found the start-up bug above, the always-visible Inbox

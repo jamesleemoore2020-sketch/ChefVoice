@@ -3,7 +3,7 @@
 The first batch of fixes from the 2026-09-26 full audit (F3, F4, F5, F6, F7, F8, F9 and
 part of F27), plus one bug the audit missed that the new browser smoke
 tests found on their first run. Everything here is in `web/`; it ships as one pinned
-`DEPLOY_PWA.cmd` (`hosting:pwa` only).
+`DEPLOY_PWA.cmd` (`hosting:pwa` only). **Live since 2026-09-26.**
 
 **Not touched:** the parser and the golden corpus, Android, `firestore.rules`,
 `storage.rules`, every Functions codebase, `transcribeChefVoice`, Live signaling, App Check.

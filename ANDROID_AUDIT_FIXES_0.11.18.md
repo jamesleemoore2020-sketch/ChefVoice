@@ -1,7 +1,9 @@
 # Android audit fixes (0.11.18, versionCode 79)
 
-Android's share of the 2026-09-26 full audit. This build is **not released**: nothing here has
-been built for release, signed or uploaded. Items are added as they land.
+Android's share of the 2026-09-26 full audit. Built, signed, tested on a device by James and
+uploaded to Play on 2026-09-26; track and rollout not recorded here. The AAB carries the R8
+mapping (`BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map`), so Play needs no
+separate mapping upload.
 
 **Not touched:** the parser (`voice/`) and the golden corpus, `firestore.rules`,
 `storage.rules`, every Functions codebase, `transcribeChefVoice`, Live signaling, App Check.
