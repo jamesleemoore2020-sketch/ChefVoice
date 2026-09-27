@@ -19,3 +19,8 @@ mappings/
 build_install.log
 build_release.log
 crash_full.log
+
+# Playwright output (e2e/)
+test-results/
+playwright-report/
+blob-report/
