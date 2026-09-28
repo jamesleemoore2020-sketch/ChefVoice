@@ -99,6 +99,9 @@ counter already resyncs after any delete (`syncRecipeCommentCountOnDelete`), who
    It is identical to `d7311e8` (2026-09-11), the last commit to touch the rules. If the console
    shows anything else, stop: rules were deployed from somewhere that is not in this repo, and
    that difference has to be merged in first.
+   **Done 2026-09-28:** James copied the published rules from the console, and they are
+   identical to `a3c30ff:firestore.rules` (719 lines each, ignoring line endings). Deploying
+   changes exactly this document's diff.
 2. Run `DEPLOY_COMMUNITY_RULES.cmd`. It runs this emulator suite, then deploys `firestore:rules`
    only.
 3. Then use the real apps against the new rules:

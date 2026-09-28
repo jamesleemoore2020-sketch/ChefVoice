@@ -28,8 +28,9 @@ corpus, `storage.rules`, Functions, Live signaling, App Check and Android untouc
   them as well denied Android's largest publish. The PWA's voice clips no longer preload
   instead, and Android plays them only on tap.
   Emulator tests came first (11 failed on the old rules); undoing the changes one at a time,
-  16 ways, was caught every time. **Deploy only after diffing the console's live rules** against
-  `a3c30ff:firestore.rules`, then run `DEPLOY_COMMUNITY_RULES.cmd`.
+  16 ways, was caught every time. The console's live rules were diffed on 2026-09-28 and are
+  identical to `a3c30ff:firestore.rules`, so `DEPLOY_COMMUNITY_RULES.cmd` changes only F23.
+  **Not deployed yet.**
 
 # Current handoff — 2026-09-26 (audit implementation, part 2: the UI batch, Android 0.11.19 / PWA 0.5.19)
 
