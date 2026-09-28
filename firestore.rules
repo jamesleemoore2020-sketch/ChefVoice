@@ -63,6 +63,62 @@ service cloud.firestore {
         && name == get(/databases/$(database)/documents/users/$(uid)).data.displayName;
     }
 
+    // A photo, video or profile picture a chef publishes must be a download URL from this
+    // project's own bucket. The field is otherwise free text: an author could point
+    // every viewer's app at a tracking pixel, or at an image Storage's rules never checked.
+    // The object name is held to the characters a download URL encodes it with (its slashes
+    // arrive as %2F), so no URL can climb out of the bucket with ../ or a backslash.
+    function storageUrlPattern() {
+      return 'https://firebasestorage[.]googleapis[.]com/v0/b/chefvoice-d7fec[.]firebasestorage[.]app/o/[A-Za-z0-9%._~!*()-]+([?][A-Za-z0-9%._~=&-]*)?';
+    }
+
+    function profileImageUrl(url) {
+      return url == '' || (url is string && url.matches(storageUrlPattern()));
+    }
+
+    // Rules cannot loop, so each Storage slot is checked in turn: slot-00 to slot-23
+    // (storage.rules), and neither app publishes more photos or videos than that. The list is
+    // padded to every slot with a URL that passes, so no slot needs its own size check. That
+    // matters: Firestore stops at 1,000 evaluated expressions and denies, and an owner's update
+    // filling every slot at once, as Android's publish does, has to fit (rules-tests checks it).
+    // An item that is not a map, or has no url, fails by evaluation error, which denies the
+    // write all the same.
+    //
+    // Voice clips are not checked this way: with their 16 slots checked too, Android's publish
+    // of its largest recipe went over the limit and was denied (measured; see
+    // RULES_HARDENING_0.5.20.md). A voice clip is fetched only when a chef taps play: Android
+    // plays on tap, and the PWA's players do not preload.
+    function storageMediaList(items) {
+      let p = storageUrlPattern();
+      let v = {'url': 'https://firebasestorage.googleapis.com/v0/b/chefvoice-d7fec.firebasestorage.app/o/unused-slot'};
+      let s = items.concat([v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v]);
+      return items.size() <= 24
+        && s[0].url.matches(p)
+        && s[1].url.matches(p)
+        && s[2].url.matches(p)
+        && s[3].url.matches(p)
+        && s[4].url.matches(p)
+        && s[5].url.matches(p)
+        && s[6].url.matches(p)
+        && s[7].url.matches(p)
+        && s[8].url.matches(p)
+        && s[9].url.matches(p)
+        && s[10].url.matches(p)
+        && s[11].url.matches(p)
+        && s[12].url.matches(p)
+        && s[13].url.matches(p)
+        && s[14].url.matches(p)
+        && s[15].url.matches(p)
+        && s[16].url.matches(p)
+        && s[17].url.matches(p)
+        && s[18].url.matches(p)
+        && s[19].url.matches(p)
+        && s[20].url.matches(p)
+        && s[21].url.matches(p)
+        && s[22].url.matches(p)
+        && s[23].url.matches(p);
+    }
+
     function validUserProfileShape(data) {
       return data.keys().hasOnly([
           'displayName', 'bio', 'photoUrl', 'coverPhotoUrl', 'favoriteThings', 'createdAt', 'followerCount'
@@ -82,7 +138,16 @@ service cloud.firestore {
     // the window while still being required to sit inside it.
     function validUserProfileCreate(data) {
       return validUserProfileShape(data)
-        && recentClientTime(data.createdAt, 86400000, 300000);
+        && recentClientTime(data.createdAt, 86400000, 300000)
+        && profileImageUrl(data.photoUrl)
+        && profileImageUrl(data.coverPhotoUrl);
+    }
+
+    // A profile keeps the pictures it already has, since both apps send them back with every
+    // save; a new picture must come from Storage.
+    function validProfileImagesUpdate() {
+      return (request.resource.data.photoUrl == resource.data.get('photoUrl', '') || profileImageUrl(request.resource.data.photoUrl))
+        && (request.resource.data.coverPhotoUrl == resource.data.get('coverPhotoUrl', '') || profileImageUrl(request.resource.data.coverPhotoUrl));
     }
 
     function validUserProfileUpdate(data) {
@@ -231,20 +296,32 @@ service cloud.firestore {
         && data.commentCount is int && data.commentCount >= 0;
     }
 
+    function validRecipeMediaCreate(data) {
+      return !data.keys().hasAny(['media']) || storageMediaList(data.media);
+    }
+
+    // A media list an update leaves alone is not checked again, so a recipe published before
+    // this check stays editable; one it changes must be all Storage.
+    function validRecipeMediaUpdate(changed) {
+      return !changed.hasAny(['media']) || storageMediaList(request.resource.data.get('media', []));
+    }
+
     function validOwnerRecipeUpdate(recipeId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
       let unpublishOnly = resource.data.isPublic == true
         && request.resource.data.isPublic == false
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isPublic', 'updatedAt']);
+        && changed.hasOnly(['isPublic', 'updatedAt']);
       return ownsExistingRecipe()
         && (socialWriteAllowed() || unpublishOnly)
         && validRecipeData(recipeId, request.resource.data)
+        && validRecipeMediaUpdate(changed)
         && (unpublishOnly || profileNameMatches(request.resource.data.authorId, request.resource.data.authorName))
         && request.resource.data.authorId == resource.data.authorId
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.likes == resource.data.likes
         && request.resource.data.commentCount == resource.data.commentCount
         && recentClientTime(request.resource.data.updatedAt, 86400000, 300000)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        && changed.hasOnly([
           'title', 'description', 'servings', 'prepTimeMinutes', 'cookTimeMinutes',
           'ingredients', 'steps', 'stepIds', 'media', 'voiceClips', 'isPublic',
           'authorName', 'updatedAt', 'tags'
@@ -269,12 +346,17 @@ service cloud.firestore {
         && recentClientTime(request.resource.data.createdAt, 300000, 300000)
         && (!request.resource.data.keys().hasAny(['parentCommentId']) || request.resource.data.parentCommentId is string)
         && (!request.resource.data.keys().hasAny(['replyToUid']) || request.resource.data.replyToUid is string)
-        && (!request.resource.data.keys().hasAny(['replyToName']) || request.resource.data.replyToName is string)
-        && (!hasParent || (
-          exists(/databases/$(database)/documents/recipes/$(recipeId)/comments/$(request.resource.data.parentCommentId))
-          && get(/databases/$(database)/documents/recipes/$(recipeId)/comments/$(request.resource.data.parentCommentId)).data.authorId == request.resource.data.replyToUid
-          && !blockedBetween(request.auth.uid, request.resource.data.replyToUid)
-        ));
+        && (!request.resource.data.keys().hasAny(['replyToName']) || (request.resource.data.replyToName is string && request.resource.data.replyToName.size() <= 120))
+        && (hasParent
+          ? (exists(/databases/$(database)/documents/recipes/$(recipeId)/comments/$(request.resource.data.parentCommentId))
+            && get(/databases/$(database)/documents/recipes/$(recipeId)/comments/$(request.resource.data.parentCommentId)).data.authorId == request.resource.data.replyToUid
+            // Both apps copy the answered comment's author name, which was checked against
+            // that chef's profile when it was written. Checking the profile again here would
+            // refuse every reply to a chef who has renamed since.
+            && get(/databases/$(database)/documents/recipes/$(recipeId)/comments/$(request.resource.data.parentCommentId)).data.authorName == request.resource.data.get('replyToName', '')
+            && !blockedBetween(request.auth.uid, request.resource.data.replyToUid))
+          // A comment that answers nobody cannot say it answers someone.
+          : (request.resource.data.get('replyToUid', '') == '' && request.resource.data.get('replyToName', '') == ''));
     }
 
     function validLiveReactionChange(sessionId) {
@@ -388,6 +470,7 @@ service cloud.firestore {
       allow update: if signedIn()
         && request.auth.uid == uid
         && validUserProfileUpdate(request.resource.data)
+        && validProfileImagesUpdate()
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'displayName', 'bio', 'photoUrl', 'coverPhotoUrl', 'favoriteThings'
@@ -540,9 +623,10 @@ service cloud.firestore {
         && request.resource.data.reporterUid == request.auth.uid
         && request.resource.data.keys().hasOnly(['reporterUid', 'targetType', 'targetId', 'targetUid', 'contextId', 'reason', 'createdAt', 'status'])
         && request.resource.data.targetType in ['user', 'recipe', 'comment', 'reply', 'message']
-        && request.resource.data.targetId is string
-        && request.resource.data.targetUid is string
-        && request.resource.data.contextId is string
+        // Both apps cut these to 180 characters, as the moderator callable's cleanText does.
+        && request.resource.data.targetId is string && request.resource.data.targetId.size() <= 180
+        && request.resource.data.targetUid is string && request.resource.data.targetUid.size() <= 180
+        && request.resource.data.contextId is string && request.resource.data.contextId.size() <= 180
         && request.resource.data.reason is string
         && request.resource.data.reason.size() > 0
         && request.resource.data.reason.size() <= 500
@@ -561,6 +645,7 @@ service cloud.firestore {
         && request.resource.data.authorId == request.auth.uid
         && profileNameMatches(request.auth.uid, request.resource.data.authorName)
         && validRecipeData(recipeId, request.resource.data)
+        && validRecipeMediaCreate(request.resource.data)
         && request.resource.data.likes == 0
         && request.resource.data.commentCount == 0;
       allow update: if validOwnerRecipeUpdate(recipeId);
@@ -590,7 +675,10 @@ service cloud.firestore {
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
           && request.resource.data.text.size() <= 800;
-        allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+        // The comment's author, or the recipe's: a chef can clear comments on their own recipe.
+        allow delete: if signedIn()
+          && (resource.data.authorId == request.auth.uid
+            || get(/databases/$(database)/documents/recipes/$(recipeId)).data.authorId == request.auth.uid);
       }
     }
 
@@ -649,6 +737,9 @@ service cloud.firestore {
         allow create: if socialWriteAllowed()
           && request.resource.data.authorId == request.auth.uid
           && profileNameMatches(request.auth.uid, request.resource.data.authorName)
+          // Chat is open while the broadcast is: not after it ends, and not once the host's
+          // lease has lapsed.
+          && activeLiveSession(sessionId)
           && !blockedBetween(request.auth.uid, get(/databases/$(database)/documents/liveSessions/$(sessionId)).data.hostId)
           && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'text', 'createdAt'])
           && request.resource.data.text is string
@@ -661,7 +752,8 @@ service cloud.firestore {
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
           && request.resource.data.text.size() <= 500;
-        allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+        // The comment's author, or the host: a host can clear chat in their own room.
+        allow delete: if signedIn() && (resource.data.authorId == request.auth.uid || liveHost(sessionId));
       }
 
       match /peers/{peerId} {
@@ -713,6 +805,13 @@ service cloud.firestore {
     // both directions -- a readable seat counter would leak how many accounts exist,
     // and a writable one would let a modified APK mint itself a founding seat.
     match /config/{configId} {
+      allow read, write: if false;
+    }
+
+    // The daily recipe-import counter, written only by the chefvoice-import Admin SDK. It was
+    // closed to clients already, because no rule matched it; this says so on the record, like
+    // the other backend-only collections. A writable counter would reset its owner's daily limit.
+    match /importUsage/{uid} {
       allow read, write: if false;
     }
   }

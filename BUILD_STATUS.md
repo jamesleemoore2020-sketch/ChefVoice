@@ -1,10 +1,12 @@
 # Current handoff — 2026-09-27 (audit implementation, part 3: hardening, PWA 0.5.20)
 
 Branch `claude/audit-implementation-2026-09-26-02973b`, which continues
-`claude/audit-implementation-7bb2be` from `a3c30ff`. Writeup: `SECURITY_HEADERS_0.5.20.md`.
+`claude/audit-implementation-7bb2be` from `a3c30ff`. Writeups: `SECURITY_HEADERS_0.5.20.md`,
+`RULES_HARDENING_0.5.20.md`.
 
-Tests at this point: PWA 285 / 0, jsdom 74 / 35 / 46, e2e 19 / 0. **Nothing here is deployed
-yet.** Parser, corpus, rules, Functions, Live signaling, App Check and Android untouched.
+Tests at this point: PWA 285 / 0, jsdom 74 / 35 / 46, e2e 19 / 0, rules emulator 66 / 0,
+notification gates 78 / 0. **Nothing here is deployed yet.** Parser, corpus, `storage.rules`,
+Functions, Live signaling, App Check and Android untouched.
 
 - **Security headers and a Content-Security-Policy (F22).** Every path of all three Hosting
   sites (PWA, deletion page, privacy policy) now gets `nosniff`, a referrer policy and
@@ -15,6 +17,17 @@ yet.** Parser, corpus, rules, Functions, Live signaling, App Check and Android u
   ties each policy to what its page loads; the e2e fixture fails any spec that trips the
   policy. Ships with `DEPLOY_PWA.cmd`, `DEPLOY_ACCOUNT_DELETION_PAGE.cmd` and
   `DEPLOY_LEGAL_PAGE.cmd`; the last two now refuse to deploy when the header gates fail.
+- **Firestore rules hardening (F23).** Recipe photo and video URLs and profile pictures must come
+  from this project's Storage bucket (a list or picture an edit leaves alone is not re-checked).
+  A reply's `replyToName` must match the answered comment. Report fields are bounded. Live chat
+  closes when the broadcast does. Recipe authors and Live hosts can delete comments in their own
+  space. `importUsage` is closed explicitly.
+  Voice-clip URLs are not checked: measured against Firestore's 1,000-expression limit, checking
+  them as well denied Android's largest publish. The PWA's voice clips no longer preload
+  instead, and Android plays them only on tap.
+  Emulator tests came first (11 failed on the old rules); undoing the changes one at a time,
+  16 ways, was caught every time. **Deploy only after diffing the console's live rules** against
+  `a3c30ff:firestore.rules`, then run `DEPLOY_COMMUNITY_RULES.cmd`.
 
 # Current handoff — 2026-09-26 (audit implementation, part 2: the UI batch, Android 0.11.19 / PWA 0.5.19)
 

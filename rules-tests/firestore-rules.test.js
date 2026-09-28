@@ -544,3 +544,285 @@ test("a chef cannot raise their own follower count through a profile write", asy
     setDoc(doc(db, "users", ALICE), { ...profile("Alice", createdAt), followerCount: 9999 }, { merge: true })
   );
 });
+
+// ---------------------------------------------------------------------------
+// Hardening (audit F23): photos, videos and profile pictures only from ChefVoice's
+// own Storage, replies that name who they answer truthfully, bounded reports, Live
+// chat only while live, and recipe authors and Live hosts can clear comments in
+// their own space.
+// ---------------------------------------------------------------------------
+
+const CAROL = "carol000000000000000000000003";
+const BUCKET = "https://firebasestorage.googleapis.com/v0/b/chefvoice-d7fec.firebasestorage.app/o/";
+
+// A download URL as getDownloadURL (web) and downloadUrl (Android) return it.
+function storageUrl(objectPath) {
+  return `${BUCKET}${encodeURIComponent(objectPath)}?alt=media&token=0b2f6a8e-4c1d-4f5e-9a7b-2c3d4e5f6a7b`;
+}
+
+function mediaList(count) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `m${i}`,
+    type: "IMAGE",
+    url: storageUrl(`recipes/${ALICE}/r/publicMedia/slot-${String(i).padStart(2, "0")}`),
+  }));
+}
+
+function voiceList(count) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `v${i}`,
+    label: `Chef voice ${i + 1}`,
+    createdAt: now(),
+    url: storageUrl(`recipes/${ALICE}/r/voice/clip-${String(i).padStart(2, "0")}`),
+  }));
+}
+
+// URLs that must never be accepted where a Storage download URL is expected.
+const OUTSIDE_URLS = [
+  "https://evil.example/pixel.png",
+  "http://firebasestorage.googleapis.com/v0/b/chefvoice-d7fec.firebasestorage.app/o/x?alt=media",
+  "https://firebasestorage.googleapis.com/v0/b/another-project.appspot.com/o/x?alt=media",
+  "https://firebasestorage.googleapis.com.evil.example/v0/b/chefvoice-d7fec.firebasestorage.app/o/x",
+  `${BUCKET}x/../../another-project.appspot.com/o/pixel`,
+  // A browser reads a backslash in an https URL as a slash.
+  `${BUCKET}..\\..\\another-project.appspot.com\\o\\pixel`,
+  `${BUCKET}x?alt=media#https://evil.example/`,
+];
+
+async function denied(promise, what) {
+  try {
+    await assertFails(promise);
+  } catch (error) {
+    throw new Error(`${what}: ${error.message}`);
+  }
+}
+
+test("recipe photos and videos must be download URLs from ChefVoice's own Storage", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(setDoc(doc(db, "recipes", "media-1"), recipe(ALICE, "Alice", { media: mediaList(3) })));
+  // Android adds stepId and caption to each item.
+  await assertSucceeds(
+    setDoc(doc(db, "recipes", "media-2"), recipe(ALICE, "Alice", { media: [{ ...mediaList(1)[0], stepId: "s1", caption: "" }] }))
+  );
+  for (const url of [...OUTSIDE_URLS, ""]) {
+    await denied(setDoc(doc(db, "recipes", "media-3"), recipe(ALICE, "Alice", { media: [{ id: "m0", type: "IMAGE", url }] })), url || "empty url");
+  }
+  await denied(setDoc(doc(db, "recipes", "media-3"), recipe(ALICE, "Alice", { media: [{ id: "m0", type: "IMAGE" }] })), "no url");
+});
+
+test("every photo and video slot is checked, up to the 24 Storage allows", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(setDoc(doc(db, "recipes", "slots-1"), recipe(ALICE, "Alice", { media: mediaList(24) })));
+  await denied(setDoc(doc(db, "recipes", "slots-2"), recipe(ALICE, "Alice", { media: mediaList(25) })), "25 photos");
+  // The last slot is checked as closely as the first.
+  const media = mediaList(24);
+  media[23] = { ...media[23], url: OUTSIDE_URLS[0] };
+  await denied(setDoc(doc(db, "recipes", "slots-3"), recipe(ALICE, "Alice", { media })), "an outside URL in slot 23");
+});
+
+// Firestore stops evaluating a request at 1,000 expressions and denies it. The costliest
+// write either app makes is Android's publish: a set() over the staged recipe, going public,
+// with every photo, video and voice-clip slot filled at once and every optional field set.
+// Checking voice clips as well pushed exactly this write over the limit, which is why the
+// rules check photos and videos only.
+test("the largest recipe Android can publish still fits the rules' budget", async () => {
+  const createdAt = now() - DAY_MS;
+  const largest = (overrides = {}) => recipe(ALICE, "Alice", {
+    title: "T".repeat(180),
+    description: "D".repeat(5000),
+    servings: 12,
+    prepTimeMinutes: 30,
+    cookTimeMinutes: 240,
+    ingredients: Array.from({ length: 300 }, (_, i) => ({ id: `i${i}`, quantity: "2", unit: "tablespoons", name: `ingredient ${i}` })),
+    steps: Array.from({ length: 300 }, (_, i) => `Step ${i}: stir and taste.`),
+    stepIds: Array.from({ length: 300 }, (_, i) => `s${i}`),
+    tags: ["a", "b", "c", "d", "e", "f", "g", "h"],
+    isPublic: false,
+    createdAt,
+    ...overrides,
+  });
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "recipes", "largest"), largest());
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  const everySlot = {
+    isPublic: true,
+    media: mediaList(24).map((item, i) => ({ ...item, stepId: `s${i}`, caption: "Plated and ready" })),
+    voiceClips: voiceList(16),
+  };
+  await assertSucceeds(setDoc(doc(db, "recipes", "largest"), largest(everySlot)));
+  await assertSucceeds(setDoc(doc(db, "recipes", "largest-new"), largest(everySlot)));
+});
+
+test("a recipe whose media predates the check stays editable, but gains no outside media", async () => {
+  const legacy = [{ id: "old", type: "IMAGE", url: "https://legacy.example/photo.jpg" }];
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "recipes", "legacy-1"), recipe(ALICE, "Alice", { media: legacy }));
+    await setDoc(doc(db, "recipes", "legacy-2"), recipe(ALICE, "Alice", { media: legacy }));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(updateDoc(doc(db, "recipes", "legacy-1"), { title: "Renamed", updatedAt: now() }));
+  await assertSucceeds(updateDoc(doc(db, "recipes", "legacy-1"), { isPublic: false, updatedAt: now() }));
+  await denied(
+    updateDoc(doc(db, "recipes", "legacy-2"), { media: [...legacy, ...mediaList(1)], updatedAt: now() }),
+    "changing media while an outside URL remains"
+  );
+  await assertSucceeds(updateDoc(doc(db, "recipes", "legacy-2"), { media: mediaList(1), updatedAt: now() }));
+});
+
+test("a profile photo or cover is empty or from ChefVoice's own Storage", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(updateDoc(doc(db, "users", ALICE), { photoUrl: storageUrl(`profiles/${ALICE}/avatar/profile.jpg`) }));
+  await assertSucceeds(updateDoc(doc(db, "users", ALICE), { coverPhotoUrl: storageUrl(`profiles/${ALICE}/cover/profile.jpg`) }));
+  await assertSucceeds(updateDoc(doc(db, "users", ALICE), { photoUrl: "", coverPhotoUrl: "" }));
+  for (const url of OUTSIDE_URLS) {
+    await denied(updateDoc(doc(db, "users", ALICE), { photoUrl: url }), `photoUrl ${url}`);
+    await denied(updateDoc(doc(db, "users", ALICE), { coverPhotoUrl: url }), `coverPhotoUrl ${url}`);
+  }
+  const carol = env.authenticatedContext(CAROL).firestore();
+  await denied(setDoc(doc(carol, "users", CAROL), { ...profile("Carol", now()), photoUrl: OUTSIDE_URLS[0] }), "a new profile with an outside photo");
+  await assertSucceeds(setDoc(doc(carol, "users", CAROL), profile("Carol", now())));
+});
+
+test("a profile edit keeps a photo URL saved before the check", async () => {
+  const createdAt = now() - 90 * DAY_MS;
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "users", ALICE), { ...profile("Alice", createdAt), photoUrl: "https://legacy.example/me.jpg" });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  // Both clients send the stored photo URL back with every profile save.
+  await assertSucceeds(
+    setDoc(doc(db, "users", ALICE), { ...profile("Alice", createdAt), bio: "Braises.", photoUrl: "https://legacy.example/me.jpg" }, { merge: true })
+  );
+});
+
+function commentByBob() {
+  return { authorId: BOB, authorName: "Bob", text: "Lovely.", createdAt: now() };
+}
+
+function replyToBob(overrides = {}) {
+  return {
+    authorId: ALICE,
+    authorName: "Alice",
+    text: "Thank you!",
+    createdAt: now(),
+    parentCommentId: "c1",
+    replyToUid: BOB,
+    replyToName: "Bob",
+    ...overrides,
+  };
+}
+
+test("a reply names the chef it answers exactly as their comment does", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "recipes", "reply-1"), recipe(ALICE, "Alice"));
+    await setDoc(doc(db, "recipes", "reply-1", "comments", "c1"), commentByBob());
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(setDoc(doc(db, "recipes", "reply-1", "comments", "r1"), replyToBob()));
+  await denied(setDoc(doc(db, "recipes", "reply-1", "comments", "r2"), replyToBob({ replyToName: "The ChefVoice team" })), "a made-up name");
+  await denied(setDoc(doc(db, "recipes", "reply-1", "comments", "r3"), replyToBob({ replyToName: "B".repeat(121) })), "a 121-character name");
+  // Bob renames himself. His comment still carries the name he had, and so do replies to it:
+  // checking against his current profile name instead would refuse every reply to his old comments.
+  await env.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "users", BOB), { displayName: "Robert" });
+  });
+  await assertSucceeds(setDoc(doc(db, "recipes", "reply-1", "comments", "r4"), replyToBob()));
+});
+
+test("a top-level comment cannot claim to be a reply", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "recipes", "reply-2"), recipe(BOB, "Bob"));
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  const comment = { authorId: ALICE, authorName: "Alice", text: "Great.", createdAt: now() };
+  await assertSucceeds(setDoc(doc(db, "recipes", "reply-2", "comments", "t1"), comment));
+  await denied(setDoc(doc(db, "recipes", "reply-2", "comments", "t2"), { ...comment, replyToName: "Bob" }), "replyToName without a parent");
+  await denied(setDoc(doc(db, "recipes", "reply-2", "comments", "t3"), { ...comment, replyToUid: BOB }), "replyToUid without a parent");
+});
+
+test("a report's target and context fields are bounded", async () => {
+  const db = env.authenticatedContext(ALICE).firestore();
+  const report = {
+    reporterUid: ALICE,
+    targetType: "recipe",
+    targetId: "r1",
+    targetUid: BOB,
+    contextId: "r1",
+    reason: "Spam",
+    createdAt: now(),
+    status: "open",
+  };
+  // Both clients cut these to 180 characters before writing.
+  await assertSucceeds(
+    setDoc(doc(db, "reports", "rep-1"), { ...report, targetId: "t".repeat(180), targetUid: "u".repeat(180), contextId: "c".repeat(180) })
+  );
+  for (const field of ["targetId", "targetUid", "contextId"]) {
+    await denied(setDoc(doc(db, "reports", `rep-${field}`), { ...report, [field]: "x".repeat(181) }), `a 181-character ${field}`);
+  }
+});
+
+test("Live chat is open only while the broadcast is live", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "liveSessions", "chat-live"), liveSession(ALICE, "Alice"));
+    await setDoc(doc(db, "liveSessions", "chat-ended"), liveSession(ALICE, "Alice", { status: "ENDED", heartbeatAt: 0, endedAt: now() }));
+    // The host's app stopped renewing its lease five minutes ago.
+    await setDoc(doc(db, "liveSessions", "chat-stale"), liveSession(ALICE, "Alice", { heartbeatAt: now() - 5 * 60 * 1000 }));
+  });
+  const db = env.authenticatedContext(BOB).firestore();
+  const comment = { authorId: BOB, authorName: "Bob", text: "Smells great", createdAt: now() };
+  await assertSucceeds(setDoc(doc(db, "liveSessions", "chat-live", "comments", "l1"), comment));
+  await denied(setDoc(doc(db, "liveSessions", "chat-ended", "comments", "l1"), comment), "chat on an ended broadcast");
+  await denied(setDoc(doc(db, "liveSessions", "chat-stale", "comments", "l1"), comment), "chat on a stale broadcast");
+});
+
+test("a recipe's author can clear comments on it, and nobody else can", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "users", CAROL), profile("Carol", now() - DAY_MS));
+    await setDoc(doc(db, "recipes", "mod-1"), recipe(ALICE, "Alice"));
+    await setDoc(doc(db, "recipes", "mod-1", "comments", "c1"), commentByBob());
+    await setDoc(doc(db, "recipes", "mod-1", "comments", "c2"), commentByBob());
+    await setDoc(doc(db, "recipes", "mod-2"), recipe(BOB, "Bob"));
+    await setDoc(doc(db, "recipes", "mod-2", "comments", "c1"), { ...commentByBob(), authorId: CAROL, authorName: "Carol" });
+  });
+  const alice = env.authenticatedContext(ALICE).firestore();
+  const bob = env.authenticatedContext(BOB).firestore();
+  const carol = env.authenticatedContext(CAROL).firestore();
+  await denied(deleteDoc(doc(carol, "recipes", "mod-1", "comments", "c1")), "a third chef clearing a comment");
+  await assertSucceeds(deleteDoc(doc(alice, "recipes", "mod-1", "comments", "c1")));
+  await assertSucceeds(deleteDoc(doc(bob, "recipes", "mod-1", "comments", "c2")));
+  await denied(deleteDoc(doc(alice, "recipes", "mod-2", "comments", "c1")), "clearing a comment on someone else's recipe");
+});
+
+test("a Live host can clear chat in their room, and nobody else can", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "users", CAROL), profile("Carol", now() - DAY_MS));
+    await setDoc(doc(db, "liveSessions", "room-1"), liveSession(ALICE, "Alice"));
+    await setDoc(doc(db, "liveSessions", "room-1", "comments", "l1"), commentByBob());
+    await setDoc(doc(db, "liveSessions", "room-1", "comments", "l2"), commentByBob());
+    await setDoc(doc(db, "liveSessions", "room-2"), liveSession(ALICE, "Alice", { status: "ENDED", heartbeatAt: 0, endedAt: now() }));
+    await setDoc(doc(db, "liveSessions", "room-2", "comments", "l1"), commentByBob());
+  });
+  const alice = env.authenticatedContext(ALICE).firestore();
+  const bob = env.authenticatedContext(BOB).firestore();
+  const carol = env.authenticatedContext(CAROL).firestore();
+  await denied(deleteDoc(doc(carol, "liveSessions", "room-1", "comments", "l1")), "a viewer clearing someone else's chat");
+  await assertSucceeds(deleteDoc(doc(alice, "liveSessions", "room-1", "comments", "l1")));
+  await assertSucceeds(deleteDoc(doc(bob, "liveSessions", "room-1", "comments", "l2")));
+  // Clearing up after the broadcast has ended.
+  await assertSucceeds(deleteDoc(doc(alice, "liveSessions", "room-2", "comments", "l1")));
+});
+
+test("the import counter is closed to clients", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "importUsage", ALICE), { count: 1 });
+  });
+  const db = env.authenticatedContext(ALICE).firestore();
+  await denied(getDoc(doc(db, "importUsage", ALICE)), "reading the import counter");
+  await denied(setDoc(doc(db, "importUsage", ALICE), { count: 0 }), "resetting the import counter");
+});
