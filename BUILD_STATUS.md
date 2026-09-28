@@ -33,8 +33,9 @@ corpus, `storage.rules`, Functions, Live signaling, App Check and Android untouc
   identical to `a3c30ff:firestore.rules`, so `DEPLOY_COMMUNITY_RULES.cmd` changes only F23.
   **Live since 2026-09-28** (gate 66 / 0, released to `cloud.firestore`). Checked on the live
   PWA as James's account: a photo publish, a comment, a reply, a profile save and an unpublish all
-  passed. The test recipe is left private for James to delete. Still to do, on Android: a publish
-  with photos, and a profile photo followed by a bio edit.
+  passed. On James's phone (Play 0.11.18), a bio edit on a profile with a photo and a cover, and a
+  three-photo publish in Android's full media shape, both passed too. Both test recipes are left
+  private for James to delete.
 
 # Current handoff — 2026-09-26 (audit implementation, part 2: the UI batch, Android 0.11.19 / PWA 0.5.19)
 

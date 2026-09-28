@@ -125,7 +125,19 @@ counter already resyncs after any delete (`syncRecipeCommentCountOnDelete`), who
    profile photo, and the PWA cannot add one, so the profile-with-photo case is still to do, on
    Android.
 
-   **Still to do, on Android:**
-   - Publish a recipe with several photos. It is the write the new media check costs most on,
-     and it has already passed in the emulator with every slot full.
-   - Add a profile photo, then edit the bio: both profile-picture paths.
+   **Android, done 2026-09-28** over adb, at James's request, on his phone (Galaxy S25 Ultra,
+   ChefVoice 0.11.18 from Play), signed in as ChefJ4Mr.Voice. Each step passed:
+   - **Profile with a photo.** The account already had a profile photo and a cover, both Storage
+     URLs. The bio was set to a test value and saved, then cleared and saved again. Both saves
+     sent the existing pictures back, the server took both, and the pictures were never changed.
+   - **Publish with photos.** A test recipe carried three generated photos (pushed to
+     `Pictures/ChefVoiceRulesCheck`, so none of James's own were used). Android's publish went
+     through: the staging write, three permitted uploads, then the final `set()` writing all
+     three Storage URLs in Android's full media shape (`id`, `type`, `url`, `stepId`,
+     `caption`). The server shows three items, each passing the new check. The attached
+     thumbnails were checked on screen: all three were the generated images.
+   - **Remove from Community** unpublished it. It was not deleted. An anonymous read now gets
+     403, and the account's public recipes are back to the original three.
+
+   Left for James: the private test recipe "Rules check test Android - unpublishing shortly" on
+   the phone, and the three test images in `Pictures/ChefVoiceRulesCheck`. Delete both if wanted.
