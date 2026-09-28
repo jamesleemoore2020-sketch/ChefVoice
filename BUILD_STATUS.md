@@ -7,7 +7,8 @@ Branch `claude/audit-implementation-2026-09-26-02973b`, which continues
 Tests at this point: PWA 285 / 0, jsdom 74 / 35 / 46, e2e 19 / 0, rules emulator 66 / 0,
 notification gates 78 / 0. **Live since 2026-09-28: PWA 0.5.20 and the headers on all three
 Hosting sites** (deployed from `8bfc237`; the deployed `sw.js` reports `chefvoice-pwa-v0.5.20`,
-and the live sites raised no policy violations). **The F23 rules are not deployed.** Parser,
+and the live sites raised no policy violations). **The F23 Firestore rules are live since
+2026-09-28 too** (`DEPLOY_COMMUNITY_RULES.cmd`, after the console diff). Parser,
 corpus, `storage.rules`, Functions, Live signaling, App Check and Android untouched.
 
 - **Security headers and a Content-Security-Policy (F22).** Every path of all three Hosting
@@ -30,7 +31,8 @@ corpus, `storage.rules`, Functions, Live signaling, App Check and Android untouc
   Emulator tests came first (11 failed on the old rules); undoing the changes one at a time,
   16 ways, was caught every time. The console's live rules were diffed on 2026-09-28 and are
   identical to `a3c30ff:firestore.rules`, so `DEPLOY_COMMUNITY_RULES.cmd` changes only F23.
-  **Not deployed yet.**
+  **Live since 2026-09-28** (gate 66 / 0, released to `cloud.firestore`). Still to do: a comment,
+  a reply, a photo publish and a profile edit from the real apps.
 
 # Current handoff — 2026-09-26 (audit implementation, part 2: the UI batch, Android 0.11.19 / PWA 0.5.19)
 

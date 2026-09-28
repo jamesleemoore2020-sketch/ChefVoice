@@ -2,8 +2,9 @@
 
 Finding **F23** of the 2026-09-26 full audit: six rules changes batched into one, because every
 rules deploy replaces the whole live ruleset. Committed on
-`claude/audit-implementation-2026-09-26-02973b`. **Not deployed.** The rules deploy is its own
-step (`DEPLOY_COMMUNITY_RULES.cmd`), separate from any app version. The one client change it
+`claude/audit-implementation-2026-09-26-02973b`. **Live since 2026-09-28**, deployed with
+`DEPLOY_COMMUNITY_RULES.cmd` after the console diff; see "Deploying" at the end. The rules
+deploy is its own step, separate from any app version. The one client change it
 comes with, voice clips that no longer preload, shipped in PWA 0.5.20 (live since 2026-09-28).
 
 **Not touched:** the parser and the golden corpus, `storage.rules`, every Functions codebase,
@@ -104,7 +105,12 @@ counter already resyncs after any delete (`syncRecipeCommentCountOnDelete`), who
    changes exactly this document's diff.
 2. Run `DEPLOY_COMMUNITY_RULES.cmd`. It runs this emulator suite, then deploys `firestore:rules`
    only.
-3. Then use the real apps against the new rules:
+   **Done 2026-09-28** from `c4907f4` (its rules are those tested at `8bfc237`). The gate
+   passed 66 / 0, the rules compiled in production, and the CLI reported "released rules
+   firestore.rules to cloud.firestore". Afterwards, read-only: the live PWA's Community feed and
+   a recipe (its photo and comment listeners) loaded without an error.
+3. Then use the real apps against the new rules (**still to do**; nothing here was written from
+   the Browser pane):
    - On the PWA: post a comment and a reply, and publish a recipe with a photo.
    - On Android: publish a recipe with photos.
    - Edit a profile that has a photo.
