@@ -1,6 +1,7 @@
 # Current handoff — 2026-09-27 (audit implementation, part 3: hardening, PWA 0.5.20)
 
-Branch `claude/audit-implementation-2026-09-26-02973b`, which continues
+Session handoff: `HANDOFF_2026-09-28_SESSION11.md`. Branch
+`claude/audit-implementation-2026-09-26-02973b`, which continues
 `claude/audit-implementation-7bb2be` from `a3c30ff`. Writeups: `SECURITY_HEADERS_0.5.20.md`,
 `RULES_HARDENING_0.5.20.md`.
 
