@@ -1,8 +1,9 @@
 # Security headers and a Content-Security-Policy (PWA 0.5.20)
 
 Finding **F22** of the 2026-09-26 full audit: defense in depth for a UI built from template
-strings. Committed on `claude/audit-implementation-2026-09-26-02973b`. **Not deployed yet**; see
-"Deploying" at the end.
+strings. Committed on `claude/audit-implementation-2026-09-26-02973b`. **Live on all three sites
+since 2026-09-28**, deployed from `8bfc237` and checked on the live sites; see "Deploying" at
+the end.
 
 **Not touched:** the parser and the golden corpus, `firestore.rules`, `storage.rules`, every
 Functions codebase, `transcribeChefVoice`, Live signaling, App Check, Android. The deletion page
@@ -153,6 +154,21 @@ curl -sI https://chefvoice-d7fec-legal.web.app/privacy.html
 ```
 
 and `https://chefvoice-d7fec.web.app/sw.js` should contain `chefvoice-pwa-v0.5.20`.
+
+**Done 2026-09-28**, the three scripts in that order from `8bfc237`. Their gates passed (the PWA
+tests 285 / 0, and the header tests 9 / 0 before each of the other two). Checked afterwards:
+
+- **Headers.** Every path tried, deep links and `sw.js` included, answers with the exact policy
+  in `firebase.json` and the three enforced headers.
+- **Version.** `sw.js` reports `chefvoice-pwa-v0.5.20`, and the badge says PWA 0.5.20.
+- **Sign-in pages.** Hosting's `/__/auth/iframe` and `/__/auth/handler` still carry none of the
+  new headers, on both `web.app` and `firebaseapp.com`.
+- **Deletion page.** The deployed page is identical to the repo's, and its script matches the
+  hash in its policy.
+- **In the browser.** The live sites, loaded in the Browser pane as a phone and at desktop size,
+  raised no violations. That covered the PWA's Community feed (Storage photos, the sign-in
+  iframe, a token refresh), the deletion page (Firebase SDK and sign-in iframe loaded; nobody
+  signed in) and the privacy policy.
 
 ## Promoting the policy
 

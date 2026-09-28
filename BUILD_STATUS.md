@@ -5,8 +5,10 @@ Branch `claude/audit-implementation-2026-09-26-02973b`, which continues
 `RULES_HARDENING_0.5.20.md`.
 
 Tests at this point: PWA 285 / 0, jsdom 74 / 35 / 46, e2e 19 / 0, rules emulator 66 / 0,
-notification gates 78 / 0. **Nothing here is deployed yet.** Parser, corpus, `storage.rules`,
-Functions, Live signaling, App Check and Android untouched.
+notification gates 78 / 0. **Live since 2026-09-28: PWA 0.5.20 and the headers on all three
+Hosting sites** (deployed from `8bfc237`; the deployed `sw.js` reports `chefvoice-pwa-v0.5.20`,
+and the live sites raised no policy violations). **The F23 rules are not deployed.** Parser,
+corpus, `storage.rules`, Functions, Live signaling, App Check and Android untouched.
 
 - **Security headers and a Content-Security-Policy (F22).** Every path of all three Hosting
   sites (PWA, deletion page, privacy policy) now gets `nosniff`, a referrer policy and

@@ -3,8 +3,8 @@
 Finding **F23** of the 2026-09-26 full audit: six rules changes batched into one, because every
 rules deploy replaces the whole live ruleset. Committed on
 `claude/audit-implementation-2026-09-26-02973b`. **Not deployed.** The rules deploy is its own
-step (`DEPLOY_COMMUNITY_RULES.cmd`), separate from any app version; the one client change it
-comes with, voice clips that no longer preload, ships in PWA 0.5.20.
+step (`DEPLOY_COMMUNITY_RULES.cmd`), separate from any app version. The one client change it
+comes with, voice clips that no longer preload, shipped in PWA 0.5.20 (live since 2026-09-28).
 
 **Not touched:** the parser and the golden corpus, `storage.rules`, every Functions codebase,
 Live signaling, App Check, Android. No app needs an update for these rules: each one was checked
