@@ -109,8 +109,23 @@ counter already resyncs after any delete (`syncRecipeCommentCountOnDelete`), who
    passed 66 / 0, the rules compiled in production, and the CLI reported "released rules
    firestore.rules to cloud.firestore". Afterwards, read-only: the live PWA's Community feed and
    a recipe (its photo and comment listeners) loaded without an error.
-3. Then use the real apps against the new rules (**still to do**; nothing here was written from
-   the Browser pane):
-   - On the PWA: post a comment and a reply, and publish a recipe with a photo.
-   - On Android: publish a recipe with photos.
-   - Edit a profile that has a photo.
+3. Then use the real apps against the new rules.
+   **PWA, done 2026-09-28** in the Browser pane, at James's request, as his own account
+   (DaPlug, `pluggednent2020@gmail.com`). Each step passed:
+   - A test recipe with a generated photo was published. Its media is the Storage download URL
+     for `publicMedia/slot-00`, which the new check accepted.
+   - A comment and a reply were posted on it. The reply shows "to DaPlug", so the new
+     `replyToName` check accepts what the PWA writes.
+   - An unchanged profile saved.
+   - The recipe was unpublished, the rule's unpublish-only path. It was not deleted, because
+     that is permanent. It is now private (an anonymous read gets 403, its comments too), still
+     in this account as "Rules check test (unpublishing shortly)", for James to delete or keep.
+
+   Nobody else was notified: both comment triggers skip the recipe's own author. DaPlug has no
+   profile photo, and the PWA cannot add one, so the profile-with-photo case is still to do, on
+   Android.
+
+   **Still to do, on Android:**
+   - Publish a recipe with several photos. It is the write the new media check costs most on,
+     and it has already passed in the emulator with every slot full.
+   - Add a profile photo, then edit the bio: both profile-picture paths.

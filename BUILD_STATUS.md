@@ -31,8 +31,10 @@ corpus, `storage.rules`, Functions, Live signaling, App Check and Android untouc
   Emulator tests came first (11 failed on the old rules); undoing the changes one at a time,
   16 ways, was caught every time. The console's live rules were diffed on 2026-09-28 and are
   identical to `a3c30ff:firestore.rules`, so `DEPLOY_COMMUNITY_RULES.cmd` changes only F23.
-  **Live since 2026-09-28** (gate 66 / 0, released to `cloud.firestore`). Still to do: a comment,
-  a reply, a photo publish and a profile edit from the real apps.
+  **Live since 2026-09-28** (gate 66 / 0, released to `cloud.firestore`). Checked on the live
+  PWA as James's account: a photo publish, a comment, a reply, a profile save and an unpublish all
+  passed. The test recipe is left private for James to delete. Still to do, on Android: a publish
+  with photos, and a profile photo followed by a bio edit.
 
 # Current handoff — 2026-09-26 (audit implementation, part 2: the UI batch, Android 0.11.19 / PWA 0.5.19)
 
