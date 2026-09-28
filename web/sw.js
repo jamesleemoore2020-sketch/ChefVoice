@@ -6,7 +6,7 @@
 // 0.5.18 cached every GET, so a shared browser kept another chef's messages in Cache
 // Storage after they signed out. Firestore, Storage, the Firebase SDK on gstatic and
 // Analytics now go straight to the network, untouched.
-const CACHE='chefvoice-pwa-v0.5.19';
+const CACHE='chefvoice-pwa-v0.5.20';
 
 // Everything the app needs to boot offline. web/tests/hosting-config.test.mjs fails when a
 // file under web/js/ or web/css/ is missing from this list: the worker does not control the

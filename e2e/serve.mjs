@@ -1,9 +1,11 @@
 // Serves web/ the way Firebase Hosting does, for local checks and the browser smoke spec.
 //
-// Files are served as they are, with the Cache-Control: no-cache the pwa target sets; every
-// other path -- and anything the pwa target's "ignore" list keeps off Hosting -- falls
-// through to index.html, like the "**" rewrite in firebase.json. No dependencies, so it runs
-// anywhere `node` does: `node e2e/serve.mjs` from the repo root, PORT to change the port.
+// Files are served as they are, with the headers the pwa target in firebase.json gives
+// them: Cache-Control, and the security headers and Content-Security-Policy, so every
+// local run and every spec runs under the policy Hosting sends. Every other path -- and
+// anything the pwa target's "ignore" list keeps off Hosting -- falls through to
+// index.html, like the "**" rewrite in firebase.json. No dependencies, so it runs anywhere
+// `node` does: `node e2e/serve.mjs` from the repo root, PORT to change the port.
 // .claude/launch.json uses it for the Browser pane preview.
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
@@ -12,6 +14,29 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
 const port = Number(process.env.PORT || 4173);
+
+// Hosting matches a header rule against the path requested, not the rewrite's destination,
+// so a deep link served index.html gets the "**" rule and not the "/index.html" one. A glob
+// this cannot translate stops the server rather than silently dropping its headers.
+function globToRegExp(glob) {
+  if (typeof glob !== 'string' || /[?[\]{}()!+@]/.test(glob)) throw new Error(`serve.mjs cannot mirror the Hosting header rule "${glob}"`);
+  const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${glob.split('**').map((part) => part.split('*').map(escape).join('[^/]*')).join('.*')}$`);
+}
+
+const firebaseJson = JSON.parse(await readFile(new URL('../firebase.json', import.meta.url), 'utf8'));
+const headerRules = (firebaseJson.hosting.find((h) => h.target === 'pwa').headers || [])
+  .map((rule) => ({ matches: globToRegExp(rule.source), headers: rule.headers }));
+
+function hostingHeaders(pathname) {
+  // no-cache for anything the rules leave alone: nothing local should be served stale.
+  const headers = { 'Cache-Control': 'no-cache' };
+  for (const rule of headerRules) {
+    if (!rule.matches.test(pathname)) continue;
+    for (const { key, value } of rule.headers) headers[key] = value;
+  }
+  return headers;
+}
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -57,8 +82,8 @@ const server = http.createServer(async (req, res) => {
   try {
     const body = await readFile(file);
     res.writeHead(200, {
-      'Content-Type': TYPES[extname(file)] || 'application/octet-stream',
-      'Cache-Control': 'no-cache'
+      ...hostingHeaders(url.pathname),
+      'Content-Type': TYPES[extname(file)] || 'application/octet-stream'
     });
     res.end(req.method === 'HEAD' ? undefined : body);
   } catch {

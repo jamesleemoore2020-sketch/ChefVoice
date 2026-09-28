@@ -212,7 +212,9 @@ let voiceEngineUsed=false;let speechNeedsReset=false;
 try{const recovery=JSON.parse(sessionStorage.getItem('chefvoice.capture.recovery')||'null');if(recovery){Object.assign(form,recovery.form||{});ingredients=recovery.ingredients||[];steps=recovery.steps||[];transcript=recovery.transcript||[];sessionStorage.removeItem('chefvoice.capture.recovery');captureStatus='Draft restored after refreshing the iPhone voice engine.';}}catch{}
 document.addEventListener('play',()=>{if(isIOS&&voiceEngineUsed)speechNeedsReset=true;},true);
 
-const escapeHtml=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
+// Every piece of chef-written text in the templates below goes through this. ' is escaped too,
+// so no attribute is safe only because it happens to be double-quoted.
+const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 /**
  * Tells a screen reader about a status change: capture started or finished, a recipe

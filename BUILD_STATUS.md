@@ -1,3 +1,21 @@
+# Current handoff — 2026-09-27 (audit implementation, part 3: hardening, PWA 0.5.20)
+
+Branch `claude/audit-implementation-2026-09-26-02973b`, which continues
+`claude/audit-implementation-7bb2be` from `a3c30ff`. Writeup: `SECURITY_HEADERS_0.5.20.md`.
+
+Tests at this point: PWA 285 / 0, jsdom 74 / 35 / 46, e2e 19 / 0. **Nothing here is deployed
+yet.** Parser, corpus, rules, Functions, Live signaling, App Check and Android untouched.
+
+- **Security headers and a Content-Security-Policy (F22).** Every path of all three Hosting
+  sites (PWA, deletion page, privacy policy) now gets `nosniff`, a referrer policy and
+  `X-Frame-Options: DENY`, enforced, plus a per-site CSP sent Report-Only for now. The CSP has
+  no inline script and no `eval`, and its script hosts are pinned to paths. The deletion page's
+  inline script is allowed by hash, so the page itself is unchanged. `escapeHtml` escapes `'`.
+  Run against the live backend in a phone profile: no violations. `web/tests/security-headers.test.mjs`
+  ties each policy to what its page loads; the e2e fixture fails any spec that trips the
+  policy. Ships with `DEPLOY_PWA.cmd`, `DEPLOY_ACCOUNT_DELETION_PAGE.cmd` and
+  `DEPLOY_LEGAL_PAGE.cmd`; the last two now refuse to deploy when the header gates fail.
+
 # Current handoff — 2026-09-26 (audit implementation, part 2: the UI batch, Android 0.11.19 / PWA 0.5.19)
 
 Session handoff: `HANDOFF_2026-09-26_SESSION10.md`. Writeup:

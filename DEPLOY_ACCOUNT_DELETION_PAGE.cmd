@@ -32,6 +32,26 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem The page's inline script is allowed by its SHA-256 in this site's
+rem Content-Security-Policy in firebase.json. Refuse to publish a page whose script
+rem no longer matches that hash, or a policy that stopped allowing what the page loads.
+where node >nul 2>nul
+if errorlevel 1 (
+  echo Node.js was not found on PATH. Install Node.js, then rerun this file.
+  pause
+  exit /b 1
+)
+node --test web\tests\security-headers.test.mjs
+if errorlevel 1 (
+  echo.
+  echo REFUSING TO DEPLOY - the security header gates failed.
+  echo If you edited the page's script, the failure above gives the new hash
+  echo to put in the delete-account policy in firebase.json.
+  echo.
+  pause
+  exit /b 1
+)
+
 firebase deploy --only hosting:delete-account --project chefvoice-d7fec
 if errorlevel 1 (
   echo.

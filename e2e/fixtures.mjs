@@ -26,6 +26,22 @@ export const test = base.extend({
     });
     await use(errors);
     expect(errors, 'the page reported errors').toEqual([]);
+  }, { auto: true }],
+
+  // Fails the test on any Content-Security-Policy violation. serve.mjs sends the headers
+  // firebase.json gives the pwa target, so this is the policy production sends. A Report-Only
+  // violation reaches the console only at info level, where the check above never looks.
+  cspViolations: [async ({ page }, use) => {
+    const violations = [];
+    await page.exposeFunction('__chefvoiceCspViolation', (violation) => violations.push(violation));
+    await page.addInitScript(() => {
+      document.addEventListener('securitypolicyviolation', (event) => {
+        const where = event.sourceFile ? ` (${event.sourceFile}:${event.lineNumber})` : '';
+        window.__chefvoiceCspViolation(`${event.effectiveDirective} refused ${event.blockedURI || 'inline'}${where}`);
+      });
+    });
+    await use(violations);
+    expect(violations, 'the page broke its Content-Security-Policy').toEqual([]);
   }, { auto: true }]
 });
 

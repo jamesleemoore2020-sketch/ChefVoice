@@ -39,6 +39,15 @@
       ],
       "headers": [
         {
+          "source": "**",
+          "headers": [
+            { "key": "Content-Security-Policy-Report-Only", "value": "default-src 'self'; script-src 'self' https://www.gstatic.com/firebasejs/ https://apis.google.com/js/api.js https://apis.google.com/_/scs/ https://www.googletagmanager.com/gtag/js; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://firebasestorage.googleapis.com https://*.google-analytics.com https://*.googletagmanager.com; media-src 'self' blob: https://firebasestorage.googleapis.com; connect-src 'self' https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebasestorage.googleapis.com https://firebaseinstallations.googleapis.com https://fcmregistrations.googleapis.com https://firebase.googleapis.com https://us-central1-chefvoice-d7fec.cloudfunctions.net https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; frame-src https://chefvoice-d7fec.firebaseapp.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" },
+            { "key": "X-Frame-Options", "value": "DENY" },
+            { "key": "X-Content-Type-Options", "value": "nosniff" },
+            { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+          ]
+        },
+        {
           "source": "/sw.js",
           "headers": [
             { "key": "Cache-Control", "value": "no-cache" }
@@ -90,6 +99,17 @@
         "**/.*",
         "**/node_modules/**"
       ],
+      "headers": [
+        {
+          "source": "**",
+          "headers": [
+            { "key": "Content-Security-Policy-Report-Only", "value": "default-src 'none'; script-src https://www.gstatic.com/firebasejs/ https://apis.google.com/js/api.js https://apis.google.com/_/scs/ 'sha256-N71amREtjGw5/fCRyC0VHLVQYgmxbpg2FyghBeuFJI8='; style-src 'unsafe-inline'; img-src 'self'; connect-src https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://us-central1-chefvoice-d7fec.cloudfunctions.net; frame-src https://chefvoice-d7fec.firebaseapp.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" },
+            { "key": "X-Frame-Options", "value": "DENY" },
+            { "key": "X-Content-Type-Options", "value": "nosniff" },
+            { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+          ]
+        }
+      ],
       "rewrites": [
         {
           "source": "**",
@@ -104,6 +124,17 @@
         "firebase.json",
         "**/.*",
         "**/node_modules/**"
+      ],
+      "headers": [
+        {
+          "source": "**",
+          "headers": [
+            { "key": "Content-Security-Policy-Report-Only", "value": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" },
+            { "key": "X-Frame-Options", "value": "DENY" },
+            { "key": "X-Content-Type-Options", "value": "nosniff" },
+            { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+          ]
+        }
       ]
     }
   ]

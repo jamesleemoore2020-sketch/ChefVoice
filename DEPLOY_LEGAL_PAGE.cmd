@@ -43,6 +43,24 @@ if not errorlevel 1 (
   exit /b 1
 )
 
+rem This site's Content-Security-Policy in firebase.json lets the page load nothing
+rem but itself. Refuse to publish a page that has started loading a script, an image
+rem or anything else the policy would refuse.
+where node >nul 2>nul
+if errorlevel 1 (
+  echo Node.js was not found on PATH. Install Node.js, then rerun this file.
+  pause
+  exit /b 1
+)
+node --test web\tests\security-headers.test.mjs
+if errorlevel 1 (
+  echo.
+  echo REFUSING TO DEPLOY - the security header gates failed. See above.
+  echo.
+  pause
+  exit /b 1
+)
+
 firebase deploy --only hosting:legal --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
