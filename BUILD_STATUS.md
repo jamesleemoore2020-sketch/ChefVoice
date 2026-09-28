@@ -4,8 +4,9 @@ Session handoff: `HANDOFF_2026-09-26_SESSION10.md`. Writeup:
 `ACCESSIBILITY_AND_DARK_MODE_0.5.19_0.11.19.md`.
 
 Tests at this point: Android 226 / 0 (2 skipped), PWA 276 / 0, jsdom 74 / 35 / 46, e2e 17 / 0,
-notification gates 78 / 0. CI green. **Nothing here is deployed yet**: PWA 0.5.19 waits on
-`DEPLOY_PWA.cmd`, Android 0.11.19 (versionCode 80) on a release build and a device check.
+notification gates 78 / 0. CI green. **PWA 0.5.19 is live since 2026-09-27** (`hosting:pwa`
+only; the deployed `sw.js` reports `chefvoice-pwa-v0.5.19`, and a dark device gets the dark
+theme). Android 0.11.19 (versionCode 80) still waits on a release build and a device check.
 Parser, corpus, rules, Functions, Live signaling and App Check untouched; no backend deploy.
 
 - **Android UI tests on the JVM (F2).** Robolectric runs the real `ChefVoiceApp` inside

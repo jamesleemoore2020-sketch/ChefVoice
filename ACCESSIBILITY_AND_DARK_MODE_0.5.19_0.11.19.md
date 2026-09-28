@@ -2,9 +2,9 @@
 
 The user-interface batch from the 2026-09-26 full audit: **F2** (the Android half), **F12**,
 **F19**, **F20** and **F26**, plus two defects found while doing them. Committed and green in CI
-on `claude/audit-implementation-7bb2be`. **Not deployed:** PWA 0.5.19 goes out with
-`DEPLOY_PWA.cmd`; Android 0.11.19 still needs a release build, a device check and a Play upload
-(see the end).
+on `claude/audit-implementation-7bb2be`. **PWA 0.5.19 is live since 2026-09-27**, deployed with
+`DEPLOY_PWA.cmd` and verified on the deployed site. Android 0.11.19 still needs a release build,
+a device check and a Play upload (see the end).
 
 **Not touched:** the parser (`voice/`, `web/js/*parser*`) and the golden corpus,
 `firestore.rules`, `storage.rules`, every Functions codebase, `transcribeChefVoice`, Live
@@ -162,8 +162,11 @@ activity on a theme switch even when the app ignored the theme.
 
 ## To release
 
-**PWA 0.5.19:** `DEPLOY_PWA.cmd` (the `pwa` Hosting target only; it runs the PWA gates first).
-Afterwards, the deployed `sw.js` should report `chefvoice-pwa-v0.5.19`.
+**PWA 0.5.19: done 2026-09-27.** `DEPLOY_PWA.cmd` deployed the `pwa` Hosting target only, after
+its gates passed (276 / 0). On the deployed site, `sw.js` reports `chefvoice-pwa-v0.5.19`, the
+page loads `js/theme-boot.js` and the tokenised stylesheet, and a dark device gets the dark theme
+with the Blackout button colours. The first attempt stopped at an expired Firebase CLI login,
+before uploading anything; James ran `firebase login --reauth`.
 
 **Android 0.11.19 / 80:** a release build from the shell that holds the `CHEFVOICE_RELEASE_*`
 variables, then on a phone:

@@ -3,8 +3,8 @@
 ## 1. TASK
 Implement the 2026-09-26 full audit (F1–F31). The report is at
 `C:\Users\james\Downloads\AUDIT_2026-09-26_FULL.md`, deliberately not in this public repo. Part 2,
-the UI batch that opens Android 0.11.19 / PWA 0.5.19, is done and pushed, and nothing from it is
-deployed yet.
+the UI batch that opens Android 0.11.19 / PWA 0.5.19, is done and pushed. PWA 0.5.19 is live
+(2026-09-27); Android 0.11.19 is not built yet.
 
 ## 2. TOUCHED
 Branch `claude/audit-implementation-7bb2be`, pushed, clean. Per-item detail:
@@ -53,8 +53,11 @@ longer leak Material's baseline purple, and a dark-theme switch no longer stops 
 - CI green through the Android `uiMode` commit (`cecea13`); this handoff is docs only. Android
   226 / 0 (2 skipped: the opt-in renderer), PWA 276 / 0, jsdom 74 / 35 / 46, e2e 17 / 0,
   notification gates 78 / 0.
-- **Not deployed:** PWA 0.5.19 (`DEPLOY_PWA.cmd`); Android 0.11.19 / 80 needs a release build
-  and the six-step device check at the end of the writeup.
+- **Live:** PWA 0.5.19, deployed 2026-09-27 with `DEPLOY_PWA.cmd` and verified on the deployed
+  site (`sw.js` reports `chefvoice-pwa-v0.5.19`; a dark device gets the dark theme). The Firebase
+  CLI login had expired; James re-authenticated.
+- **Not built:** Android 0.11.19 / 80 needs a release build and the six-step device check at the
+  end of the writeup.
 - The Claude Browser pane's `localhost:4173` tab is signed in to James's real account, and
   Firebase is reachable there (unlike e2e). Only local-only actions were done there.
 - Carried from session 9: the `chefvoice-notifications` (F15) deploy is still unverified.
@@ -70,8 +73,7 @@ longer leak Material's baseline purple, and a dark-theme switch no longer stops 
 - The next Android release after 0.11.19 is versionCode 81.
 
 ## 7. NEXT
-1. With James's go-ahead: deploy PWA 0.5.19 and check the deployed `sw.js` reports
-   `chefvoice-pwa-v0.5.19`; build Android 0.11.19 / 80, run the device check, upload.
+1. Build Android 0.11.19 / 80, run the device check, upload. (PWA 0.5.19 is already live.)
 2. Then, per session 9: F22, F23 (emulator tests first, console diff before any rules deploy),
    F21, F30, F11, F29, F17, F10, F18, F31.
 3. Left from this batch: tab naming and order across platforms (F19); buttons whose label starts
