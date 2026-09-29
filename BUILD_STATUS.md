@@ -1,3 +1,32 @@
+# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along and import, PWA 0.5.21 / Android 0.11.20)
+
+Branch `claude/audit-implementation-2026-09-28-e6a4a5`, which continues
+`claude/audit-implementation-2026-09-26-02973b` from `c6ef9af`. Writeups:
+`COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`, `IMPORT_DNS_REBINDING_0.5.21.md`.
+
+Tests at this point: PWA 337 / 0, jsdom 74 / 35 / 18 / 46, e2e 26 / 0, Android 239 / 0 (2 skipped),
+notification gates 78 / 0, billing 17 / 0, import 102 / 0. **Nothing here is deployed yet.**
+Parser, corpus, rules, Live signaling and App Check untouched. The only backend change is the
+`chefvoice-import` codebase (F30), deployed on its own with `DEPLOY_IMPORT.cmd`.
+
+- **Cook-along for a real kitchen (F21), both platforms.** Step text at 28 px/sp, and one big
+  Next docked at the bottom of the screen, about twice as wide as Previous, that never scrolls
+  away; the PWA hides its tab bar while cooking. "In this step" lists the ingredients a step
+  names, with their amounts, in the servings and units the chef set on the recipe screen, and
+  says so when they are not the recipe as written. The matcher (`StepIngredients.kt`,
+  `step-ingredients.js`) is literal and errs towards showing nothing: an ending two ingredients
+  share, or a word like "sauce" or the verb "cream", names nothing. Both ports are held to
+  `shared/step-ingredients.tsv`. PWA Community recipes gain the servings stepper and unit switch.
+  Android 0.11.20 / 81 includes the unreleased 0.11.19: build 0.11.20 instead, and run both device
+  checks (the writeup lists them).
+- **Recipe import closes DNS rebinding (F30).** The function checked that a page's name resolved
+  to public addresses and then let `fetch` resolve it again to connect, so a name could answer
+  differently the second time and reach the metadata server. The check now lives in the socket's
+  own lookup (undici `Agent`, undici's own `fetch`): the answer checked is the answer connected
+  to. IPv6 accepts only global unicast, which also refuses NAT64, 6to4, Teredo and multicast.
+  Tested over real sockets against a local server; ten breaks caught. CI and
+  `RUN_IMPORT_GATES.cmd` now install the codebase's dependencies first.
+
 # Current handoff — 2026-09-27 (audit implementation, part 3: hardening, PWA 0.5.20)
 
 Session handoff: `HANDOFF_2026-09-28_SESSION11.md`. Branch

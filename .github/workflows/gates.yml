@@ -91,6 +91,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: import/functions/package-lock.json
       # RUN_NOTIFICATION_GATES.cmd. Globbed rather than listed, so a new gate file cannot be
       # written and then never run.
       - name: Notification gates
@@ -102,8 +104,13 @@ jobs:
         run: node --test "billing/*.test.js"
       - name: Billing function syntax
         run: node --check billing/functions/index.js
-      # RUN_IMPORT_GATES.cmd. `node --test import/functions` would load index.js and fail on
-      # require("firebase-functions/..."), which is why the glob names only the test files.
+      # The importer's fetch tests open real sockets through undici (page-fetcher.js), so the
+      # codebase's own dependencies come first, from its lock file.
+      - name: Import dependencies
+        working-directory: import/functions
+        run: npm ci
+      # RUN_IMPORT_GATES.cmd. `node --test import/functions` would load index.js and initialise
+      # the Admin SDK, which is why the glob names only the test files.
       - name: Import gates
         run: node --test "import/functions/*.test.js"
       - name: Import function syntax

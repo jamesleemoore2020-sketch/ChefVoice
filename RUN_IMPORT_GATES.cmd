@@ -11,7 +11,14 @@ if errorlevel 1 (
 )
 rem The whole importer is pure functions with injectable fetch and DNS, so these are real
 rem behaviour tests rather than source-text checks: every URL rule, every redirect rule and
-rem every parsed ingredient line is actually executed here.
+rem every parsed ingredient line is actually executed here. The fetch tests also open real
+rem sockets through undici, so the codebase's dependencies are installed first (first run, or
+rem after package-lock.json gains a package).
+if not exist import\functions\node_modules\undici\package.json (
+  echo Installing the import function's dependencies...
+  call npm ci --prefix import\functions
+  if errorlevel 1 exit /b 1
+)
 node --test "import/functions/*.test.js"
 if errorlevel 1 exit /b 1
 node --check import\functions\index.js

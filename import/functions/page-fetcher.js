@@ -9,17 +9,21 @@
 // The difference from the phone: this runs inside Google's network, so "reach an address the
 // chef could not have typed" would mean the project's own metadata server and anything else
 // on the internal network. Two things guard that. The URL rules are re-applied to **every**
-// redirect hop rather than only the pasted address, exactly as on Android; and every hop's
-// hostname is **resolved first**, with the fetch refused when any address it resolves to is
-// not a public one. The second check is what a hostname-only rule cannot do: `evil.example`
-// is a perfectly ordinary name that can point at 169.254.169.254.
+// redirect hop rather than only the pasted address, exactly as on Android; and every
+// connection's hostname is resolved **by the connection itself**, which refuses to open when
+// any address the name resolves to is not a public one. That second check is what a
+// hostname-only rule cannot do: `evil.example` is a perfectly ordinary name that can point at
+// 169.254.169.254.
 //
-// A name that passes the check and then changes its answer before the socket opens (DNS
-// rebinding) is still possible in principle. Closing that needs pinning the connection to the
-// address that was checked, which `fetch` gives no way to do; it is recorded here rather than
-// left implied.
+// The check lives in the socket's own `lookup` (publicOnlyLookup) rather than before the
+// fetch, and that is the point of it. The first version resolved and checked the name, and
+// `fetch` then resolved it again to connect, so a name could answer with a public address to
+// the check and a private one to the connection (DNS rebinding). Now the answer that was
+// checked is the answer the socket connects to; there is no second lookup to race. TLS still
+// verifies the certificate against the hostname, so pinning the address weakens nothing.
 
 const dns = require("node:dns").promises;
+const net = require("node:net");
 const RecipeUrl = require("./recipe-url");
 
 const MAX_REDIRECTS = 5;
@@ -28,6 +32,7 @@ const MAX_BYTES = 5 * 1024 * 1024;
 const USER_AGENT = "Mozilla/5.0 (compatible; ChefVoice/1.0; +https://chefvoice-d7fec.web.app)";
 const BAD_REDIRECT = "That link redirects somewhere ChefVoice can't open.";
 const NOT_A_PAGE = "That link isn't a web page ChefVoice can read.";
+const UNREACHABLE = "ChefVoice couldn't reach that site. Check the address and your connection.";
 
 /** `message` is written for the chef, so callers can show it as it stands. */
 class FetchError extends Error {}
@@ -43,39 +48,74 @@ function messageForStatus(code) {
   return `That site returned an unexpected response (${code}).`;
 }
 
+// Blocks inside global unicast (2000::/3) that are not the public web, or that carry an IPv4
+// address inside them which could be anything, the metadata server included.
+const SPECIAL_IPV6 = new net.BlockList();
+SPECIAL_IPV6.addSubnet("2001::", 23, "ipv6"); // IETF protocol assignments, Teredo (2001::/32) among them
+SPECIAL_IPV6.addSubnet("2001:db8::", 32, "ipv6"); // documentation
+SPECIAL_IPV6.addSubnet("2002::", 16, "ipv6"); // 6to4: an IPv4 address wrapped in an IPv6 one
+
 /** True only for an address on the public internet. Used on what a hostname actually resolves to. */
 function isPublicAddress(address, family) {
-  const text = String(address || "").toLowerCase();
+  const text = String(address || "").trim().toLowerCase();
   if (!text) return false;
-  if (family === 4 || /^\d{1,3}(\.\d{1,3}){3}$/.test(text)) return RecipeUrl.isPublicHost(text);
-  // IPv4-mapped ("::ffff:127.0.0.1") is an IPv4 address wearing a hat; judge the address inside.
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(text);
-  if (mapped) return RecipeUrl.isPublicHost(mapped[1]);
-  if (text === "::" || text === "::1") return false;
-  const head = text.split(":")[0];
-  // "::something" -- compressed leading zeros, so not a global unicast address.
-  if (!head) return false;
-  // The first hextet, as the 16-bit number the address ranges are written in.
-  const leading = parseInt(head, 16);
-  if (Number.isNaN(leading)) return false;
-  if (leading >= 0xfc00 && leading <= 0xfdff) return false; // unique-local fc00::/7
-  if (leading >= 0xfe80 && leading <= 0xfebf) return false; // link-local fe80::/10
-  return true;
+  if (family === 4 || net.isIPv4(text)) return net.isIPv4(text) && RecipeUrl.isPublicHost(text);
+  if (!net.isIPv6(text)) return false;
+  // One spelling for each address: "::ffff:127.0.0.1" and "::ffff:7f00:1" are the same address,
+  // as are "64:ff9b::10.0.0.1" and "64:ff9b::a00:1".
+  const canonical = new URL(`http://[${text}]`).hostname.slice(1, -1);
+  // IPv4-mapped is an IPv4 address wearing a hat; judge the address inside.
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(canonical);
+  if (mapped) {
+    const high = parseInt(mapped[1], 16);
+    const low = parseInt(mapped[2], 16);
+    return RecipeUrl.isPublicHost(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+  }
+  // Only global unicast is the public internet. Everything else is refused: unspecified and
+  // loopback, NAT64 (64:ff9b::/96, which reaches whatever IPv4 address it carries), unique- and
+  // link-local, multicast (ff00::/8).
+  if (canonical.startsWith(":")) return false;
+  if ((parseInt(canonical.split(":")[0], 16) & 0xe000) !== 0x2000) return false;
+  return !SPECIAL_IPV6.check(canonical, "ipv6");
 }
 
-/** Refuses the hop unless every address its hostname resolves to is a public one. */
-async function assertPublicHost(host, lookup) {
-  let records;
-  try {
-    records = await lookup(host, { all: true });
-  } catch {
-    throw new FetchError("ChefVoice couldn't reach that site. Check the address and your connection.");
-  }
-  if (!records || !records.length) throw new FetchError(RecipeUrl.NOT_PUBLIC);
-  for (const record of records) {
-    if (!isPublicAddress(record.address, record.family)) throw new FetchError(RecipeUrl.NOT_PUBLIC);
-  }
+/**
+ * A `lookup` for the socket itself, in the shape `net.connect` calls it: resolves the name,
+ * refuses unless every address it resolves to passes `allow`, and hands the socket the addresses
+ * it just checked. One private address among several is enough to refuse the name.
+ *
+ * `resolve` and `allow` are parameters so a test can run this against a server on 127.0.0.1;
+ * nothing in production passes either.
+ */
+function publicOnlyLookup(resolve = dns.lookup, allow = isPublicAddress) {
+  return (hostname, options, callback) => {
+    if (typeof options === "function") { callback = options; options = {}; }
+    const family = typeof options === "number" ? options : Number(options?.family) || 0;
+    resolve(hostname, { all: true, family }).then(records => {
+      if (!records?.length || !records.every(record => allow(record.address, record.family))) {
+        callback(new FetchError(RecipeUrl.NOT_PUBLIC));
+      } else if (options?.all) {
+        callback(null, records);
+      } else {
+        callback(null, records[0].address, records[0].family);
+      }
+    }, () => callback(new FetchError(UNREACHABLE)));
+  };
 }
+
+/**
+ * `fetch` over connections that resolve their own name with publicOnlyLookup. undici's own
+ * `fetch`, not the global one: an undici Agent handed to the `fetch` bundled with a different
+ * Node release can disagree with it about the dispatcher interface.
+ */
+function publicOnlyFetch({ resolve, allow, undici = require("undici") } = {}) {
+  const dispatcher = new undici.Agent({ connect: { lookup: publicOnlyLookup(resolve, allow) } });
+  return (url, init) => undici.fetch(url, { ...init, dispatcher });
+}
+
+let sharedFetch = null;
+/** One pinned-lookup fetch per instance, so its connections are pooled across imports. */
+const defaultFetch = () => (sharedFetch ??= publicOnlyFetch());
 
 /** Reads at most `maxBytes`; a page bigger than that is truncated, not refused. */
 async function readCapped(response, maxBytes) {
@@ -107,10 +147,9 @@ function decodeBody(bytes, contentType) {
  * Fetches one page. Returns `{finalUrl, html}` -- `finalUrl` is where the page actually came
  * from after any redirects, which is what gets credited.
  */
-async function fetchPage(url, { fetchImpl = fetch, lookup = dns.lookup, maxBytes = MAX_BYTES } = {}) {
+async function fetchPage(url, { fetchImpl = defaultFetch(), maxBytes = MAX_BYTES } = {}) {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    await assertPublicHost(new URL(current).hostname, lookup);
     let response;
     try {
       response = await fetchImpl(current, {
@@ -125,6 +164,8 @@ async function fetchPage(url, { fetchImpl = fetch, lookup = dns.lookup, maxBytes
       });
     } catch (error) {
       if (error instanceof FetchError) throw error;
+      // A refusal from publicOnlyLookup arrives as the cause of fetch's own "fetch failed".
+      if (error?.cause instanceof FetchError) throw error.cause;
       if (error?.name === "TimeoutError" || error?.name === "AbortError") {
         throw new FetchError("That site took too long to respond. Try again in a moment.");
       }
@@ -158,6 +199,6 @@ async function fetchPage(url, { fetchImpl = fetch, lookup = dns.lookup, maxBytes
 }
 
 module.exports = {
-  fetchPage, FetchError, isPublicAddress, isReadableType, messageForStatus,
-  MAX_BYTES, MAX_REDIRECTS, USER_AGENT
+  fetchPage, FetchError, isPublicAddress, isReadableType, messageForStatus, publicOnlyFetch,
+  publicOnlyLookup, MAX_BYTES, MAX_REDIRECTS, USER_AGENT
 };
