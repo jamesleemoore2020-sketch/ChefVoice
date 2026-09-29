@@ -331,6 +331,42 @@ test("only the host and the bound viewer can read a peer signaling document", as
   await assertFails(getDoc(doc(env.authenticatedContext(CAROL).firestore(), ...peer)));
 });
 
+test("a full room's host answers a waiting join with FULL, and nothing else can (audit F18)", async () => {
+  const joinedAt = now() - 1000;
+  const join = { viewerUid: BOB, state: "JOINING", joinedAt, updatedAt: joinedAt };
+  const seed = (peer) => env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "liveSessions", "full-1"), liveSession(ALICE, "Alice"));
+    await setDoc(doc(db, "liveSessions", "full-1", "peers", BOB), peer);
+  });
+  const peerAs = (uid) => doc(env.authenticatedContext(uid).firestore(), "liveSessions", "full-1", "peers", BOB);
+  const full = () => ({ hostUid: ALICE, state: "FULL", updatedAt: now() });
+
+  await seed(join);
+  await assertSucceeds(updateDoc(peerAs(ALICE), full()));
+  // The viewer, turned away, cannot answer, and leaves.
+  await assertFails(updateDoc(peerAs(BOB), { answerSdp: "viewer-answer", state: "ANSWERED", updatedAt: now() }));
+  await assertSucceeds(deleteDoc(peerAs(BOB)));
+
+  await seed(join);
+  await assertFails(updateDoc(peerAs(BOB), full()), "a viewer marking itself full");
+  await assertFails(updateDoc(peerAs(ALICE), { ...full(), hostUid: BOB }), "FULL naming someone else as host");
+  await assertFails(updateDoc(peerAs(ALICE), { ...full(), joinedAt: now() }), "FULL rewriting the join");
+  await assertFails(updateDoc(peerAs(ALICE), { ...full(), offerSdp: "host-offer" }), "an offer riding along with FULL");
+
+  // Only a join still waiting: a viewer already offered is being served.
+  await seed({ ...join, hostUid: ALICE, offerSdp: "host-offer", state: "OFFERED" });
+  await assertFails(updateDoc(peerAs(ALICE), full()), "turning away a viewer already offered");
+
+  // Not once the broadcast is over.
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "liveSessions", "full-1"), liveSession(ALICE, "Alice", { status: "ENDED", heartbeatAt: 0, endedAt: now() }));
+    await setDoc(doc(db, "liveSessions", "full-1", "peers", BOB), join);
+  });
+  await assertFails(updateDoc(peerAs(ALICE), full()), "FULL on an ended broadcast");
+});
+
 // ---------------------------------------------------------------------------
 // Messaging
 // ---------------------------------------------------------------------------

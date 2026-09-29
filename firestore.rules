@@ -207,6 +207,21 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hostUid', 'offerSdp', 'state', 'updatedAt']);
     }
 
+    // A host already sending to as many viewers as its phone can answers a new join with FULL
+    // instead of an offer (audit F18): each viewer is one more video encode and upload. Only a
+    // join still waiting can be turned away, and only its state changes; the viewer then leaves.
+    function validLivePeerHostFull(sessionId, peerId) {
+      let session = get(/databases/$(database)/documents/liveSessions/$(sessionId)).data;
+      return liveHost(sessionId)
+        && activeLiveSession(sessionId)
+        && peerId == resource.data.viewerUid
+        && resource.data.state == 'JOINING'
+        && request.resource.data.state == 'FULL'
+        && request.resource.data.hostUid == session.hostId
+        && recentClientTime(request.resource.data.updatedAt, 300000, 300000)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hostUid', 'state', 'updatedAt']);
+    }
+
     function validLivePeerViewerUpdate(sessionId, peerId) {
       return livePeerViewer(sessionId, peerId)
         && activeLiveSession(sessionId)
@@ -770,7 +785,9 @@ service cloud.firestore {
       match /peers/{peerId} {
         allow read: if liveHost(sessionId) || livePeerViewer(sessionId, peerId);
         allow create: if validLivePeerCreate(sessionId, peerId);
-        allow update: if validLivePeerHostUpdate(sessionId, peerId) || validLivePeerViewerUpdate(sessionId, peerId);
+        allow update: if validLivePeerHostUpdate(sessionId, peerId)
+          || validLivePeerHostFull(sessionId, peerId)
+          || validLivePeerViewerUpdate(sessionId, peerId);
         allow delete: if liveHost(sessionId) || livePeerViewer(sessionId, peerId);
 
         match /hostCandidates/{candidateId} {

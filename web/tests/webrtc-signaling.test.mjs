@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
-  MAX_ICE_CANDIDATES_PER_SIDE, candidateFromDoc, candidateToDoc, iceCandidateDocumentId, isFreshLiveSession
+  LIVE_FULL_MESSAGE, LIVE_MAX_VIEWERS, MAX_ICE_CANDIDATES_PER_SIDE, candidateFromDoc, candidateToDoc,
+  iceCandidateDocumentId, isFreshLiveSession
 } from '../js/webrtc-signaling.js';
 
 test('iceCandidateDocumentId zero-pads to match validIceCandidate()\'s c0xx pattern', () => {
@@ -58,4 +60,30 @@ test('isFreshLiveSession rejects anything not currently LIVE', () => {
   assert.equal(isFreshLiveSession({ status: 'ENDED', heartbeatAt: Date.now() }), false);
   assert.equal(isFreshLiveSession({ status: 'STARTING', heartbeatAt: Date.now() }), false);
   assert.equal(isFreshLiveSession(null), false);
+});
+
+// Audit F18. The PWA host and viewer run against the real rules in rules-tests/pwa-live-host.test.js;
+// Android's cannot run here, so these gates hold its transport to the same room and the same answer.
+const androidTransport = readFileSync(
+  new URL('../../app/src/main/java/com/chefvoice/app/ui/WebRtcLiveTransport.kt', import.meta.url), 'utf8'
+).replace(/\r\n/g, '\n');
+
+test('a Live room holds the same number of viewers on both platforms, within the audit\'s 5 to 8', () => {
+  assert.ok(Number.isInteger(LIVE_MAX_VIEWERS) && LIVE_MAX_VIEWERS >= 5 && LIVE_MAX_VIEWERS <= 8);
+  assert.match(androidTransport, new RegExp(`internal const val LIVE_MAX_VIEWERS = ${LIVE_MAX_VIEWERS}\\n`));
+  assert.ok(androidTransport.includes(`internal const val LIVE_FULL_MESSAGE = "${LIVE_FULL_MESSAGE}"`));
+});
+
+test('an Android host answers only a waiting join, and turns it away once the room is full', () => {
+  assert.match(androidTransport, /val joining = change\.document\.getString\("state"\) == "JOINING"/);
+  assert.match(androidTransport, /if \(serving\(\) >= LIVE_MAX_VIEWERS\) turnAway\(change\.document\)\n\s*else createHostPeer\(peerId, viewerUid\)/);
+  assert.match(androidTransport, /mapOf\("hostUid" to hostUid, "state" to "FULL", "updatedAt" to System\.currentTimeMillis\(\)\)/);
+  // A failed or closed connection no longer holds a place.
+  assert.match(androidTransport, /private fun serving\(\): Int = peers\.values\.count \{ !it\.gone \}/);
+});
+
+test('an Android viewer that is turned away says so and leaves', () => {
+  assert.match(androidTransport, /if \(snapshot\?\.getString\("state"\) == "FULL"\) \{/);
+  assert.match(androidTransport, /status\(LIVE_FULL_MESSAGE\)\n\s*mainHandler\.post \{ onFull\(\) \}/);
+  assert.match(androidTransport, /Button\(onClick = \{ full = false; attempt\+\+ \}\) \{ Text\("Try again"\) \}/);
 });

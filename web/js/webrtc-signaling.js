@@ -15,6 +15,14 @@ export const LIVE_LEASE_TIMEOUT_MS = 35000;
 export const LIVE_LEGACY_GRACE_MS = 90000;
 export const LIVE_LEASE_REFRESH_MS = 5000;
 
+// A host opens one PeerConnection, and so one video encode and upload, per viewer, and a phone's
+// uplink and battery give out after a handful (audit F18). Past this many a new viewer is told
+// the room is full, rather than every viewer's picture degrading. Android's
+// WebRtcLiveTransport.kt holds the same number. It is the room size until an SFU carries the
+// media.
+export const LIVE_MAX_VIEWERS = 6;
+export const LIVE_FULL_MESSAGE = 'This Live is full right now. Try again in a few minutes.';
+
 export const LIVE_ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' }

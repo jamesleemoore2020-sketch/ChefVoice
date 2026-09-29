@@ -163,6 +163,67 @@ test('PWA host and existing PWA viewer exchange SDP and ICE under the unchanged 
   assert.ok(streams[0].getTracks().every(t => t.readyState === 'ended'));
 });
 
+test('a room at its limit answers the next join with FULL, and serves a join once a place opens (audit F18)', { timeout: 30000 }, async () => {
+  const LIMIT = Number(fs.readFileSync(path.join(root, 'web/js/webrtc-signaling.js'), 'utf8').match(/export const LIVE_MAX_VIEWERS = (\d+);/)[1]);
+  const statuses = [], viewerStatuses = [];
+  let turnedAway = 0, again = null;
+  const controller = await host({ onStatus: s => statuses.push(s) });
+  const peerDoc = (database, uid) => doc(database, 'liveSessions', controller.sessionRef.id, 'peers', uid);
+  const LATE = 'pwa-late-viewer';
+  const lateDb = env.authenticatedContext(LATE).firestore();
+  const Viewer = await loadController('viewer', lateDb);
+  const viewer = new Viewer({ sessionId: controller.sessionRef.id, viewerUid: LATE, onStatus: s => viewerStatuses.push(s), onFull: () => { turnedAway++; } });
+  try {
+    await controller.prepare(); await controller.start('A full kitchen');
+    for (let seat = 0; seat < LIMIT; seat++) {
+      const uid = `pwa-seat-${seat}`;
+      await setDoc(peerDoc(env.authenticatedContext(uid).firestore(), uid), { viewerUid: uid, state: 'JOINING', joinedAt: Date.now(), updatedAt: Date.now() });
+    }
+    await until(() => hostPeers.length === LIMIT);
+    await viewer.start();
+    await until(() => turnedAway === 1);
+    const turned = (await getDoc(peerDoc(hostDb, LATE))).data();
+    assert.equal(turned.state, 'FULL');
+    assert.equal(turned.offerSdp, undefined);
+    assert.equal(hostPeers.length, LIMIT, 'no connection, and so no encoder, for a viewer the room has no place for');
+    assert.ok(viewerStatuses.some(s => /full/i.test(s)), viewerStatuses.join('\n'));
+    assert.ok(statuses.some(s => /full/i.test(s)), statuses.join('\n'));
+    await viewer.stop();
+    assert.equal((await getDoc(peerDoc(hostDb, LATE))).exists(), false, 'the viewer turned away leaves');
+
+    // A viewer leaves, and the next join is served.
+    await deleteDoc(peerDoc(env.authenticatedContext('pwa-seat-0').firestore(), 'pwa-seat-0'));
+    await until(() => controller.peers.size === LIMIT - 1);
+    again = new Viewer({ sessionId: controller.sessionRef.id, viewerUid: LATE, onFull: () => { turnedAway++; } });
+    await again.start();
+    await until(async () => (await getDoc(peerDoc(hostDb, LATE))).data()?.state === 'ANSWERED');
+    assert.equal(turnedAway, 1);
+    assert.equal(hostPeers.length, LIMIT + 1);
+  } finally { await viewer.stop(); await again?.stop(); await controller.stop(); }
+});
+
+test('a viewer whose connection failed no longer holds a place in a full room (audit F18)', { timeout: 30000 }, async () => {
+  const LIMIT = Number(fs.readFileSync(path.join(root, 'web/js/webrtc-signaling.js'), 'utf8').match(/export const LIVE_MAX_VIEWERS = (\d+);/)[1]);
+  const controller = await host();
+  const peerDoc = (database, uid) => doc(database, 'liveSessions', controller.sessionRef.id, 'peers', uid);
+  const LATE = 'pwa-late-viewer';
+  const Viewer = await loadController('viewer', env.authenticatedContext(LATE).firestore());
+  const viewer = new Viewer({ sessionId: controller.sessionRef.id, viewerUid: LATE });
+  try {
+    await controller.prepare(); await controller.start('A kitchen with a bad connection');
+    for (let seat = 0; seat < LIMIT; seat++) {
+      const uid = `pwa-seat-${seat}`;
+      await setDoc(peerDoc(env.authenticatedContext(uid).firestore(), uid), { viewerUid: uid, state: 'JOINING', joinedAt: Date.now(), updatedAt: Date.now() });
+    }
+    await until(() => hostPeers.length === LIMIT);
+    hostPeers[2].connectionState = 'failed';
+    hostPeers[2].onconnectionstatechange?.();
+    await viewer.start();
+    await until(async () => (await getDoc(peerDoc(hostDb, LATE))).data()?.state === 'ANSWERED');
+    assert.equal(hostPeers.length, LIMIT + 1);
+  } finally { await viewer.stop(); await controller.stop(); }
+});
+
 test('cancelling during STARTING acknowledgement never publishes LIVE', async () => {
   const written = deferred(), acknowledged = deferred();
   const controller = await host({}, { async setDoc(ref, data) {

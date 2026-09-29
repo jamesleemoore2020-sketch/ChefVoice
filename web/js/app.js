@@ -3014,7 +3014,7 @@ function liveRoomTemplate(session){
   const composer=cloud.user&&!ended
     ?`<section class="card"><textarea id="liveCommentText" maxlength="500" placeholder="Say something"></textarea><button id="postLiveComment" class="primary wide">Send</button><div id="liveCommentStatus" class="hint"></div></section>`
     :ended?'':'<div class="notice">Sign in to chat and react.</div>';
-  return `<button id="backLive" class="ghost">← Live</button><section class="card"><div class="live-video-wrap">${video}<div class="live-host-chip"><span class="avatar-circle">${escapeHtml(initial)}</span><div><strong>${escapeHtml(session.hostName)}</strong><br><small>${ended?'ENDED':'🔴 LIVE'}</small></div></div>${ended?'':'<button id="liveAudioToggle" class="live-audio-btn">🔇 Enable audio</button>'}</div><p id="liveViewerStatus" class="status">${escapeHtml(ended?'':liveViewerStatus)}</p>${reactions}</section><div class="section-title"><h2>Live chat</h2></div><div id="liveComments"><div class="empty card">Loading…</div></div>${composer}`;
+  return `<button id="backLive" class="ghost">← Live</button><section class="card"><div class="live-video-wrap">${video}<div class="live-host-chip"><span class="avatar-circle">${escapeHtml(initial)}</span><div><strong>${escapeHtml(session.hostName)}</strong><br><small>${ended?'ENDED':'🔴 LIVE'}</small></div></div>${ended?'':'<button id="liveAudioToggle" class="live-audio-btn">🔇 Enable audio</button>'}</div><p id="liveViewerStatus" class="status" role="status">${escapeHtml(ended?'':liveViewerStatus)}</p>${ended?'':'<button id="liveRetry" class="secondary" hidden>Try again</button>'}${reactions}</section><div class="section-title"><h2>Live chat</h2></div><div id="liveComments"><div class="empty card">Loading…</div></div>${composer}`;
 }
 
 function renderLiveComments(){
@@ -3041,6 +3041,14 @@ function bindLiveRoomChrome(session){
     const video=document.querySelector('#liveVideo');
     if(video){video.muted=false;video.play().catch(()=>{});}
   });
+  // Shown when the room was full (audit F18): joining again is the chef's call, not a loop.
+  document.querySelector('#liveRetry')?.addEventListener('click',event=>{
+    if(!openLiveSession||openLiveSession.status==='ENDED')return;
+    event.currentTarget.hidden=true;
+    liveViewerStatus='Joining live video…';
+    document.querySelector('#liveViewerStatus')?.replaceChildren(document.createTextNode(liveViewerStatus));
+    startLiveViewer(openLiveSession);
+  });
   const post=document.querySelector('#postLiveComment');
   if(post)post.onclick=async()=>{
     const box=document.querySelector('#liveCommentText');
@@ -3065,7 +3073,14 @@ function startLiveViewer(session){
       sessionId:session.id,
       viewerUid,
       onStatus:setStatus,
-      onTrack:stream=>{const video=document.querySelector('#liveVideo');if(video){video.srcObject=stream;video.play().catch(()=>{});}}
+      onTrack:stream=>{const video=document.querySelector('#liveVideo');if(video){video.srcObject=stream;video.play().catch(()=>{});}},
+      // The room is full: leave it cleanly, and let the chef try again when they choose.
+      onFull:()=>{
+        if(liveViewerController!==controller)return;
+        stopLiveViewer();
+        const retry=document.querySelector('#liveRetry');
+        if(retry)retry.hidden=false;
+      }
     });
     const controller=liveViewerController;
     // A rapid leave/rejoin can reuse the same session/uid document path. Finish

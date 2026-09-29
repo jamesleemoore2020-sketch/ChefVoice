@@ -3,8 +3,8 @@
 ## 1. TASK
 Implement the 2026-09-26 full audit. The report is at
 `C:\Users\james\Downloads\AUDIT_2026-09-26_FULL.md`, deliberately kept out of this public repo.
-Part 4 is done in code: F21, F30, F29, F17, F10, F11, and the parts of F31 that move no files.
-**Nothing from part 4 is deployed.**
+Part 4 is done in code: F21, F30, F29, F17, F10, F11, the F18 viewer cap, and the parts of F31
+that move no files. **Nothing from part 4 is deployed.**
 
 ## 2. TOUCHED
 Branch `claude/audit-implementation-2026-09-28-e6a4a5`, pushed, clean. It continues
@@ -45,11 +45,15 @@ handoff.
     `downloadSessionAudio` in `firebase-client.js`; the backup section in `app.js`.
   - Both: ChefVoice Review keeps a recording the account holds (`keepInAccount`).
   - `storage-cors.json`, the deletion page's wording, `rules-tests/private-backup.test.js`.
+- **F18, the Live viewer cap** (its own commit, after F11): `LIVE_MAX_VIEWERS` and the `FULL` answer
+  in `web/js/webrtc-signaling.js`, `webrtc-live-host.js`, `webrtc-live-viewer.js` and
+  `WebRtcLiveTransport.kt`; Try again in `app.js` and the Android viewer panel;
+  `validLivePeerHostFull` in `firestore.rules`.
 - **Versions:** PWA 0.5.21; Android 0.11.20 / 81, which includes the unreleased 0.11.19.
 - **Writeups:** `COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`, `IMPORT_DNS_REBINDING_0.5.21.md`,
   `SHARE_LINK_PREVIEWS_0.5.21.md`, `DELETION_WITHOUT_FULL_SCANS_0.5.21.md`,
-  `CHEF_SEARCH_TOKENS_0.5.21.md`, `PRIVATE_BACKUP_0.5.21_0.11.20.md`. The top entry of
-  `BUILD_STATUS.md` holds the release order.
+  `CHEF_SEARCH_TOKENS_0.5.21.md`, `PRIVATE_BACKUP_0.5.21_0.11.20.md`,
+  `LIVE_VIEWER_CAP_0.5.21_0.11.20.md`. The top entry of `BUILD_STATUS.md` holds the release order.
 
 ## 3. DECISIONS
 - **F21:**
@@ -78,6 +82,13 @@ handoff.
   - Android keeps a restore offered until its recording downloads. The web restores the recipe
     anyway and offers the recording's download later, because browser downloads need bucket CORS.
   - Not backed up: transcript and parse details, Second Pass results, collections, shopping list.
+- **F18 (James):** cap viewers now; TURN later. Then, in code:
+  - Six a room, both platforms. The host answers a seventh join `FULL`, so no connection is made
+    for it. A failed connection frees its place.
+  - The viewer leaves and offers Try again; nothing retries by itself.
+  - The Android host answers only a `JOINING` peer, as the PWA host already did.
+  - The cap is the host's own choice, so it is enforced where the cost is, in the host. The rules
+    only let the host say `FULL` over a waiting join.
 - The emulator suite runs its files one at a time, because five files at once garbled a Live test.
 
 ## 4. RULED OUT
@@ -97,11 +108,13 @@ handoff.
 
 ## 5. VERIFIED — do not re-verify
 - **CI green** on `043bc2a` (F21 and F30), `242c2d1`, `348dfe0` and `ba76796`.
-- **Local suites, with F11:** PWA 376 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android 267 / 0
-  (2 skipped), rules emulator 84 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0,
-  share 8 / 0.
+- **Local suites, with F11 and F18:** PWA 379 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android
+  267 / 0 (2 skipped), rules emulator 87 / 0, notification gates 119 / 0, billing 17 / 0, import
+  102 / 0, share 8 / 0.
 - **F11 breaks caught:** PWA 18, Android 13, emulator 3. The emulator test runs the PWA's own
   backup transaction against the real rules.
+- **F18 breaks caught:** 10. The emulator test runs the real PWA host and viewers against the real
+  rules; Android's transport is held by source gates, and needs the device check.
 - **Every new check was broken on purpose and caught:**
   - the step matcher, 19 ways;
   - the PWA cook-along, 12;
@@ -142,9 +155,10 @@ handoff.
    - Android 0.11.20: release build, the nine device checks (`COOK_ALONG_…md`), Play.
    - F11: the bucket's CORS setting and `DEPLOY_ACCOUNT_DELETION_PAGE.cmd`, then the seven device
      checks in `PRIVATE_BACKUP_…md`.
-2. **Code, decided:** F18, cap Live viewers now (host-side, both platforms; the Android Live
-   transport change needs a two-device test before release). TURN waits for James to pick a
-   provider.
+   - F18: its rule rides the batch's rules deploy, before the apps; then the device checks in
+     `LIVE_VIEWER_CAP_…md`.
+2. **James:** pick a TURN provider (F18's other half), with credentials; then a small callable
+   mints short-lived ones and both `LIVE_ICE_SERVERS` lists take them.
 3. **F31:** move the root docs into `docs/` only after the master merge.
 
 ## 8. OPEN

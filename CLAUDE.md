@@ -94,7 +94,7 @@ App Check is integrated (debug provider in debug builds, Play Integrity in relea
 
 ### Live video (WebRTC)
 
-Firestore is only the signaling/control plane (session doc with host/status/timestamps, SDP/ICE exchange, chat/reactions subcollection) — actual camera/microphone media flows peer-to-peer over WebRTC (`io.github.webrtc-sdk:android`), never through Firestore. See `WEBRTC_LIVE_SETUP.md`. A live host renews a `heartbeatAt` lease every 10s; a session is only shown as LIVE while that lease is fresh (35s timeout), so a killed/backgrounded host doesn't strand a stale "LIVE" badge.
+Firestore is only the signaling/control plane (session doc with host/status/timestamps, SDP/ICE exchange, chat/reactions subcollection) — actual camera/microphone media flows peer-to-peer over WebRTC (`io.github.webrtc-sdk:android`), never through Firestore. See `WEBRTC_LIVE_SETUP.md`. A live host renews a `heartbeatAt` lease every 10s; a session is only shown as LIVE while that lease is fresh (35s timeout), so a killed/backgrounded host doesn't strand a stale "LIVE" badge. The host encodes once per viewer (a mesh, no SFU), so a room holds `LIVE_MAX_VIEWERS` (6, the same in `webrtc-signaling.js` and `WebRtcLiveTransport.kt`): past that the host answers a join `FULL` instead of an offer. Only STUN is configured; TURN is still to come.
 
 ### Versioning convention
 

@@ -14,12 +14,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,12 +29,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.chefvoice.app.notifications.ChefVoiceForegroundService
 import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.DocumentReference
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
@@ -76,6 +82,15 @@ private const val LIVE_STREAM_ID = "chefvoice-live"
 private const val VIDEO_TRACK_ID = "chefvoice-video"
 private const val AUDIO_TRACK_ID = "chefvoice-audio"
 private const val MAX_ICE_CANDIDATES_PER_SIDE = 64
+
+/**
+ * The host opens one PeerConnection, and so one video encode and upload, per viewer, and a phone's
+ * uplink and battery give out after a handful (audit F18). Past this many a new viewer is told the
+ * room is full, rather than every viewer's picture degrading. The PWA's webrtc-signaling.js holds
+ * the same number. It is the room size until an SFU carries the media.
+ */
+internal const val LIVE_MAX_VIEWERS = 6
+internal const val LIVE_FULL_MESSAGE = "This Live is full right now. Try again in a few minutes."
 
 private fun iceCandidateDocumentId(sequence: Int): String? =
     sequence.takeIf { it in 0 until MAX_ICE_CANDIDATES_PER_SIDE }?.let { "c" + it.toString().padStart(3, '0') }
@@ -189,6 +204,24 @@ internal fun WebRtcLiveHostPanel(sessionId: String, hostUid: String, onReady: ()
 
 @Composable
 internal fun WebRtcLiveViewerPanel(sessionId: String, viewerUid: String) {
+    // A full room (audit F18) ends this attempt: its controller and renderer leave composition,
+    // which removes the join. Try again starts a fresh one, when the chef chooses.
+    var attempt by remember(sessionId) { mutableIntStateOf(0) }
+    var full by remember(sessionId) { mutableStateOf(false) }
+    if (full) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(LIVE_FULL_MESSAGE, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            Button(onClick = { full = false; attempt++ }) { Text("Try again") }
+        }
+        return
+    }
+    key(attempt) {
+        WebRtcLiveViewerAttempt(sessionId, viewerUid, onFull = { full = true })
+    }
+}
+
+@Composable
+private fun WebRtcLiveViewerAttempt(sessionId: String, viewerUid: String, onFull: () -> Unit) {
     val context = LocalContext.current
     var status by remember(sessionId) { mutableStateOf("Joining live video…") }
 
@@ -197,7 +230,8 @@ internal fun WebRtcLiveViewerPanel(sessionId: String, viewerUid: String) {
             context = context.applicationContext,
             sessionId = sessionId,
             viewerUid = viewerUid,
-            onStatus = { status = it }
+            onStatus = { status = it },
+            onFull = onFull
         )
     }
 
@@ -377,8 +411,13 @@ private class WebRtcHostController(
                 when (change.type) {
                     DocumentChange.Type.ADDED,
                     DocumentChange.Type.MODIFIED -> {
-                        if (viewerUid.isNotBlank() && !peers.containsKey(peerId)) {
-                            createHostPeer(peerId, viewerUid)
+                        // Only a join is answered: a room this host turned away is FULL, and an
+                        // offer or answer is already a viewer's. Checked join by join, so two
+                        // arriving together cannot both take the last place.
+                        val joining = change.document.getString("state") == "JOINING"
+                        if (viewerUid.isNotBlank() && joining && !peers.containsKey(peerId)) {
+                            if (serving() >= LIVE_MAX_VIEWERS) turnAway(change.document)
+                            else createHostPeer(peerId, viewerUid)
                         }
                     }
                     DocumentChange.Type.REMOVED -> {
@@ -397,6 +436,35 @@ private class WebRtcHostController(
         val hostPeer = HostPeer(peerId, viewerUid, peerRef, vTrack, aTrack)
         peers[peerId] = hostPeer
         hostPeer.start()
+    }
+
+    /** Viewers this host is sending to, or getting ready to: each is an encoder. A failed one is not. */
+    private fun serving(): Int = peers.values.count { !it.gone }
+
+    /**
+     * Answers a join the room has no place for with FULL (audit F18): no connection, so no
+     * encoder. The viewer says the Live is full and leaves; a later join is offered if a place has
+     * opened by then.
+     */
+    private fun turnAway(join: DocumentSnapshot) {
+        val joinedAt = join.getLong("joinedAt")
+        db.runTransaction { transaction ->
+            val current = transaction.get(join.reference)
+            val stillJoining = current.exists() &&
+                current.getString("state") == "JOINING" &&
+                current.getLong("joinedAt") == joinedAt
+            if (stillJoining) {
+                transaction.update(
+                    join.reference,
+                    mapOf("hostUid" to hostUid, "state" to "FULL", "updatedAt" to System.currentTimeMillis())
+                )
+            }
+            stillJoining
+        }.addOnSuccessListener { turnedAway ->
+            if (turnedAway == true && started) {
+                status("Your Live is full: $LIVE_MAX_VIEWERS viewers. New viewers are asked to try again later.")
+            }
+        }
     }
 
     private fun publishViewerCount() {
@@ -456,6 +524,9 @@ private class WebRtcHostController(
     ) {
         var connected: Boolean = false
             private set
+        /** The connection failed or closed: it no longer holds one of the room's places. */
+        var gone: Boolean = false
+            private set
         private var pc: PeerConnection? = null
         private var peerDocListener: ListenerRegistration? = null
         private var viewerCandidateListener: ListenerRegistration? = null
@@ -477,6 +548,8 @@ private class WebRtcHostController(
             val observer = object : PeerConnection.Observer by observerBase {
                 override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
                     val nowConnected = newState == PeerConnection.PeerConnectionState.CONNECTED
+                    gone = newState == PeerConnection.PeerConnectionState.FAILED ||
+                        newState == PeerConnection.PeerConnectionState.CLOSED
                     if (connected != nowConnected) {
                         connected = nowConnected
                         publishViewerCount()
@@ -578,7 +651,9 @@ private class WebRtcViewerController(
     context: Context,
     sessionId: String,
     private val viewerUid: String,
-    onStatus: (String) -> Unit
+    onStatus: (String) -> Unit,
+    /** Runs once if the host has no place for this viewer (audit F18). */
+    private val onFull: () -> Unit = {}
 ) : BaseWebRtcController(context, sessionId, onStatus) {
 
     private val peerId = viewerUid
@@ -593,6 +668,7 @@ private class WebRtcViewerController(
     private var remoteDescriptionSet = false
     private var offerApplied = false
     private var started = false
+    private var turnedAway = false
     private var viewerCandidateSequence = 0
 
     fun start(renderer: SurfaceViewRenderer) {
@@ -638,6 +714,15 @@ private class WebRtcViewerController(
         peerDocListener = peerRef.addSnapshotListener { snapshot, error ->
             if (error != null) {
                 status("Live signaling error: ${error.message ?: "unknown error"}")
+                return@addSnapshotListener
+            }
+            // The host is sending to as many viewers as it can: it answered with FULL, not an offer.
+            if (snapshot?.getString("state") == "FULL") {
+                if (started && !turnedAway) {
+                    turnedAway = true
+                    status(LIVE_FULL_MESSAGE)
+                    mainHandler.post { onFull() }
+                }
                 return@addSnapshotListener
             }
             val offer = snapshot?.getString("offerSdp").orEmpty()

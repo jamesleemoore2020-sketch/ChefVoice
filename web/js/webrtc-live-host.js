@@ -1,5 +1,5 @@
 import { collection, db, doc, getDocs, onSnapshot, runTransaction, setDoc, updateDoc, writeBatch } from './firebase-client.js';
-import { LIVE_ICE_SERVERS, candidateFromDoc, candidateToDoc, iceCandidateDocumentId } from './webrtc-signaling.js';
+import { LIVE_ICE_SERVERS, LIVE_MAX_VIEWERS, candidateFromDoc, candidateToDoc, iceCandidateDocumentId } from './webrtc-signaling.js';
 
 export function cameraErrorMessage(error) {
   if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') return 'Allow camera and microphone access for ChefVoice, then try again.';
@@ -136,7 +136,11 @@ export class LiveHostController {
           if (data.viewerUid !== id) continue;
           let peer = this.peers.get(id);
           if (peer && peer.joinedAt !== data.joinedAt) { this.#dropPeer(id); peer = null; }
-          if (!peer && data.state === 'JOINING') peer = this.#createPeer(id, data);
+          if (!peer && data.state === 'JOINING') {
+            // Checked join by join, so two arriving together cannot both take the last place.
+            if (this.#serving() >= LIVE_MAX_VIEWERS) void this.#turnAway(change.doc.ref, data.joinedAt);
+            else peer = this.#createPeer(id, data);
+          }
           if (peer && data.state === 'ANSWERED' && data.answerSdp && !peer.answerApplied) void this.#acceptAnswer(peer, data.answerSdp);
         }
         if (!snapshot.metadata.fromCache) { this.cancelListenerReady = null; resolve(); }
@@ -148,6 +152,27 @@ export class LiveHostController {
   }
 
   #isCurrent(peer) { return this.phase !== 'stopped' && this.peers.get(peer.id) === peer; }
+
+  /** Viewers this host is sending to, or getting ready to: each is an encoder. A failed one is not. */
+  #serving() { return [...this.peers.values()].filter(peer => !['failed', 'closed'].includes(peer.pc.connectionState)).length; }
+
+  /**
+   * Answers a join the room has no place for with FULL (audit F18): no connection, so no encoder.
+   * The viewer says the Live is full and leaves; a later join is offered if a place has opened.
+   */
+  async #turnAway(ref, joinedAt) {
+    try {
+      const turnedAway = await runTransaction(db, async transaction => {
+        const snapshot = await transaction.get(ref);
+        if (this.phase === 'stopped' || !snapshot.exists() || snapshot.data().joinedAt !== joinedAt || snapshot.data().state !== 'JOINING') return false;
+        transaction.update(ref, { hostUid: this.hostUid, state: 'FULL', updatedAt: Date.now() });
+        return true;
+      });
+      if (turnedAway && this.phase !== 'stopped') this.onStatus(`Your Live is full: ${LIVE_MAX_VIEWERS} viewers. New viewers are asked to try again later.`);
+    } catch {
+      // Left waiting, the viewer can leave and join again.
+    }
+  }
 
   #createPeer(id, data) {
     let pc;

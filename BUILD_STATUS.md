@@ -1,21 +1,23 @@
-# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along, import, share links, deletion, chef search, private backup; PWA 0.5.21 / Android 0.11.20)
+# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along, import, share links, deletion, chef search, private backup, Live viewer cap; PWA 0.5.21 / Android 0.11.20)
 
 Session handoff: `HANDOFF_2026-09-28_SESSION12.md`. Branch
 `claude/audit-implementation-2026-09-28-e6a4a5`, which continues
 `claude/audit-implementation-2026-09-26-02973b` from `c6ef9af`. Writeups:
 `COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`, `IMPORT_DNS_REBINDING_0.5.21.md`,
 `SHARE_LINK_PREVIEWS_0.5.21.md`, `DELETION_WITHOUT_FULL_SCANS_0.5.21.md`,
-`CHEF_SEARCH_TOKENS_0.5.21.md`, `PRIVATE_BACKUP_0.5.21_0.11.20.md`.
+`CHEF_SEARCH_TOKENS_0.5.21.md`, `PRIVATE_BACKUP_0.5.21_0.11.20.md`,
+`LIVE_VIEWER_CAP_0.5.21_0.11.20.md`.
 
-Tests at this point: PWA 376 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android 267 / 0 (2 skipped),
-rules emulator 84 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
+Tests at this point: PWA 379 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android 267 / 0 (2 skipped),
+rules emulator 87 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
 **Nothing here is deployed yet.** Parser, corpus, Live signaling and App Check untouched.
 
 **Release order for this batch** (each writeup says why its step is where it is):
 
 1. `DEPLOY_FIRESTORE_INDEXES.cmd`: the `blocks.blockedUid` index (F17).
-2. `DEPLOY_COMMUNITY_RULES.cmd`, after diffing the console's live rules: the like-mirror rule (F17)
-   and the profile `searchTokens` rule (F10). The latter must be live before step 3.
+2. `DEPLOY_COMMUNITY_RULES.cmd`, after diffing the console's live rules: the like-mirror rule (F17),
+   the profile `searchTokens` rule (F10), which must be live before step 3, and the Live `FULL`
+   answer (F18), which must be live before the apps.
 3. `DEPLOY_NOTIFICATIONS.cmd`: deletion without full scans (F17), the search-token trigger (F10).
 4. In `firebase functions:shell`, as an admin, each until it answers `done: true`:
    `backfillChefVoiceDeletionIndexes` and `backfillChefVoiceSearchTokens`.
@@ -26,7 +28,7 @@ rules emulator 84 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 
 7. `DEPLOY_SHARE.cmd` (F29), then `DEPLOY_PWA.cmd` for PWA 0.5.21, which refuses without the share
    deploy and should follow step 4 so the new chef search has tokens to find.
 8. Android 0.11.20 / 81 (includes the unreleased 0.11.19): release build, the device checks in the
-   cook-along and private-backup writeups, Play.
+   cook-along, private-backup and Live viewer cap writeups, Play.
 
 - **Cook-along for a real kitchen (F21), both platforms.** Step text at 28 px/sp, and one big
   Next docked at the bottom of the screen, about twice as wide as Previous, that never scrolls
@@ -76,6 +78,12 @@ rules emulator 84 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 
   account's recipes the device lacks, at sign-in, with their recordings (on the web, once the bucket
   allows the app's address). ChefVoice Review no longer deletes a recording the account keeps, and
   publishing no longer re-sends one. No rules or functions deploy.
+- **A Live room holds six viewers (F18), both platforms.** The host sends one video encode per
+  viewer, and nothing limited them. A seventh join is now answered `FULL` instead of an offer, so no
+  connection is made for it; the viewer is told the Live is full, with Try again. A failed
+  connection frees its place. The Android host now answers only a waiting join. One new rule lets
+  the host write `FULL` over a waiting join and nothing else; it deploys before the apps. TURN
+  waits for James to pick a provider.
 
 # Current handoff — 2026-09-27 (audit implementation, part 3: hardening, PWA 0.5.20)
 

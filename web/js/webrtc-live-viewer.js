@@ -1,5 +1,5 @@
 import { collection, db, deleteDoc, doc, getDocs, onSnapshot, setDoc, updateDoc, writeBatch } from './firebase-client.js';
-import { LIVE_ICE_SERVERS, candidateFromDoc, candidateToDoc, iceCandidateDocumentId } from './webrtc-signaling.js';
+import { LIVE_FULL_MESSAGE, LIVE_ICE_SERVERS, candidateFromDoc, candidateToDoc, iceCandidateDocumentId } from './webrtc-signaling.js';
 
 /**
  * Browser-side viewer for ChefVoice Live. Implements the *existing* viewer role
@@ -19,11 +19,17 @@ import { LIVE_ICE_SERVERS, candidateFromDoc, candidateToDoc, iceCandidateDocumen
  * client, so it has no bearing on this file.
  */
 export class LiveViewerController {
-  constructor({ sessionId, viewerUid, onStatus = () => {}, onTrack = () => {} } = {}) {
+  /**
+   * `onFull` runs once if the host has no place for this viewer (audit F18). Without one, the
+   * viewer leaves by itself.
+   */
+  constructor({ sessionId, viewerUid, onStatus = () => {}, onTrack = () => {}, onFull = null } = {}) {
     this.sessionId = sessionId;
     this.viewerUid = viewerUid;
     this.onStatus = onStatus;
     this.onTrack = onTrack;
+    this.onFull = onFull || (() => { void this.stop(); });
+    this.turnedAway = false;
 
     this.peerRef = doc(db, 'liveSessions', sessionId, 'peers', viewerUid);
     this.pc = null;
@@ -93,6 +99,15 @@ export class LiveViewerController {
   }
 
   async #onPeerDocChange(snapshot) {
+    // The host is sending to as many viewers as it can: it answered with FULL, not an offer.
+    if (snapshot.data()?.state === 'FULL') {
+      if (this.started && !this.turnedAway) {
+        this.turnedAway = true;
+        this.status(LIVE_FULL_MESSAGE);
+        this.onFull();
+      }
+      return;
+    }
     const offer = snapshot.data()?.offerSdp;
     const pc = this.pc;
     if (!this.started || !offer || this.offerApplied || !pc) return;
