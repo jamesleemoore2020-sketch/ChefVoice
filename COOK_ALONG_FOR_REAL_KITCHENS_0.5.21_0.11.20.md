@@ -119,9 +119,10 @@ pepper" names all four, lemon pepper once).
 
 ## To release
 
-**PWA 0.5.21:** `DEPLOY_PWA.cmd`. Then on a phone: open a recipe, cook it, and check that the
-tab bar is gone and Next is the big button at the bottom; open a Community recipe and change its
-servings.
+**PWA 0.5.21:** `DEPLOY_PWA.cmd`, after `DEPLOY_SHARE.cmd`: 0.5.21 also carries the shared-link
+previews (`SHARE_LINK_PREVIEWS_0.5.21.md`), and `DEPLOY_PWA.cmd` refuses to deploy until their
+function is live. Then on a phone: open a recipe, cook it, and check that the tab bar is gone and
+Next is the big button at the bottom; open a Community recipe and change its servings.
 
 **Android 0.11.20 / 81 includes everything in 0.11.19 / 80**, which was never released. If 0.11.19
 has not been uploaded yet, build 0.11.20 instead, from the shell that holds the

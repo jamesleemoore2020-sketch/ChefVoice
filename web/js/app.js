@@ -2506,7 +2506,9 @@ async function messageChef(targetUid){
  * above) rather than dropping a chef on the bare feed.
  */
 async function shareRecipe(recipe){
-  const url=`${location.origin}/?tab=community&recipe=${encodeURIComponent(recipe.id)}`;
+  // /r/{id} is served by share/functions so a messaging app can preview the dish; a person is sent
+  // straight on to the ?recipe= deep link from there (js/share-redirect.js, or the service worker).
+  const url=`${location.origin}/r/${encodeURIComponent(recipe.id)}`;
   const shareData={title:recipe.title||'A ChefVoice recipe',text:`${recipe.title||'A recipe'} on ChefVoice, by ${recipe.authorName||'a ChefVoice chef'}`,url};
   if(navigator.share){
     try{await navigator.share(shareData);}

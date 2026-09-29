@@ -1,13 +1,15 @@
-# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along and import, PWA 0.5.21 / Android 0.11.20)
+# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along, import, share links; PWA 0.5.21 / Android 0.11.20)
 
 Branch `claude/audit-implementation-2026-09-28-e6a4a5`, which continues
 `claude/audit-implementation-2026-09-26-02973b` from `c6ef9af`. Writeups:
-`COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`, `IMPORT_DNS_REBINDING_0.5.21.md`.
+`COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`, `IMPORT_DNS_REBINDING_0.5.21.md`,
+`SHARE_LINK_PREVIEWS_0.5.21.md`.
 
-Tests at this point: PWA 337 / 0, jsdom 74 / 35 / 18 / 46, e2e 26 / 0, Android 239 / 0 (2 skipped),
-notification gates 78 / 0, billing 17 / 0, import 102 / 0. **Nothing here is deployed yet.**
-Parser, corpus, rules, Live signaling and App Check untouched. The only backend change is the
-`chefvoice-import` codebase (F30), deployed on its own with `DEPLOY_IMPORT.cmd`.
+Tests at this point: PWA 343 / 0, jsdom 74 / 35 / 18 / 46, e2e 30 / 0, Android 241 / 0 (2 skipped),
+notification gates 78 / 0, billing 17 / 0, import 102 / 0, share 8 / 0. **Nothing here is deployed
+yet.** Parser, corpus, rules, Live signaling and App Check untouched. Backend changes: the
+`chefvoice-import` codebase (F30, `DEPLOY_IMPORT.cmd`) and a new `chefvoice-share` codebase (F29,
+`DEPLOY_SHARE.cmd`, which must go before `DEPLOY_PWA.cmd`; that script now checks).
 
 - **Cook-along for a real kitchen (F21), both platforms.** Step text at 28 px/sp, and one big
   Next docked at the bottom of the screen, about twice as wide as Previous, that never scrolls
@@ -26,6 +28,13 @@ Parser, corpus, rules, Live signaling and App Check untouched. The only backend 
   to. IPv6 accepts only global unicast, which also refuses NAT64, 6to4, Teredo and multicast.
   Tested over real sockets against a local server; ten breaks caught. CI and
   `RUN_IMPORT_GATES.cmd` now install the codebase's dependencies first.
+- **Shared recipe links preview as the dish (F29).** Links are `/r/{recipeId}` on both platforms.
+  A new `chefvoice-share` function, behind a Hosting rewrite, answers them with the recipe's name,
+  words and photo for a messaging app's card, and only ever for a public recipe: a private one is
+  indistinguishable from a missing one. People are sent on to the old deep link by a one-line
+  script, or by the service worker before the page is fetched, which also keeps a share page from
+  ever being stored as the offline app. Deploy order: `DEPLOY_SHARE.cmd`, then `DEPLOY_PWA.cmd`
+  (which refuses otherwise), then Android 0.11.20.
 
 # Current handoff — 2026-09-27 (audit implementation, part 3: hardening, PWA 0.5.20)
 

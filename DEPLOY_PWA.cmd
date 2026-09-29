@@ -46,6 +46,23 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem Shared recipe links (/r/**) are rewritten to the recipeSharePage function, which is
+rem deployed on its own by DEPLOY_SHARE.cmd. A rewrite to a function that was never deployed
+rem breaks every shared link, so the function goes first.
+findstr /c:"recipeSharePage" firebase.json >nul
+if not errorlevel 1 (
+  firebase functions:list --project chefvoice-d7fec 2>nul | findstr /c:"recipeSharePage" >nul
+  if errorlevel 1 (
+    echo REFUSING TO DEPLOY
+    echo firebase.json sends shared recipe links to recipeSharePage, which is not deployed.
+    echo Run DEPLOY_SHARE.cmd first, then rerun this file.
+    echo If it is deployed, the Firebase CLI login may have expired: firebase login --reauth
+    echo.
+    pause
+    exit /b 1
+  )
+)
+
 rem The deterministic parser is the protected core and the PWA half of the shared
 rem golden corpus contract. Never publish a client that fails it.
 echo Running PWA parser/feature gates before deploying...

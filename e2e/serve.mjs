@@ -8,6 +8,7 @@
 // `node` does: `node e2e/serve.mjs` from the repo root, PORT to change the port.
 // .claude/launch.json uses it for the Browser pane preview.
 import http from 'node:http';
+import { createRequire } from 'node:module';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,8 +26,26 @@ function globToRegExp(glob) {
 }
 
 const firebaseJson = JSON.parse(await readFile(new URL('../firebase.json', import.meta.url), 'utf8'));
-const headerRules = (firebaseJson.hosting.find((h) => h.target === 'pwa').headers || [])
+const pwaTarget = firebaseJson.hosting.find((h) => h.target === 'pwa');
+const headerRules = (pwaTarget.headers || [])
   .map((rule) => ({ matches: globToRegExp(rule.source), headers: rule.headers }));
+
+// Rewrites to a Cloud Function, answered here the way the function answers them. Only functions
+// this file knows are mirrored; a new one stops the server rather than silently serving
+// index.html in its place. The share page is always the generic one: there is no Firestore
+// here, and "not a public recipe" is the answer that function gives when it cannot read one.
+const require = createRequire(import.meta.url);
+const functionPages = {
+  recipeSharePage: (pathname) => {
+    const { recipeIdFromPath, renderSharePage } = require('../share/functions/share-page.js');
+    return renderSharePage({ id: recipeIdFromPath(pathname), recipe: null });
+  }
+};
+const functionRules = (pwaTarget.rewrites || []).filter((rule) => rule.function).map((rule) => {
+  const page = functionPages[rule.function.functionId];
+  if (!page) throw new Error(`serve.mjs cannot mirror the Hosting rewrite to function "${rule.function.functionId}"`);
+  return { matches: globToRegExp(rule.source), page };
+});
 
 function hostingHeaders(pathname) {
   // no-cache for anything the rules leave alone: nothing local should be served stale.
@@ -78,7 +97,17 @@ async function resolveFile(pathname) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  const file = (await resolveFile(url.pathname)) || join(root, 'index.html');
+  // Hosting serves a file that exists before it applies any rewrite, then the first rewrite that
+  // matches. The function's own headers come first; Hosting's rules for the path win over them.
+  const existing = await resolveFile(url.pathname);
+  const rewrite = !existing && functionRules.find((rule) => rule.matches.test(url.pathname));
+  if (rewrite) {
+    const page = rewrite.page(url.pathname);
+    res.writeHead(200, { ...page.headers, ...hostingHeaders(url.pathname) });
+    res.end(req.method === 'HEAD' ? undefined : page.html);
+    return;
+  }
+  const file = existing || join(root, 'index.html');
   try {
     const body = await readFile(file);
     res.writeHead(200, {

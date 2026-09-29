@@ -17,10 +17,13 @@ const CORE=['./','./index.html','./manifest.webmanifest',
   './js/app.js','./js/chef-analytics.js','./js/collections.js','./js/community-feed.js','./js/cook-along.js','./js/cook-commands.js',
   './js/cooking-session-parser.js','./js/entitlement.js','./js/firebase-client.js','./js/firebase-config.js',
   './js/inbox.js','./js/ingredient-parser.js','./js/ingredient-scaling.js','./js/second-pass-reviewer.js',
-  './js/shopping-list.js','./js/step-ingredients.js','./js/step-timers.js','./js/storage.js','./js/swipe-gestures.js','./js/tag-utils.js',
+  './js/share-redirect.js','./js/shopping-list.js','./js/step-ingredients.js','./js/step-timers.js','./js/storage.js','./js/swipe-gestures.js','./js/tag-utils.js',
   './js/theme-boot.js','./js/voice-capture.js','./js/webm-duration-fix.js','./js/webrtc-live-host.js','./js/webrtc-live-viewer.js',
   './js/webrtc-signaling.js',
   './assets/chefvoice-icon.png','./assets/chefvoice-cover.webp','./assets/community-hero.webp','./assets/live-hero.webp'];
+
+// A shared recipe link, /r/{recipeId} (see the fetch handler).
+const SHARE_LINK=/^\/r\/([A-Za-z0-9_-]{1,128})\/?$/;
 
 // How long an app launch waits on the network before opening from the cache instead.
 // Kitchen Wi-Fi that is connected but not passing traffic otherwise hangs the launch.
@@ -54,7 +57,21 @@ self.addEventListener('fetch',event=>{
   if(request.method!=='GET')return;
   // Not ours to cache: Firestore, Storage, the Firebase SDK, Analytics.
   if(new URL(request.url).origin!==self.location.origin)return;
-  if(request.mode==='navigate'){event.respondWith(openApp(event));return;}
+  if(request.mode==='navigate'){
+    const path=new URL(request.url).pathname;
+    // A shared recipe link. Its page (share/functions) exists for link previews and is not the
+    // app, so it is never fetched here, and above all never stored below as the app shell: go
+    // straight to the deep link the app opens, online or off. Any other /r/ path is the same
+    // page with nothing to describe, and goes to the app's front door.
+    if(path.startsWith('/r/')){
+      const shared=SHARE_LINK.exec(path);
+      const target=shared?`/?tab=community&recipe=${encodeURIComponent(shared[1])}`:'/';
+      event.respondWith(Response.redirect(new URL(target,self.location.origin).href,302));
+      return;
+    }
+    event.respondWith(openApp(event));
+    return;
+  }
   event.respondWith(appFile(event));
 });
 

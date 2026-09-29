@@ -83,7 +83,7 @@ jobs:
           retention-days: 14
 
   functions:
-    name: Functions gates (notifications, billing, import)
+    name: Functions gates (notifications, billing, import, share)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -115,6 +115,12 @@ jobs:
         run: node --test "import/functions/*.test.js"
       - name: Import function syntax
         run: node --check import/functions/index.js
+      # RUN_SHARE_GATES.cmd. The page behind a shared recipe link is pure functions, so these
+      # need no dependencies.
+      - name: Share-link gates
+        run: node --test "share/functions/*.test.js"
+      - name: Share function syntax
+        run: node --check share/functions/index.js
 
   android:
     name: Android unit tests (Kotlin parser + golden corpus)
