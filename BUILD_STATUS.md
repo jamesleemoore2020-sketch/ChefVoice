@@ -1,15 +1,17 @@
-# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along, import, share links; PWA 0.5.21 / Android 0.11.20)
+# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along, import, share links, deletion; PWA 0.5.21 / Android 0.11.20)
 
 Branch `claude/audit-implementation-2026-09-28-e6a4a5`, which continues
 `claude/audit-implementation-2026-09-26-02973b` from `c6ef9af`. Writeups:
 `COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`, `IMPORT_DNS_REBINDING_0.5.21.md`,
-`SHARE_LINK_PREVIEWS_0.5.21.md`.
+`SHARE_LINK_PREVIEWS_0.5.21.md`, `DELETION_WITHOUT_FULL_SCANS_0.5.21.md`.
 
 Tests at this point: PWA 343 / 0, jsdom 74 / 35 / 18 / 46, e2e 30 / 0, Android 241 / 0 (2 skipped),
-notification gates 78 / 0, billing 17 / 0, import 102 / 0, share 8 / 0. **Nothing here is deployed
-yet.** Parser, corpus, rules, Live signaling and App Check untouched. Backend changes: the
-`chefvoice-import` codebase (F30, `DEPLOY_IMPORT.cmd`) and a new `chefvoice-share` codebase (F29,
-`DEPLOY_SHARE.cmd`, which must go before `DEPLOY_PWA.cmd`; that script now checks).
+rules emulator 71 / 0, notification gates 91 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
+**Nothing here is deployed yet.** Parser, corpus, Live signaling and App Check untouched. Backend
+changes, each deployed on its own: `chefvoice-import` (F30, `DEPLOY_IMPORT.cmd`); a new
+`chefvoice-share` codebase (F29, `DEPLOY_SHARE.cmd`, which must go before `DEPLOY_PWA.cmd`, and that
+script now checks); and for F17 an index, one rules condition and `chefvoice-notifications`, in the
+order the writeup gives, then a one-time admin backfill.
 
 - **Cook-along for a real kitchen (F21), both platforms.** Step text at 28 px/sp, and one big
   Next docked at the bottom of the screen, about twice as wide as Previous, that never scrolls
@@ -35,6 +37,14 @@ yet.** Parser, corpus, rules, Live signaling and App Check untouched. Backend ch
   script, or by the service worker before the page is fetched, which also keeps a share page from
   ever being stored as the offline app. Deploy order: `DEPLOY_SHARE.cmd`, then `DEPLOY_PWA.cmd`
   (which refuses otherwise), then Android 0.11.20.
+- **Deletion scales with the account, not the platform (F17).** Deleting a recipe walked every user,
+  and deleting an account walked every user and every recipe. Blocks are now found by their
+  `blockedUid` (with a new collection-group index), bookmarks by `recipeId`, and likes through the
+  chef's own mirrors, which the rules now keep for as long as the recipe's half exists. An admin
+  backfill (`backfillChefVoiceDeletionIndexes`, resumable) gives older documents those fields and
+  mirrors once. The walks run until it records that it has finished, and then stop by themselves,
+  so deploying first loses nothing. The backfill was run for real against the Firestore emulator.
+  Deploy order: indexes, rules (after the console diff), notifications, then the backfill.
 
 # Current handoff — 2026-09-27 (audit implementation, part 3: hardening, PWA 0.5.20)
 

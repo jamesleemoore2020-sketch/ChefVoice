@@ -22,7 +22,7 @@ const {
   assertSucceeds,
   assertFails,
 } = require("@firebase/rules-unit-testing");
-const { doc, setDoc, getDoc, updateDoc, deleteDoc } = require("firebase/firestore");
+const { doc, setDoc, getDoc, updateDoc, deleteDoc, writeBatch } = require("firebase/firestore");
 
 const PROJECT_ID = "chefvoice-rules-test";
 const RULES = fs.readFileSync(path.resolve(__dirname, "../firestore.rules"), "utf8");
@@ -816,6 +816,45 @@ test("a Live host can clear chat in their room, and nobody else can", async () =
   await assertSucceeds(deleteDoc(doc(bob, "liveSessions", "room-1", "comments", "l2")));
   // Clearing up after the broadcast has ended.
   await assertSucceeds(deleteDoc(doc(alice, "liveSessions", "room-2", "comments", "l1")));
+});
+
+test("liking writes both halves of a like together", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "users", ALICE), profile("Alice", now() - DAY_MS));
+    await setDoc(doc(db, "recipes", "like-create-1"), recipe(BOB, "Bob"));
+  });
+  const alice = env.authenticatedContext(ALICE).firestore();
+  const createdAt = now();
+  // One half on its own is refused either way round: each rule checks the other half exists.
+  await denied(setDoc(doc(alice, "recipes", "like-create-1", "likes", ALICE), { createdAt }), "a like with no mirror");
+  await denied(setDoc(doc(alice, "users", ALICE, "likes", "like-create-1"), { createdAt }), "a mirror with no like");
+  const batch = writeBatch(alice);
+  batch.set(doc(alice, "recipes", "like-create-1", "likes", ALICE), { createdAt });
+  batch.set(doc(alice, "users", ALICE, "likes", "like-create-1"), { createdAt });
+  await assertSucceeds(batch.commit());
+});
+
+test("a like's mirror goes with the recipe's half, never before it", async () => {
+  // Account deletion finds a chef's likes through their own mirrors (audit F17), so a like
+  // whose mirror had been deleted first would outlive the account.
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "users", ALICE), profile("Alice", now() - DAY_MS));
+    await setDoc(doc(db, "recipes", "like-delete-1"), recipe(BOB, "Bob"));
+    await setDoc(doc(db, "recipes", "like-delete-1", "likes", ALICE), { createdAt: now() });
+    await setDoc(doc(db, "users", ALICE, "likes", "like-delete-1"), { createdAt: now() });
+    await setDoc(doc(db, "users", ALICE, "likes", "like-delete-orphan"), { createdAt: now() });
+  });
+  const alice = env.authenticatedContext(ALICE).firestore();
+  await denied(deleteDoc(doc(alice, "users", ALICE, "likes", "like-delete-1")), "deleting a mirror while the recipe keeps the like");
+  // Unliking as both apps do it: the two halves in one write.
+  const batch = writeBatch(alice);
+  batch.delete(doc(alice, "recipes", "like-delete-1", "likes", ALICE));
+  batch.delete(doc(alice, "users", ALICE, "likes", "like-delete-1"));
+  await assertSucceeds(batch.commit());
+  // A mirror whose recipe half is already gone can always go.
+  await assertSucceeds(deleteDoc(doc(alice, "users", ALICE, "likes", "like-delete-orphan")));
 });
 
 test("the import counter is closed to clients", async () => {

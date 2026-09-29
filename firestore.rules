@@ -487,7 +487,11 @@ service cloud.firestore {
           && recentClientTime(request.resource.data.createdAt, 300000, 300000)
           && getAfter(/databases/$(database)/documents/recipes/$(recipeId)/likes/$(uid)).data.createdAt == request.resource.data.createdAt;
         allow update: if false;
-        allow delete: if signedIn() && request.auth.uid == uid;
+        // The mirror goes with the recipe's half of the like, never before it. Account deletion
+        // finds a chef's likes through these mirrors (audit F17), so a like whose mirror was
+        // deleted first would outlive the account. Both apps unlike in one write, which passes.
+        allow delete: if signedIn() && request.auth.uid == uid
+          && !existsAfter(/databases/$(database)/documents/recipes/$(recipeId)/likes/$(uid));
       }
 
       match /bookmarks/{recipeId} {

@@ -10,6 +10,10 @@ const crypto = require("node:crypto");
 const { getFirestore, FieldPath } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
 const { getMessaging } = require("firebase-admin/messaging");
+const {
+  DELETION_INDEX_DOC, BACKFILL_PHASES, legacyScansRetired, blockFixes, bookmarkFixes, likeMirror,
+  likeMirrorFixes, advance, backfillDone
+} = require("./deletion-indexes");
 
 initializeApp();
 const db = getFirestore();
@@ -437,7 +441,16 @@ async function deleteStoragePrefix(prefix) {
   return deleted;
 }
 
-async function deleteRecipeUserMirrors(recipeId, likerUids = []) {
+/**
+ * Whether backfillChefVoiceDeletionIndexes has finished, so the walks over every user and every
+ * recipe below can be skipped (deletion-indexes.js explains why they existed).
+ */
+async function deletionScansRetired() {
+  const snap = await db.doc(DELETION_INDEX_DOC).get();
+  return legacyScansRetired(snap.exists ? snap.data() : null);
+}
+
+async function deleteRecipeUserMirrors(recipeId, likerUids = [], scansRetired = false) {
   for (let start = 0; start < likerUids.length; start += DELETE_BATCH_SIZE) {
     const batch = db.batch();
     likerUids.slice(start, start + DELETE_BATCH_SIZE).forEach((likerUid) => {
@@ -447,8 +460,10 @@ async function deleteRecipeUserMirrors(recipeId, likerUids = []) {
   }
   // New bookmark mirrors carry recipeId for an indexed cleanup query.
   await deleteQueryInBatches(db.collectionGroup("bookmarks").where("recipeId", "==", recipeId));
+  if (scansRetired) return;
   // v0.16.0-and-earlier bookmarks did not carry recipeId. Delete their known
   // deterministic document path while paging users so legacy references do not linger.
+  // Until the backfill has given them recipeId, this runs once per user on ChefVoice.
   let cursor = null;
   while (true) {
     let query = db.collection("users").orderBy(FieldPath.documentId()).limit(150);
@@ -463,7 +478,7 @@ async function deleteRecipeUserMirrors(recipeId, likerUids = []) {
   }
 }
 
-async function deleteRecipeArtifacts(uid, recipeRef) {
+async function deleteRecipeArtifacts(uid, recipeRef, scansRetired = false) {
   const recipeId = recipeRef.id;
   const likesSnapshot = await recipeRef.collection("likes").get();
   const likerUids = likesSnapshot.docs.map((item) => item.id);
@@ -475,7 +490,7 @@ async function deleteRecipeArtifacts(uid, recipeRef) {
     deleteCollectionFully(recipeRef.collection("likes")),
     deleteCollectionFully(recipeRef.collection("comments")),
   ]);
-  await deleteRecipeUserMirrors(recipeId, likerUids);
+  await deleteRecipeUserMirrors(recipeId, likerUids, scansRetired);
   const snap = await recipeRef.get();
   if (snap.exists) await recipeRef.delete();
   return { mediaDeleted: mediaDeleted + privateDeleted, likesDeleted, commentsDeleted };
@@ -612,7 +627,11 @@ async function deleteUserFollowEdges(uid) {
   }
 }
 
-async function deleteIncomingBlockReferences(uid) {
+async function deleteIncomingBlockReferences(uid, scansRetired = false) {
+  // Every block of this account by another chef, found by the field the rules require on a
+  // block. Blocks older than that rule are found by the walk below until the backfill ends it.
+  await deleteQueryInBatches(db.collectionGroup("blocks").where("blockedUid", "==", uid));
+  if (scansRetired) return;
   let cursor = null;
   while (true) {
     let query = db.collection("users").orderBy(FieldPath.documentId()).limit(200);
@@ -629,8 +648,9 @@ async function deleteIncomingBlockReferences(uid) {
   }
 }
 
-async function deleteUserLikes(uid) {
-  // Clean the normal per-user mirror first.
+async function deleteUserLikes(uid, scansRetired = false) {
+  // Clean the normal per-user mirror first. Once the backfill has given every like its mirror,
+  // and the rules keep a mirror for as long as the recipe's half exists, this is every like.
   const refs = db.collection(`users/${uid}/likes`);
   while (true) {
     const snap = await refs.limit(DELETE_BATCH_SIZE).get();
@@ -643,8 +663,10 @@ async function deleteUserLikes(uid) {
     await batch.commit();
   }
 
+  if (scansRetired) return;
   // Defense in depth for legacy/custom clients: scan recipe pages and remove the
-  // deterministic recipe-side like even if its user-side mirror never existed.
+  // deterministic recipe-side like even if its user-side mirror never existed. Until the
+  // backfill has created those mirrors, this runs once per recipe on ChefVoice.
   let cursor = null;
   while (true) {
     let query = db.collection("recipes").orderBy(FieldPath.documentId()).limit(DELETE_BATCH_SIZE);
@@ -875,15 +897,18 @@ exports.deleteChefVoiceAccount = onCall(
       throw new HttpsError("failed-precondition", "For your security, sign in again before permanently deleting your ChefVoice account.");
     }
 
+    // Read once: whether the walks over every user and every recipe are still needed.
+    const scansRetired = await deletionScansRetired();
+
     // Recipes and their cloud media/private audio.
     while (true) {
       const recipes = await db.collection("recipes").where("authorId", "==", uid).limit(50).get();
       if (recipes.empty) break;
-      for (const recipe of recipes.docs) await deleteRecipeArtifacts(uid, recipe.ref);
+      for (const recipe of recipes.docs) await deleteRecipeArtifacts(uid, recipe.ref, scansRetired);
     }
 
     // Social edges, user-owned like mirrors, and block references held by other accounts.
-    await Promise.all([deleteUserFollowEdges(uid), deleteUserLikes(uid), deleteIncomingBlockReferences(uid)]);
+    await Promise.all([deleteUserFollowEdges(uid), deleteUserLikes(uid, scansRetired), deleteIncomingBlockReferences(uid, scansRetired)]);
 
     // Remove authored comments, replies that explicitly target this UID, and activity
     // records retained by other accounts. Flat reply documents are removed when
@@ -990,9 +1015,62 @@ exports.deleteChefVoiceRecipe = onCall(
     }
     // Cleanup is deliberately idempotent. A retry after a partial failure sees
     // missing files/docs as already-clean and can safely continue.
-    const result = await deleteRecipeArtifacts(uid, recipeRef);
+    const result = await deleteRecipeArtifacts(uid, recipeRef, await deletionScansRetired());
     logger.info("ChefVoice recipe cloud deletion completed", { uid, recipeId, ...result });
     return { ok: true, missing: !recipe.exists, mediaDeleted: result.mediaDeleted };
+  }
+);
+
+// The one-time backfill that lets deletion stop walking every user and every recipe
+// (deletion-indexes.js). Admin only. Resumable and idempotent: each call works for up to eight
+// minutes, saves where it got to in config/deletionIndexes, and says whether it has finished;
+// call it again until it has. Run it after the firestore.rules that keep a like's mirror are
+// deployed, or a custom client could still orphan a like once it has passed.
+//   firebase functions:shell --project chefvoice-d7fec
+//   > backfillChefVoiceDeletionIndexes({}, {auth: {uid: '<your-uid>', token: {admin: true}}})
+const BACKFILL_PAGE_SIZE = 300;
+const BACKFILL_WORK_MS = 8 * 60 * 1000;
+
+exports.backfillChefVoiceDeletionIndexes = onCall(
+  { region: REGION, enforceAppCheck: false, timeoutSeconds: 540, memory: "512MiB" },
+  async (request) => {
+    if (request.auth?.token?.admin !== true) throw new HttpsError("permission-denied", "ChefVoice admin access is required.");
+    const stateRef = db.doc(DELETION_INDEX_DOC);
+    const state = (await stateRef.get()).data() || {};
+    if (legacyScansRetired(state)) return { done: true, backfilledAt: state.backfilledAt, fixed: state.fixed || {} };
+    let cursors = { ...(state.cursors || {}) };
+    const fixed = { ...(state.fixed || {}) };
+    const stopAt = Date.now() + BACKFILL_WORK_MS;
+    for (const phase of BACKFILL_PHASES) {
+      while (cursors[phase] !== "done" && Date.now() < stopAt) {
+        // Every document in the collection group, in path order, from where the last page ended.
+        let query = db.collectionGroup(phase).orderBy(FieldPath.documentId()).limit(BACKFILL_PAGE_SIZE);
+        if (cursors[phase]) query = query.startAfter(cursors[phase]);
+        const page = await query.get();
+        let fixes;
+        if (phase === "blocks") fixes = blockFixes(page.docs);
+        else if (phase === "bookmarks") fixes = bookmarkFixes(page.docs);
+        else {
+          const mirrors = page.docs.map((doc) => likeMirror(doc.ref.path)).filter(Boolean).map((like) => db.doc(like.mirrorPath));
+          const existing = mirrors.length ? await db.getAll(...mirrors) : [];
+          fixes = likeMirrorFixes(page.docs, new Set(existing.filter((snap) => snap.exists).map((snap) => snap.ref.path)));
+        }
+        for (let start = 0; start < fixes.length; start += DELETE_BATCH_SIZE) {
+          const batch = db.batch();
+          fixes.slice(start, start + DELETE_BATCH_SIZE).forEach((fix) => batch.set(db.doc(fix.path), fix.data, { merge: true }));
+          await batch.commit();
+        }
+        fixed[phase] = (fixed[phase] || 0) + fixes.length;
+        cursors = advance(cursors, phase, page.docs, BACKFILL_PAGE_SIZE);
+        await stateRef.set({ cursors, fixed, updatedAt: Date.now() }, { merge: true });
+      }
+      if (cursors[phase] !== "done") break;
+    }
+    const done = backfillDone(cursors);
+    const backfilledAt = done ? Date.now() : 0;
+    if (done) await stateRef.set({ backfilledAt, updatedAt: backfilledAt }, { merge: true });
+    logger.info("ChefVoice deletion index backfill", { done, fixed, cursors });
+    return { done, fixed, cursors, ...(done ? { backfilledAt } : {}) };
   }
 );
 

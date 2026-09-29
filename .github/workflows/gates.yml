@@ -167,7 +167,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: rules-tests/package-lock.json
+          cache-dependency-path: |
+            rules-tests/package-lock.json
+            notifications/functions/package-lock.json
       # The Firestore emulator is a Java program.
       - uses: actions/setup-java@v4
         with:
@@ -182,6 +184,11 @@ jobs:
       # firebase.json, so this is the rules file that would be deployed.
       - name: npm ci
         working-directory: rules-tests
+        run: npm ci
+      # deletion-backfill.test.js runs a notifications callable against the emulator, so that
+      # codebase's own dependencies come from its lock file too.
+      - name: Notification function dependencies
+        working-directory: notifications/functions
         run: npm ci
       - name: npm test
         working-directory: rules-tests

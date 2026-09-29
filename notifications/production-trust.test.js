@@ -30,9 +30,11 @@ test('Android uses backend storage permits for fixed upload slots',()=>{
   assert.match(repo,/metadataWithPermit/);assert.match(storageRules,/function uploadPermit\(/);
   assert.match(storageRules,/function validPublicMedia\(\)/);assert.match(storageRules,/validVoiceSlot\(fileName\)/);
 });
-test('follower cleanup is deletion-safe and account deletion sweeps recipe-side likes',()=>{
+test('follower cleanup is deletion-safe and account deletion sweeps recipe-side likes until the backfill retires the sweep',()=>{
   assert.match(functions,/async function syncFollowerCount\(uid\)[\s\S]*if \(\!user\.exists\) return 0;[\s\S]*userRef\.update\(\{ followerCount: count \}\)/);
-  assert.match(functions,/async function deleteUserLikes\(uid\)[\s\S]*collection\("recipes"\)[\s\S]*collection\("likes"\)\.doc\(uid\)/);
+  // The sweep over every recipe stays until backfillChefVoiceDeletionIndexes has given every like
+  // its mirror (notifications/deletion-scans.test.js).
+  assert.match(functions,/async function deleteUserLikes\(uid, scansRetired = false\)[\s\S]*if \(scansRetired\) return;[\s\S]*collection\("recipes"\)[\s\S]*collection\("likes"\)\.doc\(uid\)/);
 });
 
 test('the advertising ID is removed from the merged manifest and never collected',()=>{
