@@ -1,0 +1,48 @@
+# id	ingredient names ( ;; separated, in recipe order)	method step	expected ingredients the step names ( ;; separated, in the order the step names them), or -
+full-names	Garlic ;; Olive oil	Sauté the garlic in the olive oil.	Garlic ;; Olive oil
+mention-order	Olive oil ;; Garlic	Add the garlic, then drizzle in the olive oil.	Garlic ;; Olive oil
+named-twice	Garlic	Add the garlic, then a little more garlic.	Garlic
+plural-in-step	Onion	Cook the onions until soft.	Onion
+plural-in-name	Tomatoes	Chop the tomato.	Tomatoes
+ies-plural	Cherries	Pit the cherry.	Cherries
+leaves	Bay leaves	Drop in a bay leaf.	Bay leaves
+end-of-name	Diced onion	Add the onion and stir.	Diced onion
+end-of-name-oil	Olive oil ;; Garlic	Heat the oil over medium heat.	Olive oil
+two-word-end	Red pepper flakes	Sprinkle the pepper flakes on top.	Red pepper flakes
+ambiguous-end	Olive oil ;; Sesame oil	Heat the oil.	-
+ambiguous-pepper	Black pepper ;; Red bell pepper	Season with salt and pepper.	-
+whole-name-wins	Salt ;; Kosher salt	Season with salt.	Salt
+longest-wins	Salt ;; Kosher salt	Season with kosher salt.	Kosher salt
+no-double-claim	Olive oil ;; Sesame oil	Whisk the olive oil and sesame oil together.	Olive oil ;; Sesame oil
+longer-end-wins	Red pepper flakes ;; Pepper	Add the pepper flakes.	Red pepper flakes
+lemon-pepper	Pepper ;; Lemon pepper	Rub in the lemon pepper.	Lemon pepper
+sauce-alone	Hot sauce ;; Butter	Simmer the sauce for 10 minutes.	-
+sauce-by-name	Hot sauce	Add a dash of hot sauce.	Hot sauce
+cream-verb	Heavy cream ;; Butter ;; Sugar	Cream the butter and sugar.	Butter ;; Sugar
+seasoning-alone	Taco seasoning ;; Salt	Taste and adjust the seasoning.	-
+pan-juices	Lemon juice	Spoon the pan juices over the chicken.	-
+garlic-cloves	Garlic cloves ;; Olive oil	Mince the garlic.	Garlic cloves
+chicken-cut	Chicken breasts ;; Chicken broth	Brown the chicken, then pour in the broth.	Chicken breasts ;; Chicken broth
+chicken-two-cuts	Chicken breasts ;; Chicken thighs	Brown the chicken.	-
+cinnamon-stick	Cinnamon stick	Add the cinnamon.	Cinnamon stick
+short-ribs	Beef short ribs	Brown the ribs on all sides.	Beef short ribs
+short-ribs-word	Beef short ribs	Cook for a short time.	-
+after-comma	Butter, softened ;; Flour	Beat the butter until pale.	Butter, softened
+comma-description	Chicken breasts, cut into strips ;; Rice	Brown the chicken.	Chicken breasts, cut into strips
+prep-word-alone	Tomatoes, chopped ;; Onion	Add the chopped onion.	Onion
+in-brackets	Onion (diced) ;; Garlic	Soften the onion.	Onion (diced)
+bracket-in-middle	Parmesan (or pecorino) cheese	Grate the cheese over the pasta.	Parmesan (or pecorino) cheese
+bracket-first	(Optional) chili flakes	Finish with the chili flakes.	(Optional) chili flakes
+weak-form-body	Seasoning cubes	Taste and adjust the seasoning.	-
+trailing-words	Parsley for garnish	Scatter the parsley over the top.	Parsley for garnish
+to-taste	Salt to taste	Taste and adjust.	-
+to-taste-said	Salt to taste	Add salt to taste.	Salt to taste
+same-name-twice	Salt ;; Salt	Salt the water well.	Salt ;; Salt
+whole-words-only	Oil	Boil the water.	-
+not-inside-a-word	Egg	Slice the eggplant.	-
+hyphen	All-purpose flour	Sift the all purpose flour.	All-purpose flour
+accent	Jalapeño	Seed the jalapeno.	Jalapeño
+stock	Chicken stock	Pour in the stock.	Chicken stock
+no-mention	Spaghetti	Bring a large pot of water to a boil.	-
+burger	Ground beef ;; Salt ;; Pepper ;; Garlic ;; Lemon pepper	Season your ground beef patties on both sides.	Ground beef
+burger-seasoning	Ground beef ;; Salt ;; Pepper ;; Garlic ;; Lemon pepper	Take the salt, pepper, garlic and lemon pepper and mix them.	Salt ;; Pepper ;; Garlic ;; Lemon pepper

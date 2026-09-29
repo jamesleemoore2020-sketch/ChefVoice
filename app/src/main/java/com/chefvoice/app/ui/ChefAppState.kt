@@ -40,6 +40,7 @@ import com.chefvoice.app.model.RecipeCollection
 import com.chefvoice.app.model.ShoppingItem
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.stableStepIds
+import com.chefvoice.app.util.RecipeView
 import com.chefvoice.app.util.ShoppingList
 import com.chefvoice.app.voice.SecondPassReviewer
 import com.google.firebase.auth.FirebaseAuth
@@ -114,6 +115,15 @@ class ChefAppState(context: Context) {
     var focusedCommentId by mutableStateOf("")
         private set
     var cookingRecipe by mutableStateOf<Recipe?>(null)
+    /**
+     * The servings and units the open recipe is being read in. Held here rather than in the
+     * recipe screen, which leaves composition while its cook-along is open: the cook-along shows
+     * the same amounts, and coming back keeps the chef's setting. One recipe at a time, like the
+     * PWA's recipeView: opening another starts that one as written.
+     */
+    var recipeView by mutableStateOf(RecipeView())
+    fun recipeViewFor(recipe: Recipe): RecipeView =
+        recipeView.takeIf { it.recipeId == recipe.id } ?: RecipeView.asWritten(recipe)
     var showShoppingList by mutableStateOf(false)
     var activeCollectionId by mutableStateOf("")
     var shoppingMessage by mutableStateOf("")

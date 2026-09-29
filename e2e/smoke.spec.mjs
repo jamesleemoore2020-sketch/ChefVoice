@@ -63,11 +63,12 @@ test('cook-along steps forward and back through a saved recipe', async ({ page }
   await expect(card).toHaveText('Boil the pasta for 10 minutes.');
   await expect(where).toContainText('STEP 1 OF 3');
   await expect(page.getByRole('button', { name: 'Previous' })).toBeDisabled();
-  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('button', { name: 'Next step' }).click();
   await expect(card).toHaveText('Warm the oil in a pan.');
-  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('button', { name: 'Next step' }).click();
   await expect(card).toHaveText('Toss the pasta through the oil.');
-  await expect(page.getByRole('button', { name: 'Next' })).toBeDisabled();
+  // The last step keeps its button, disabled, rather than turning it into a way out.
+  await expect(page.getByRole('button', { name: 'Last step' })).toBeDisabled();
   await page.getByRole('button', { name: 'Previous' }).click();
   await expect(card).toHaveText('Warm the oil in a pan.');
   // A step that says how long offers exactly that timer.

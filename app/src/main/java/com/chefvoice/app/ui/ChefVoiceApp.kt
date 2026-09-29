@@ -29,6 +29,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -110,15 +112,19 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.IntOffset
@@ -162,10 +168,11 @@ import com.chefvoice.app.util.parseTagsInput
 import com.chefvoice.app.util.tagMatchesQuery
 import com.chefvoice.app.voice.CookingSessionCapture
 import com.chefvoice.app.util.CookCommand
-import com.chefvoice.app.util.IngredientScaling
 import com.chefvoice.app.importer.RecipeUrl
 import com.chefvoice.app.util.MeasurementSystem
+import com.chefvoice.app.util.RecipeView
 import com.chefvoice.app.util.CookCommands
+import com.chefvoice.app.util.StepIngredients
 import com.chefvoice.app.util.StepTimer
 import com.chefvoice.app.util.StepTimers
 import com.chefvoice.app.voice.CookCommandListener
@@ -453,6 +460,7 @@ fun ChefVoiceApp(
                 )
                 appState.cookingRecipe != null -> CookingScreen(
                     recipe = appState.cookingRecipe!!,
+                    view = appState.recipeViewFor(appState.cookingRecipe!!),
                     onBack = { appState.cookingRecipe = null },
                     onPlayVoice = appState::playVoice
                 )
@@ -524,6 +532,8 @@ fun ChefVoiceApp(
                             appState.setRecipeInCollection(collectionId, recipe.id, inCollection)
                         },
                         onCreateCollection = appState::createCollection,
+                        view = appState.recipeViewFor(recipe),
+                        onViewChange = { appState.recipeView = it },
                         onAddToShoppingList = { factor -> appState.addRecipeToShoppingList(recipe, factor) },
                         onOpenShoppingList = { appState.showShoppingList = true },
                         shoppingMessage = appState.shoppingMessage,
@@ -2896,6 +2906,8 @@ private fun RecipeDetailScreen(
     collectionIdsForRecipe: Set<String>,
     onSetInCollection: (String, Boolean) -> Unit,
     onCreateCollection: (String) -> String,
+    view: RecipeView,
+    onViewChange: (RecipeView) -> Unit,
     onAddToShoppingList: (Double) -> Unit,
     onOpenShoppingList: () -> Unit,
     shoppingMessage: String,
@@ -2914,18 +2926,14 @@ private fun RecipeDetailScreen(
     var pendingMediaStepId by remember(recipe.id) { mutableStateOf("") }
     // Serving scaling and unit conversion are a **view** over the saved recipe.
     // Nothing here writes back: the chef narrated these amounts, and a stepper on a
-    // screen must not quietly become the record of what they said.
-    var viewServings by remember(recipe.id) { mutableIntStateOf(recipe.servings.coerceAtLeast(1)) }
-    var measurementSystem by remember(recipe.id) { mutableStateOf(MeasurementSystem.AS_WRITTEN) }
+    // screen must not quietly become the record of what they said. The view lives in
+    // ChefAppState (recipeView), so the cook-along reads the same amounts.
+    val viewServings = view.servings
+    val measurementSystem = view.system
     var showCollectionPicker by remember(recipe.id) { mutableStateOf(false) }
     var showImportedPublishConfirm by remember(recipe.id) { mutableStateOf(false) }
-    val servingFactor = IngredientScaling.servingFactor(recipe.servings, viewServings)
-    val shownIngredients = remember(recipe.ingredients, servingFactor, measurementSystem) {
-        IngredientScaling.convert(
-            IngredientScaling.scale(recipe.ingredients, servingFactor),
-            measurementSystem
-        )
-    }
+    val servingFactor = view.factor(recipe)
+    val shownIngredients = remember(recipe, view) { view.ingredients(recipe) }
     val context = LocalContext.current
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { copyPickedMedia(context, it) }?.let { onAddMedia(it.copy(stepId = pendingMediaStepId)) }
@@ -3227,13 +3235,13 @@ private fun RecipeDetailScreen(
                             }
                             OutlinedButton(
                                 enabled = viewServings > 1,
-                                onClick = { viewServings = (viewServings - 1).coerceAtLeast(1) },
+                                onClick = { onViewChange(view.copy(servings = (viewServings - 1).coerceAtLeast(1))) },
                                 modifier = Modifier.semantics { contentDescription = "Fewer servings" }
                             ) { Text("−", modifier = Modifier.clearAndSetSemantics { }) }
                             Spacer(Modifier.width(6.dp))
                             OutlinedButton(
                                 enabled = viewServings < 99,
-                                onClick = { viewServings = (viewServings + 1).coerceAtMost(99) },
+                                onClick = { onViewChange(view.copy(servings = (viewServings + 1).coerceAtMost(99))) },
                                 modifier = Modifier.semantics { contentDescription = "More servings" }
                             ) { Text("+", modifier = Modifier.clearAndSetSemantics { }) }
                         }
@@ -3247,7 +3255,7 @@ private fun RecipeDetailScreen(
                                 if (measurementSystem == system) {
                                     Button(onClick = { }, modifier = Modifier.weight(1f)) { Text(label, maxLines = 1) }
                                 } else {
-                                    OutlinedButton(onClick = { measurementSystem = system }, modifier = Modifier.weight(1f)) {
+                                    OutlinedButton(onClick = { onViewChange(view.copy(system = system)) }, modifier = Modifier.weight(1f)) {
                                         Text(label, maxLines = 1)
                                     }
                                 }
@@ -3550,9 +3558,20 @@ private fun RecipeDetailScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (String) -> Unit) {
+private fun CookingScreen(recipe: Recipe, view: RecipeView, onBack: () -> Unit, onPlayVoice: (String) -> Unit) {
     var stepIndex by remember(recipe.id) { mutableIntStateOf(0) }
     val step = recipe.steps.getOrNull(stepIndex)
+    // The amounts the chef was reading on the recipe screen: its servings and units carry over.
+    val shownIngredients = remember(recipe, view) { view.ingredients(recipe) }
+    // Matched against the saved names (StepIngredients); shown in the chef's view of them.
+    val stepIngredients = remember(step, recipe.ingredients, shownIngredients) {
+        StepIngredients.indicesIn(step.orEmpty(), recipe.ingredients).mapNotNull { shownIngredients.getOrNull(it) }
+    }
+    val viewNote = remember(recipe, view) { cookViewNote(recipe, view) }
+    var allIngredientsOpen by remember(recipe.id) { mutableStateOf(false) }
+    val scroll = rememberScrollState()
+    // A new step starts at its first word, whatever the chef had scrolled down to.
+    LaunchedEffect(stepIndex) { scroll.scrollTo(0) }
     val speakerContext = LocalContext.current
     val speaker = remember { RecipeSpeaker(speakerContext) }
     var readAloud by remember { mutableStateOf(false) }
@@ -3666,22 +3685,55 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
     }
     DisposableEffect(Unit) { onDispose { commandListener.stop() } }
 
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("Cooking · ${recipe.title}") },
-            navigationIcon = { TextButton(onClick = onBack) { Text("Back") } }
-        )
-    }) { padding ->
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Cooking · ${recipe.title}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } }
+            )
+        },
+        // Next is the biggest thing on the screen and sits where a thumb lands, in a dock that
+        // never scrolls away (audit F21). It used to share a row with Previous, at the same size,
+        // below the step: a long step pushed both off the bottom of a screen that did not scroll.
+        bottomBar = {
+            if (recipe.steps.isNotEmpty()) {
+                CookingStepDock(
+                    canGoBack = stepIndex > 0,
+                    isLastStep = stepIndex >= recipe.steps.lastIndex,
+                    onPrevious = { if (stepIndex > 0) stepIndex-- },
+                    onNext = { if (stepIndex < recipe.steps.lastIndex) stepIndex++ }
+                )
+            }
+        }
+    ) { padding ->
         Column(
-            modifier = Modifier.padding(padding).padding(20.dp).fillMaxSize(),
-            verticalArrangement = Arrangement.Center
+            modifier = Modifier.padding(padding).fillMaxSize().verticalScroll(scroll).padding(20.dp)
         ) {
             if (recipe.steps.isEmpty()) {
                 Text("No cooking steps were added to this recipe.", style = MaterialTheme.typography.headlineSmall)
             } else {
                 Text("STEP ${stepIndex + 1} OF ${recipe.steps.size}", style = MaterialTheme.typography.labelLarge)
                 Spacer(Modifier.height(14.dp))
-                Text(step.orEmpty(), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                // TalkBack reads the new step when Next or a spoken command changes it, unless the
+                // step is already being read out loud.
+                Text(
+                    step.orEmpty(),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.semantics { if (!readAloud) liveRegion = LiveRegionMode.Polite }
+                )
+                if (stepIngredients.isNotEmpty()) {
+                    Spacer(Modifier.height(16.dp))
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("In this step", style = MaterialTheme.typography.labelLarge, modifier = Modifier.semantics { heading() })
+                            stepIngredients.forEach { ingredient ->
+                                Text("• ${ingredient.displayText()}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                            }
+                            if (viewNote.isNotBlank()) Text(viewNote, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
                 val activeStepMedia = recipe.media.filter { it.stepId == recipe.stepIdAt(stepIndex) }
                 if (activeStepMedia.isNotEmpty()) {
                     Spacer(Modifier.height(14.dp))
@@ -3733,18 +3785,21 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
                     }
                 }
 
-                Spacer(Modifier.height(28.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Always one tap away, because "In this step" only lists what a step names outright.
+                if (shownIngredients.isNotEmpty()) {
+                    Spacer(Modifier.height(18.dp))
                     OutlinedButton(
-                        enabled = stepIndex > 0,
-                        onClick = { stepIndex-- },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Previous") }
-                    Button(
-                        enabled = stepIndex < recipe.steps.lastIndex,
-                        onClick = { stepIndex++ },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Next") }
+                        onClick = { allIngredientsOpen = !allIngredientsOpen },
+                        modifier = Modifier.fillMaxWidth().semantics {
+                            stateDescription = if (allIngredientsOpen) "Expanded" else "Collapsed"
+                        }
+                    ) { Text("All ingredients (${shownIngredients.size})") }
+                    if (allIngredientsOpen) {
+                        Column(Modifier.padding(top = 8.dp, start = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            shownIngredients.forEach { Text("• ${it.displayText()}", style = MaterialTheme.typography.bodyLarge) }
+                            if (viewNote.isNotBlank()) Text(viewNote, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
                 Spacer(Modifier.height(10.dp))
                 OutlinedButton(onClick = { readAloud = !readAloud }, modifier = Modifier.fillMaxWidth()) {
@@ -3775,6 +3830,55 @@ private fun CookingScreen(recipe: Recipe, onBack: () -> Unit, onPlayVoice: (Stri
             }
         }
     }
+}
+
+/**
+ * Previous and Next for a chef reading at arm's length with their hands in a bowl: both 72dp
+ * tall, Next about twice as wide. On the last step Next stays where it is, disabled. A Done
+ * button in its place would end the cook-along, and any timer running in it, on the tap after
+ * the last Next.
+ */
+@Composable
+private fun CookingStepDock(canGoBack: Boolean, isLastStep: Boolean, onPrevious: () -> Unit, onNext: () -> Unit) {
+    Surface(tonalElevation = 3.dp, shadowElevation = 6.dp) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Narrow on purpose, so it keeps little of Material's 24dp padding a side: with all of
+            // it, a 360dp phone clipped the label to "Previou". Neither label is held to one line,
+            // so large text wraps instead of being cut off.
+            OutlinedButton(
+                enabled = canGoBack,
+                onClick = onPrevious,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp),
+                modifier = Modifier.weight(0.45f).heightIn(min = 72.dp)
+            ) { Text("Previous", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center) }
+            Button(
+                enabled = !isLastStep,
+                onClick = onNext,
+                modifier = Modifier.weight(1f).heightIn(min = 72.dp)
+            ) { Text(if (isLastStep) "Last step" else "Next step", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center) }
+        }
+    }
+}
+
+/**
+ * Says what the amounts beside a step are when they are not the recipe as written. The step is
+ * never rewritten, so "add two cups of flour" still says two cups at double servings, and the
+ * chef has to be told which of the two to trust. Same words as the PWA's cookViewNote.
+ */
+private fun cookViewNote(recipe: Recipe, view: RecipeView): String {
+    val base = recipe.servings.coerceAtLeast(1)
+    val parts = listOfNotNull(
+        if (view.servings != base) "for ${view.servings} serving${if (view.servings == 1) "" else "s"} (the chef cooked $base)" else null,
+        when (view.system) {
+            MeasurementSystem.METRIC -> "in metric"
+            MeasurementSystem.IMPERIAL -> "in imperial"
+            MeasurementSystem.AS_WRITTEN -> null
+        }
+    )
+    return if (parts.isEmpty()) "" else "Amounts ${parts.joinToString(", ")}. The step reads as the chef said it."
 }
 
 /**

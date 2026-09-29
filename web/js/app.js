@@ -13,6 +13,7 @@ import {
 import { convert, MeasurementSystem, scale, servingFactor } from './ingredient-scaling.js';
 import { additionMessage, asShareText, displayText, itemsFor, merge as mergeShopping } from './shopping-list.js';
 import { formatClock } from './step-timers.js';
+import { stepIngredientIndices } from './step-ingredients.js';
 import { matchCommand, safeFromPartial } from './cook-commands.js';
 import {
   beginSwipe, dismissDirection, dismissOffset, isHorizontal, saveOffset, saveProgress,
@@ -1042,6 +1043,19 @@ function recipeViewFor(recipe){
 }
 
 const baseServingsOf=recipe=>Math.max(1,Number(recipe.servings)||2);
+const ingredientLine=i=>[i.quantity,i.unit,i.name].filter(Boolean).join(' ');
+const ingredientCards=list=>list.map(i=>`<div class="card">${escapeHtml(ingredientLine(i))}</div>`).join('');
+
+/**
+ * The recipe's ingredients as the chef is viewing them: scaled to the stepper, in the chosen
+ * units. Same length and order as recipe.ingredients, so the cook-along's step matching, which
+ * reads the saved names, lines up with it.
+ */
+function shownIngredientsFor(recipe){
+  const view=recipeViewFor(recipe);
+  const factor=servingFactor(baseServingsOf(recipe),view.servings);
+  return {factor,list:convert(scale(recipe.ingredients||[],factor),view.system)};
+}
 
 /** The servings stepper, the unit switch, and the way onto the shopping list. */
 function scalingTemplate(recipe){
@@ -1071,20 +1085,18 @@ function collectionPickerTemplate(recipeId){
 
 function openRecipe(id){
   const r=recipes.find(x=>x.id===id);if(!r)return;
-  const view=recipeViewFor(r);
-  const factor=servingFactor(baseServingsOf(r),view.servings);
-  const shownIngredients=convert(scale(r.ingredients||[],factor),view.system);
+  const {factor,list:shownIngredients}=shownIngredientsFor(r);
   const remoteMedia=(r.remoteMedia||[]).map(m=>m.type==='VIDEO'?`<video class="detail-media" controls src="${escapeHtml(m.url)}"></video>`:`<img class="detail-media" src="${escapeHtml(m.url)}" alt="Recipe media">`).join('');
   // Shown once, on the recipe the import just produced: what the page left out, against the
   // recipe itself rather than on a screen the chef has already left.
   const notice=importedNotice?.recipeId===r.id
     ?`<div class="notice" role="status"><p><strong>Imported from ${escapeHtml(importedNotice.host||'the web')}.</strong> Check it against the original page before you cook.</p>${importedNotice.notes.length?`<ul class="install-list">${importedNotice.notes.map(n=>`<li>${escapeHtml(n)}</li>`).join('')}</ul>`:''}<button class="ghost" id="dismissImportNotice">OK</button></div>`
     :'';
-  main.innerHTML=`<button id="backRecipes" class="ghost">← Recipes</button>${notice}<section class="card"><div class="row between"><h1>${escapeHtml(r.title)}</h1>${r.isPublic?'<span class="pill">Community</span>':'<span class="pill">Private</span>'}</div><p class="status">${escapeHtml(r.description||'')}</p><span class="pill">Serves ${r.servings||2}</span>${(r.tags||[]).map(t=>`<span class="pill">#${escapeHtml(t)}</span>`).join('')}</section>${(r.steps||[]).length?'<button id="cookThisRecipe" class="primary wide">🍳 Cook this recipe</button>':''}${collectionPickerTemplate(r.id)}${remoteMedia?`<section class="card"><h2>Recipe media</h2><div class="detail-media-grid">${remoteMedia}</div></section>`:''}${r.sessionAudio?.stored?'<section class="card"><h2>Original chef voice</h2><p class="hint">The full microphone recording is stored separately from the transcript.</p><button id="loadChefVoice" class="secondary wide">▶ Load chef voice</button><div id="chefVoicePlayer"></div></section>':''}<div id="paywall"></div>${secondPassTemplate(r)}<div class="section-title"><h2>Ingredients</h2></div>${scalingTemplate(r)}${shownIngredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${(r.steps||[]).length?'<button id="readAloudBtn" class="secondary wide">🔊 Read steps aloud</button>':''}${(r.steps||[]).map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}<div class="section-title"><h2>Cooking transcript</h2></div><div class="card transcript">${(r.transcript||[]).map(s=>`<div class="transcript-line">${escapeHtml(s.text)}</div>`).join('')||'No transcript saved.'}</div>`;
+  main.innerHTML=`<button id="backRecipes" class="ghost">← Recipes</button>${notice}<section class="card"><div class="row between"><h1>${escapeHtml(r.title)}</h1>${r.isPublic?'<span class="pill">Community</span>':'<span class="pill">Private</span>'}</div><p class="status">${escapeHtml(r.description||'')}</p><span class="pill">Serves ${r.servings||2}</span>${(r.tags||[]).map(t=>`<span class="pill">#${escapeHtml(t)}</span>`).join('')}</section>${(r.steps||[]).length?'<button id="cookThisRecipe" class="primary wide">🍳 Cook this recipe</button>':''}${collectionPickerTemplate(r.id)}${remoteMedia?`<section class="card"><h2>Recipe media</h2><div class="detail-media-grid">${remoteMedia}</div></section>`:''}${r.sessionAudio?.stored?'<section class="card"><h2>Original chef voice</h2><p class="hint">The full microphone recording is stored separately from the transcript.</p><button id="loadChefVoice" class="secondary wide">▶ Load chef voice</button><div id="chefVoicePlayer"></div></section>':''}<div id="paywall"></div>${secondPassTemplate(r)}<div class="section-title"><h2>Ingredients</h2></div>${scalingTemplate(r)}${ingredientCards(shownIngredients)}<div class="section-title"><h2>Method</h2></div>${(r.steps||[]).length?'<button id="readAloudBtn" class="secondary wide">🔊 Read steps aloud</button>':''}${(r.steps||[]).map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}<div class="section-title"><h2>Cooking transcript</h2></div><div class="card transcript">${(r.transcript||[]).map(s=>`<div class="transcript-line">${escapeHtml(s.text)}</div>`).join('')||'No transcript saved.'}</div>`;
   document.querySelector('#backRecipes').onclick=()=>{secondPass={recipeId:'',busy:false,message:'',result:null};shoppingMessage='';importedNotice=null;render();};
   const dismissNotice=document.querySelector('#dismissImportNotice');
   if(dismissNotice)dismissNotice.onclick=()=>{importedNotice=null;openRecipe(r.id);};
-  bindRecipeScaling(r,factor);
+  bindRecipeScaling(r,factor,{redraw:()=>openRecipe(r.id),reopen:()=>{overlayScreen='';openRecipe(r.id);}});
   bindCollectionPicker(r);
   const cookBtn=document.querySelector('#cookThisRecipe');
   if(cookBtn)cookBtn.onclick=()=>openCookAlong(r,()=>{overlayScreen='';openRecipe(r.id);});
@@ -1103,8 +1115,13 @@ function openRecipe(id){
   };
 }
 
-function bindRecipeScaling(recipe,factor){
-  const redraw=()=>openRecipe(recipe.id);
+/**
+ * `redraw` draws the scaled list again after a tap; `reopen` is where the shopping list's Back
+ * returns to. A chef's own recipe redraws the whole screen. A Community recipe redraws only its
+ * ingredients (renderCommunityIngredients), so the stepper cannot blank the comments or wipe a
+ * half-written one.
+ */
+function bindRecipeScaling(recipe,factor,{redraw,reopen}){
   const down=document.querySelector('#servingsDown');
   if(down)down.onclick=()=>{recipeView.servings=Math.max(1,recipeView.servings-1);redraw();};
   const up=document.querySelector('#servingsUp');
@@ -1113,9 +1130,21 @@ function bindRecipeScaling(recipe,factor){
   const add=document.querySelector('#addToShopping');
   if(add)add.onclick=()=>{addRecipeToShoppingList(recipe,factor);redraw();};
   const view=document.querySelector('#viewShoppingList');
-  if(view)view.onclick=()=>openShoppingList(()=>{overlayScreen='';openRecipe(recipe.id);});
+  if(view)view.onclick=()=>openShoppingList(reopen);
   const dismiss=document.querySelector('#dismissShoppingMessage');
   if(dismiss)dismiss.onclick=()=>{shoppingMessage='';redraw();};
+}
+
+/** A Community recipe's servings, units and ingredient list, drawn in place of only themselves. */
+function renderCommunityIngredients(recipe){
+  const host=document.querySelector('#communityIngredients');
+  if(!host)return;
+  const {factor,list}=shownIngredientsFor(recipe);
+  host.innerHTML=scalingTemplate(recipe)+ingredientCards(list);
+  bindRecipeScaling(recipe,factor,{
+    redraw:()=>renderCommunityIngredients(recipe),
+    reopen:()=>{overlayScreen='';openCommunityRecipe(recipe.id);}
+  });
 }
 
 function bindCollectionPicker(recipe){
@@ -1423,11 +1452,24 @@ function handleCookCommand(command){
   cookAlong.state=applyCookCommand(before,command);
   if(cookAlong.state===before){syncCookSpeech();return;}
   if(!cookAlong.state.handsFree)stopCookListening();
-  renderCookAlong();
+  renderCookAlong({stepChanged:cookAlong.state.stepIndex!==before.stepIndex});
+}
+
+/**
+ * Says what the amounts beside a step are when they are not the recipe as written. The step
+ * itself is never rewritten, so "add two cups of flour" still says two cups at double servings,
+ * and the chef has to be told which of the two to trust.
+ */
+function cookViewNote(){
+  const {view,base}=cookAlong;
+  const units=view.system===MeasurementSystem.METRIC?'in metric':view.system===MeasurementSystem.IMPERIAL?'in imperial':'';
+  const servings=view.servings!==base?`for ${view.servings} serving${view.servings===1?'':'s'} (the chef cooked ${base})`:'';
+  const parts=[servings,units].filter(Boolean);
+  return parts.length?`<p class="hint">Amounts ${parts.join(', ')}. The step reads as the chef said it.</p>`:'';
 }
 
 function cookAlongTemplate(){
-  const {recipe,state,handsFreeStatus}=cookAlong;
+  const {recipe,state,handsFreeStatus,shown}=cookAlong;
   const total=state.steps.length;
   const head=`<button id="backCook" class="ghost">← ${escapeHtml(recipe.title||'Recipe')}</button>`;
   if(!total)return `${head}<div class="empty card"><strong>No cooking steps were added to this recipe.</strong></div>`;
@@ -1439,26 +1481,46 @@ function cookAlongTemplate(){
   const handsFreeHelp=handsFreeStatus
     ?`<p class="hint">${escapeHtml(handsFreeStatus)}</p>`
     :(state.handsFree?'<p class="hint">Say “next”, “back”, “read out loud”, “repeat”, “start timer” or “stop listening”. Nothing you say here is recorded or saved.</p>':'');
+  const note=cookViewNote();
+  const lines=list=>`<ul>${list.map(i=>`<li>${escapeHtml(ingredientLine(i))}</li>`).join('')}</ul>`;
+  // Matched against the saved names (step-ingredients.js); the amounts are the chef's view of them.
+  const inStep=stepIngredientIndices(cookCurrentStep(state),recipe.ingredients||[]).map(i=>shown[i]).filter(Boolean);
+  const stepIngredients=inStep.length
+    ?`<section class="card cook-ingredients" aria-labelledby="cookInStep"><h2 id="cookInStep">In this step</h2>${lines(inStep)}${note}</section>`
+    :'';
+  // Always one tap away, because the step list above only shows what a step names outright.
+  const allIngredients=shown.length
+    ?`<details class="card cook-all" id="cookAllIngredients"${cookAlong.allIngredientsOpen?' open':''}><summary>All ingredients (${shown.length})</summary>${lines(shown)}${note}</details>`
+    :'';
+  const last=state.stepIndex>=total-1;
+  // Next is the biggest thing on the screen and sits where a thumb lands, in a dock that never
+  // scrolls away (audit F21). On the last step it stays put, disabled: a Done button in its place
+  // would end the cook-along, and its running timer, on the tap after the last Next.
   return `${head}
   <p class="hint" style="margin-top:12px">STEP ${state.stepIndex+1} OF ${total} · ${escapeHtml(recipe.title||'')}</p>
-  <section class="card cook-step-card">${escapeHtml(cookCurrentStep(state))}</section>
+  <section class="card cook-step-card" id="cookStepText" tabindex="-1">${escapeHtml(cookCurrentStep(state))}</section>
+  ${stepIngredients}
   ${timerCard}
-  <div class="row"><button class="ghost grow" id="cookPrevious" ${state.stepIndex>0?'':'disabled'}>Previous</button><button class="primary grow" id="cookNextStep" ${state.stepIndex<total-1?'':'disabled'}>Next</button></div>
+  ${allIngredients}
   <button class="ghost wide" id="cookRepeat" style="margin-top:10px">🔁 Say this step again</button>
   <button class="ghost wide" id="cookReadAloud" style="margin-top:10px">${state.readAloud?'🔊 Reading aloud — tap to stop':'🔊 Read steps aloud'}</button>
   <button class="ghost wide" id="cookHandsFree" style="margin-top:10px">${state.handsFree?'🎙 Hands-free on — tap to stop':'🎙 Hands-free'}</button>
-  ${handsFreeHelp}`;
+  ${handsFreeHelp}
+  <nav class="cook-dock" aria-label="Cooking steps"><div class="cook-dock-inner"><button class="ghost cook-prev" id="cookPrevious" ${state.stepIndex>0?'':'disabled'}>Previous</button><button class="primary cook-next" id="cookNextStep" ${last?'disabled':''}>${last?'Last step':'Next step'}</button></div></nav>`;
 }
 
-function renderCookAlong(){
+function renderCookAlong({stepChanged=false}={}){
   if(!cookAlong)return;
+  const focusedId=document.activeElement?.id||'';
   main.innerHTML=cookAlongTemplate();
   const state=()=>cookAlong.state;
   document.querySelector('#backCook').onclick=()=>{const back=cookAlong.back;closeCookAlong();(back||(()=>{overlayScreen='';render();}))();};
   const previous=document.querySelector('#cookPrevious');
-  if(previous)previous.onclick=()=>{cookAlong.state=cookPreviousStep(state());renderCookAlong();};
+  if(previous)previous.onclick=()=>{cookAlong.state=cookPreviousStep(state());renderCookAlong({stepChanged:true});};
   const next=document.querySelector('#cookNextStep');
-  if(next)next.onclick=()=>{cookAlong.state=cookNextStep(state());renderCookAlong();};
+  if(next)next.onclick=()=>{cookAlong.state=cookNextStep(state());renderCookAlong({stepChanged:true});};
+  const all=document.querySelector('#cookAllIngredients');
+  if(all)all.ontoggle=()=>{if(cookAlong)cookAlong.allIngredientsOpen=all.open;};
   const repeat=document.querySelector('#cookRepeat');
   if(repeat)repeat.onclick=()=>{speakCookText(cookCurrentStep(state()));};
   const read=document.querySelector('#cookReadAloud');
@@ -1480,15 +1542,33 @@ function renderCookAlong(){
   const cancel=document.querySelector('#cancelTimer');
   if(cancel)cancel.onclick=()=>{cookAlong.state=clearTimer(state());renderCookAlong();};
   syncCookSpeech();
+  if(stepChanged){
+    // A new step starts at its first word, whatever the chef had scrolled down to.
+    window.scrollTo({top:0});
+    if(!state().readAloud)announce(`Step ${state().stepIndex+1} of ${state().steps.length}. ${cookCurrentStep(state())}`);
+  }
+  // Every tap draws the screen again. The control the chef was on keeps focus, so pressing Next
+  // with a keyboard or a switch presses Next again rather than starting over from the page.
+  const again=focusedId?document.getElementById(focusedId):null;
+  if(again&&!again.disabled)again.focus({preventScroll:true});
+  else if(focusedId==='cookNextStep'||focusedId==='cookPrevious')document.querySelector('#cookStepText')?.focus({preventScroll:true});
 }
 
 function openCookAlong(recipe,back){
   closeCookAlong();
   overlayScreen='cook';
+  const view=recipeViewFor(recipe);
   cookAlong={
     recipe,back:back||null,state:initialCookState(recipe.steps||[]),
+    // The amounts the chef was looking at when they tapped Cook: the recipe screen's servings and
+    // units carry over. Fixed for the session, so a background update cannot change them mid-step.
+    shown:shownIngredientsFor(recipe).list,view:{servings:view.servings,system:view.system},base:baseServingsOf(recipe),
+    allIngredientsOpen:false,
     lastSpokenToken:0,handsFreeStatus:'',recognition:null,wakeLock:null,timerHandle:null
   };
+  // No tab bar while cooking (audit F21): a mis-tap on Live or Inbox mid-recipe left the
+  // cook-along, and its timer and wake lock with it. The back button at the top still leaves.
+  document.body.classList.add('cooking');
   cookAlong.lastSpokenToken=cookAlong.state.speakToken;
   cookAlong.timerHandle=setInterval(cookTimerTick,1000);
   requestCookWakeLock();
@@ -1502,6 +1582,7 @@ function closeCookAlong(){
   const session=cookAlong;
   stopCookListening();
   cookAlong=null;
+  document.body.classList.remove('cooking');
   clearInterval(session.timerHandle);
   try{window.speechSynthesis?.cancel();}catch{}
   try{session.wakeLock?.release();}catch{}
@@ -1941,8 +2022,11 @@ function openCommunityRecipe(id){
   // photos and videos come from Storage, but not voice clips), so nothing is fetched until the
   // chef taps play.
   const voiceHtml=(r.voiceClips||[]).map(v=>`<audio class="audio-player" controls preload="none" src="${escapeHtml(v.url)}"></audio>`).join('');
-  main.innerHTML=`<button id="backCommunity" class="ghost">← Community</button><section class="card"><h1>${escapeHtml(r.title)}</h1><p class="status">by ${escapeHtml(r.authorName)} · serves ${r.servings} · ${relativeTime(r.createdAt)}</p><p>${escapeHtml(r.description||'')}</p><div class="action-row"><button class="action-btn" id="detailLike"></button><button class="action-btn" id="detailShare" aria-label="Share"><span aria-hidden="true">📤</span></button><button class="action-btn action-spacer" id="detailSave"></button></div></section>${(r.steps||[]).length?'<button id="cookCommunityRecipe" class="primary wide">🍳 Cook this recipe</button>':''}${mediaHtml?`<section class="card"><div class="detail-media-grid">${mediaHtml}</div></section>`:''}<div class="section-title"><h2>Ingredients</h2></div>${r.ingredients.map(i=>`<div class="card">${escapeHtml([i.quantity,i.unit,i.name].filter(Boolean).join(' '))}</div>`).join('')}<div class="section-title"><h2>Method</h2></div>${r.steps.map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}${voiceHtml?`<section class="card"><h2>Chef voice</h2><p class="hint">Original cooking-session audio published by the chef.</p>${voiceHtml}</section>`:''}<div class="section-title"><h2>Comments</h2></div><div id="safetyStatus" class="hint"></div><div id="comments"><div class="empty card">Loading comments…</div></div>${cloud.user?`<section class="card"><div id="replyBanner" class="hint"></div><textarea id="commentText" maxlength="800" placeholder="Add a comment"></textarea><button id="postComment" class="primary wide">Post comment</button><div id="commentStatus" class="hint"></div></section>`:'<div class="notice">Sign in to comment.</div>'}`;
-  document.querySelector('#backCommunity').onclick=()=>{try{cloud.unsubComments?.();}catch{}cloud.unsubComments=null;openCommunityRecipeId=null;render();};
+  main.innerHTML=`<button id="backCommunity" class="ghost">← Community</button><section class="card"><h1>${escapeHtml(r.title)}</h1><p class="status">by ${escapeHtml(r.authorName)} · serves ${r.servings} · ${relativeTime(r.createdAt)}</p><p>${escapeHtml(r.description||'')}</p><div class="action-row"><button class="action-btn" id="detailLike"></button><button class="action-btn" id="detailShare" aria-label="Share"><span aria-hidden="true">📤</span></button><button class="action-btn action-spacer" id="detailSave"></button></div></section>${(r.steps||[]).length?'<button id="cookCommunityRecipe" class="primary wide">🍳 Cook this recipe</button>':''}${mediaHtml?`<section class="card"><div class="detail-media-grid">${mediaHtml}</div></section>`:''}<div class="section-title"><h2>Ingredients</h2></div><div id="communityIngredients"></div><div class="section-title"><h2>Method</h2></div>${r.steps.map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}${voiceHtml?`<section class="card"><h2>Chef voice</h2><p class="hint">Original cooking-session audio published by the chef.</p>${voiceHtml}</section>`:''}<div class="section-title"><h2>Comments</h2></div><div id="safetyStatus" class="hint"></div><div id="comments"><div class="empty card">Loading comments…</div></div>${cloud.user?`<section class="card"><div id="replyBanner" class="hint"></div><textarea id="commentText" maxlength="800" placeholder="Add a comment"></textarea><button id="postComment" class="primary wide">Post comment</button><div id="commentStatus" class="hint"></div></section>`:'<div class="notice">Sign in to comment.</div>'}`;
+  document.querySelector('#backCommunity').onclick=()=>{try{cloud.unsubComments?.();}catch{}cloud.unsubComments=null;openCommunityRecipeId=null;shoppingMessage='';render();};
+  // Servings and units, as on the chef's own recipes (audit F21): a view of the amounts, never a
+  // change to someone else's recipe.
+  renderCommunityIngredients(r);
   // Cooking from a Community recipe reads it; it never copies it into the chef's own library,
   // which is still the publish/save decision it always was.
   const cookCommunity=document.querySelector('#cookCommunityRecipe');

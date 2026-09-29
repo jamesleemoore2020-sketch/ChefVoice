@@ -1,11 +1,35 @@
 package com.chefvoice.app.util
 
 import com.chefvoice.app.model.Ingredient
+import com.chefvoice.app.model.Recipe
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** Which measurement system a scaled ingredient list is shown in. */
 enum class MeasurementSystem { AS_WRITTEN, METRIC, IMPERIAL }
+
+/**
+ * How one recipe is being read: the servings on the stepper and the units on the switch. A view,
+ * never written back (see [IngredientScaling]). The recipe screen and the cook-along both draw
+ * from the same one, so cooking shows the amounts the chef was just looking at.
+ */
+data class RecipeView(
+    val recipeId: String = "",
+    val servings: Int = 1,
+    val system: MeasurementSystem = MeasurementSystem.AS_WRITTEN
+) {
+    /** The multiplier from the recipe's own servings to the ones on screen. */
+    fun factor(recipe: Recipe): Double = IngredientScaling.servingFactor(recipe.servings, servings)
+
+    /** The recipe's ingredients as viewed: the same length and order as the saved list. */
+    fun ingredients(recipe: Recipe): List<Ingredient> =
+        IngredientScaling.convert(IngredientScaling.scale(recipe.ingredients, factor(recipe)), system)
+
+    companion object {
+        /** The recipe as the chef cooked it. */
+        fun asWritten(recipe: Recipe) = RecipeView(recipe.id, recipe.servings.coerceAtLeast(1))
+    }
+}
 
 /**
  * Serving scaling and unit conversion for **display only**.
