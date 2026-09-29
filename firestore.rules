@@ -119,9 +119,14 @@ service cloud.firestore {
         && s[23].url.matches(p);
     }
 
+    // searchTokens, like followerCount, is written only by the backend (syncChefSearchTokens,
+    // audit F10). It has to be allowed in the shape, or once the backend had added it every
+    // profile save by the apps would be refused; creates must leave it out, and an update's
+    // affectedKeys list does not include it, so no client can set it.
     function validUserProfileShape(data) {
       return data.keys().hasOnly([
-          'displayName', 'bio', 'photoUrl', 'coverPhotoUrl', 'favoriteThings', 'createdAt', 'followerCount'
+          'displayName', 'bio', 'photoUrl', 'coverPhotoUrl', 'favoriteThings', 'createdAt', 'followerCount',
+          'searchTokens'
         ])
         && data.keys().hasAll(['displayName', 'bio', 'photoUrl', 'coverPhotoUrl', 'favoriteThings', 'createdAt'])
         && data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 80
@@ -129,7 +134,8 @@ service cloud.firestore {
         && data.photoUrl is string && data.photoUrl.size() <= 2000
         && data.coverPhotoUrl is string && data.coverPhotoUrl.size() <= 2000
         && data.favoriteThings is list && data.favoriteThings.size() <= 12
-        && (!data.keys().hasAny(['followerCount']) || (data.followerCount is int && data.followerCount >= 0));
+        && (!data.keys().hasAny(['followerCount']) || (data.followerCount is int && data.followerCount >= 0))
+        && (!data.keys().hasAny(['searchTokens']) || (data.searchTokens is list && data.searchTokens.size() <= 300));
     }
 
     // createdAt must be recent only when the profile is first written. Applying the
@@ -466,7 +472,8 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.auth.uid == uid
         && validUserProfileCreate(request.resource.data)
-        && (!request.resource.data.keys().hasAny(['followerCount']) || request.resource.data.followerCount == 0);
+        && (!request.resource.data.keys().hasAny(['followerCount']) || request.resource.data.followerCount == 0)
+        && !request.resource.data.keys().hasAny(['searchTokens']);
       allow update: if signedIn()
         && request.auth.uid == uid
         && validUserProfileUpdate(request.resource.data)

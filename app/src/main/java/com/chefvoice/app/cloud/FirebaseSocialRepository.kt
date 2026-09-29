@@ -23,6 +23,7 @@ import com.chefvoice.app.model.stableStepIds
 import com.chefvoice.app.model.ProEntitlement
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.VoiceClip
+import com.chefvoice.app.util.ChefSearch
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
@@ -644,14 +645,19 @@ class FirebaseSocialRepository(private val context: Context) {
             .addOnFailureListener { callback(null, it.message ?: "Follower count could not be loaded.") }
     }
 
+    /**
+     * Chefs by name or favourite things (audit F10): one query on the `searchTokens` the backend
+     * writes on every profile, for the longest word typed, with the other words checked on what
+     * comes back ([ChefSearch]). It used to page through every profile in id order, 300 at most,
+     * so a chef past the first 300 could never be found and each search cost up to 300 reads.
+     * Bios are no longer searched.
+     */
     fun searchChefProfiles(searchText: String, callback: (List<ChefSearchResult>?, String?) -> Unit) {
-        val term = searchText.trim().lowercase()
-        if (term.length < 2) return callback(emptyList(), null)
+        val words = ChefSearch.queryWords(searchText)
+        if (words.isEmpty()) return callback(emptyList(), null)
         val db = dbOrNull() ?: return callback(null, "Firestore is not available.")
-        val matches = mutableListOf<ChefProfile>()
-        var scanned = 0
 
-        fun finish() {
+        fun finish(matches: List<ChefProfile>) {
             if (matches.isEmpty()) { callback(emptyList(), null); return }
             val results = arrayOfNulls<ChefSearchResult>(matches.size)
             val remaining = AtomicInteger(matches.size)
@@ -663,24 +669,14 @@ class FirebaseSocialRepository(private val context: Context) {
             }
         }
 
-        fun page(after: DocumentSnapshot?) {
-            var query = db.collection("users").orderBy(com.google.firebase.firestore.FieldPath.documentId()).limit(50)
-            if (after != null) query = query.startAfter(after)
-            query.get()
-                .addOnSuccessListener { snapshot ->
-                    scanned += snapshot.size()
-                    snapshot.documents.forEach { doc ->
-                        if (matches.size >= 12) return@forEach
-                        val profile = runCatching { doc.toChefProfile() }.getOrNull() ?: return@forEach
-                        val haystack = listOf(profile.displayName, profile.bio).plus(profile.favoriteThings).joinToString(" ").lowercase()
-                        if (haystack.contains(term)) matches += profile
-                    }
-                    val last = snapshot.documents.lastOrNull()
-                    if (matches.size >= 12 || snapshot.size() < 50 || scanned >= 300 || last == null) finish() else page(last)
-                }
-                .addOnFailureListener { callback(null, it.message ?: "Chef search could not be loaded.") }
-        }
-        page(null)
+        db.collection("users").whereArrayContains("searchTokens", ChefSearch.queryKey(words)).limit(30).get()
+            .addOnSuccessListener { snapshot ->
+                val found = snapshot.documents
+                    .filter { doc -> ChefSearch.matchesAll(doc.get("searchTokens").asStringList(), words) }
+                    .mapNotNull { doc -> runCatching { doc.toChefProfile() }.getOrNull() }
+                finish(ChefSearch.byNameFirst(found, words) { it.displayName }.take(12))
+            }
+            .addOnFailureListener { callback(null, it.message ?: "Chef search could not be loaded.") }
     }
 
     fun listenPublicRecipes(onChanged: (List<Recipe>, Boolean) -> Unit, onError: (String) -> Unit): ListenerRegistration? {

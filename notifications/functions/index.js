@@ -1,6 +1,6 @@
 "use strict";
 
-const { onDocumentCreated, onDocumentDeleted, onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentDeleted, onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
 const logger = require("firebase-functions/logger");
@@ -14,6 +14,7 @@ const {
   DELETION_INDEX_DOC, BACKFILL_PHASES, legacyScansRetired, blockFixes, bookmarkFixes, likeMirror,
   likeMirrorFixes, advance, backfillDone
 } = require("./deletion-indexes");
+const { chefSearchTokens, sameTokens } = require("./search-tokens");
 
 initializeApp();
 const db = getFirestore();
@@ -1071,6 +1072,62 @@ exports.backfillChefVoiceDeletionIndexes = onCall(
     if (done) await stateRef.set({ backfilledAt, updatedAt: backfilledAt }, { merge: true });
     logger.info("ChefVoice deletion index backfill", { done, fixed, cursors });
     return { done, fixed, cursors, ...(done ? { backfilledAt } : {}) };
+  }
+);
+
+// Chef search (audit F10; search-tokens.js explains the tokens). Every write to a profile brings
+// its searchTokens up to date; a write that leaves them right writes nothing, which is also what
+// ends the loop this trigger's own write starts. firestore.rules must accept the field on a
+// profile before this is deployed, or the apps' next profile save would be refused.
+exports.syncChefSearchTokens = onDocumentWritten(
+  { document: "users/{uid}", region: REGION },
+  async (event) => {
+    const after = event.data?.after;
+    if (!after?.exists) return;
+    const data = after.data() || {};
+    const tokens = chefSearchTokens(data);
+    if (sameTokens(data.searchTokens, tokens)) return;
+    await after.ref.update({ searchTokens: tokens });
+  }
+);
+
+// Gives profiles saved before syncChefSearchTokens their tokens. Admin only; resumable and
+// idempotent like the deletion backfill: call it until it answers done.
+//   > backfillChefVoiceSearchTokens({}, {auth: {uid: '<your-uid>', token: {admin: true}}})
+const SEARCH_BACKFILL_DOC = "config/searchTokens";
+
+exports.backfillChefVoiceSearchTokens = onCall(
+  { region: REGION, enforceAppCheck: false, timeoutSeconds: 540, memory: "512MiB" },
+  async (request) => {
+    if (request.auth?.token?.admin !== true) throw new HttpsError("permission-denied", "ChefVoice admin access is required.");
+    const stateRef = db.doc(SEARCH_BACKFILL_DOC);
+    const state = (await stateRef.get()).data() || {};
+    if (state.backfilledAt) return { done: true, backfilledAt: state.backfilledAt, updated: state.updated || 0 };
+    let cursor = state.cursor || "";
+    let updated = Number(state.updated || 0);
+    const stopAt = Date.now() + BACKFILL_WORK_MS;
+    let done = false;
+    while (!done && Date.now() < stopAt) {
+      let query = db.collection("users").orderBy(FieldPath.documentId()).limit(BACKFILL_PAGE_SIZE);
+      if (cursor) query = query.startAfter(cursor);
+      const page = await query.get();
+      const batch = db.batch();
+      let writes = 0;
+      for (const doc of page.docs) {
+        const data = doc.data() || {};
+        const tokens = chefSearchTokens(data);
+        if (sameTokens(data.searchTokens, tokens)) continue;
+        batch.update(doc.ref, { searchTokens: tokens });
+        writes++;
+      }
+      if (writes) await batch.commit();
+      updated += writes;
+      done = page.size < BACKFILL_PAGE_SIZE;
+      cursor = page.docs.length ? page.docs[page.docs.length - 1].id : cursor;
+      await stateRef.set({ cursor, updated, updatedAt: Date.now(), ...(done ? { backfilledAt: Date.now() } : {}) }, { merge: true });
+    }
+    logger.info("ChefVoice search token backfill", { done, updated });
+    return { done, updated, cursor };
   }
 );
 

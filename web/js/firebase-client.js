@@ -2,6 +2,7 @@ import { firebaseConfig, messagingVapidKey } from './firebase-config.js';
 import { normalizeEntitlement, FREE_ENTITLEMENT, SecondPassLimits } from './entitlement.js';
 import * as ChefAnalytics from './chef-analytics.js';
 import { LIVE_LEASE_REFRESH_MS, isFreshLiveSession } from './webrtc-signaling.js';
+import { byNameFirst, matchesAll, queryKey, queryWords } from './chef-search.js';
 
 // Firebase is loaded as browser modules so a CDN/Firebase outage cannot prevent
 // local ChefVoice cooking capture from starting.
@@ -17,7 +18,7 @@ const {initializeApp}=appSdk;
 const {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,sendEmailVerification,sendPasswordResetEmail,reload,getIdToken}=authSdk;
 const {
   getFirestore,collection,doc,increment,limit,limitToLast,onSnapshot,query,setDoc,where,orderBy,
-  getDoc,getDocs,deleteDoc,updateDoc,runTransaction,writeBatch,documentId,startAfter
+  getDoc,getDocs,deleteDoc,updateDoc,runTransaction,writeBatch,startAfter
 }=firestoreSdk;
 const {getStorage,ref:storageRef,uploadBytes,getDownloadURL,deleteObject}=storageSdk;
 
@@ -558,34 +559,22 @@ export async function deleteChefVoiceRecipe(recipeId){
 // pages the collection while signed in and filters client-side, matching
 // FirebaseSocialRepository.searchChefProfiles including its scan caps.
 
-const SEARCH_PAGE=50;
+const SEARCH_FETCH=30;
 const SEARCH_MAX_MATCHES=12;
-const SEARCH_MAX_SCANNED=300;
 
+/**
+ * Chefs by name or favourite things (audit F10). One query on the searchTokens the backend writes
+ * on every profile, for the longest word typed; the other words are checked on what comes back.
+ * It used to page through every profile in id order, 300 at most, so a chef past the first 300
+ * could never be found and each search cost up to 300 reads. Bios are no longer searched.
+ */
 export async function searchChefProfiles(searchText){
-  const term=String(searchText||'').trim().toLowerCase();
-  if(term.length<2)return [];
+  const words=queryWords(searchText);
+  if(!words.length)return [];
   requireUser('Sign in to search for chefs.');
-
-  const matches=[];
-  let scanned=0;
-  let cursor=null;
-
-  while(matches.length<SEARCH_MAX_MATCHES&&scanned<SEARCH_MAX_SCANNED){
-    const constraints=[orderBy(documentId()),limit(SEARCH_PAGE)];
-    if(cursor)constraints.push(startAfter(cursor));
-    const snap=await getDocs(query(collection(db,'users'),...constraints));
-    scanned+=snap.size;
-    for(const d of snap.docs){
-      if(matches.length>=SEARCH_MAX_MATCHES)break;
-      const profile=normalizeProfile(d.id,d.data());
-      const haystack=[profile.displayName,profile.bio,...(profile.favoriteThings||[])].join(' ').toLowerCase();
-      if(haystack.includes(term))matches.push(profile);
-    }
-    cursor=snap.docs[snap.docs.length-1]||null;
-    if(snap.size<SEARCH_PAGE||!cursor)break;
-  }
-  return matches;
+  const snap=await getDocs(query(collection(db,'users'),where('searchTokens','array-contains',queryKey(words)),limit(SEARCH_FETCH)));
+  const found=snap.docs.filter(d=>matchesAll(d.data().searchTokens,words)).map(d=>normalizeProfile(d.id,d.data()));
+  return byNameFirst(found,words).slice(0,SEARCH_MAX_MATCHES);
 }
 
 /** Public recipes by one chef. Follower identities stay private; only the count is public. */

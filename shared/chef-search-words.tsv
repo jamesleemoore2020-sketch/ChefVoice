@@ -1,0 +1,22 @@
+# How chef search reads text into words (audit F10). The backend builds a chef's search tokens
+# from their name and favourite things with these words, and both apps read what a chef types the
+# same way, so the three are held to these rows: notifications/functions/search-tokens.test.js,
+# web/tests/chef-search.test.mjs and app/src/test/.../util/ChefSearchTest.kt.
+# id	text	words ( ;; separated), or -
+plain	pasta	pasta
+lower	DaPlug	da ;; plug
+spaces	Da Plug	da ;; plug
+camel-and-dots	ChefJ4Mr.Voice	chef ;; j4 ;; mr ;; voice
+capitals-run	BBQ King	bbq ;; king
+capitals-then-lower	BBQking	bbqking
+mc	McDonald	mc ;; donald
+accents	Jalapeño Café	jalapeno ;; cafe
+apostrophe	Chef's Table	chefs ;; table
+curly-apostrophe	Chef’s Table	chefs ;; table
+punctuation	  sourdough -- & ramen!!	sourdough ;; ramen
+digits	Pho 24	pho ;; 24
+digit-then-capital	Pho24Ever	pho24 ;; ever
+hyphen	all-purpose	all ;; purpose
+non-latin	Шеф Кухня	шеф ;; кухня
+empty	   	-
+symbols-only	!!!	-

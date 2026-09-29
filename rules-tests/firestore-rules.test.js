@@ -22,7 +22,9 @@ const {
   assertSucceeds,
   assertFails,
 } = require("@firebase/rules-unit-testing");
-const { doc, setDoc, getDoc, updateDoc, deleteDoc, writeBatch } = require("firebase/firestore");
+const {
+  doc, setDoc, getDoc, updateDoc, deleteDoc, writeBatch, collection, query, where, limit, getDocs
+} = require("firebase/firestore");
 
 const PROJECT_ID = "chefvoice-rules-test";
 const RULES = fs.readFileSync(path.resolve(__dirname, "../firestore.rules"), "utf8");
@@ -855,6 +857,46 @@ test("a like's mirror goes with the recipe's half, never before it", async () =>
   await assertSucceeds(batch.commit());
   // A mirror whose recipe half is already gone can always go.
   await assertSucceeds(deleteDoc(doc(alice, "users", ALICE, "likes", "like-delete-orphan")));
+});
+
+test("a profile the backend gave search tokens can still be saved by its chef", async () => {
+  // syncChefSearchTokens adds searchTokens to every profile (audit F10). Both apps save a profile
+  // with a merge, so the stored tokens are part of what the rule sees on the next save.
+  const createdAt = now() - DAY_MS;
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "users", ALICE), { ...profile("Alice", createdAt), searchTokens: ["al", "ali", "alic", "alice"] });
+  });
+  const alice = env.authenticatedContext(ALICE).firestore();
+  await assertSucceeds(setDoc(doc(alice, "users", ALICE), { ...profile("Alice", createdAt), bio: "Soups" }, { merge: true }));
+});
+
+test("a chef cannot write their own search tokens", async () => {
+  // Carol has no profile yet (only Alice and Bob are seeded), so these are real creates.
+  const carol = env.authenticatedContext(CAROL).firestore();
+  await denied(setDoc(doc(carol, "users", CAROL), { ...profile("Carol", now()), searchTokens: ["gordon"] }), "a new profile with search tokens");
+  // The same profile without them is a valid create: the refusal above is the tokens.
+  await assertSucceeds(setDoc(doc(carol, "users", CAROL), profile("Carol", now())));
+  const alice = env.authenticatedContext(ALICE).firestore();
+  const createdAt = now() - DAY_MS;
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "users", ALICE), { ...profile("Alice", createdAt), searchTokens: ["al", "alice"] });
+  });
+  await denied(updateDoc(doc(alice, "users", ALICE), { searchTokens: ["gordon", "ramsay"] }), "changing the search tokens");
+  await denied(setDoc(doc(alice, "users", ALICE), { ...profile("Alice", createdAt), searchTokens: ["gordon"] }, { merge: true }), "saving a profile with other tokens");
+});
+
+test("chefs are found by one query on their search tokens", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "users", ALICE), { ...profile("DaPlug", now() - DAY_MS), searchTokens: ["da", "pl", "plu", "plug"] });
+    await setDoc(doc(db, "users", BOB), { ...profile("Bob", now() - DAY_MS), searchTokens: ["bo", "bob"] });
+  });
+  const bob = env.authenticatedContext(BOB).firestore();
+  const found = await assertSucceeds(getDocs(query(collection(bob, "users"), where("searchTokens", "array-contains", "plug"), limit(30))));
+  assert.deepEqual(found.docs.map((d) => d.id), [ALICE]);
+  // Signed out, the directory stays closed, as it was.
+  const nobody = env.unauthenticatedContext().firestore();
+  await denied(getDocs(query(collection(nobody, "users"), where("searchTokens", "array-contains", "plug"))), "searching signed out");
 });
 
 test("the import counter is closed to clients", async () => {

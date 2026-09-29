@@ -1,17 +1,27 @@
-# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along, import, share links, deletion; PWA 0.5.21 / Android 0.11.20)
+# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along, import, share links, deletion, chef search; PWA 0.5.21 / Android 0.11.20)
 
 Branch `claude/audit-implementation-2026-09-28-e6a4a5`, which continues
 `claude/audit-implementation-2026-09-26-02973b` from `c6ef9af`. Writeups:
 `COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`, `IMPORT_DNS_REBINDING_0.5.21.md`,
-`SHARE_LINK_PREVIEWS_0.5.21.md`, `DELETION_WITHOUT_FULL_SCANS_0.5.21.md`.
+`SHARE_LINK_PREVIEWS_0.5.21.md`, `DELETION_WITHOUT_FULL_SCANS_0.5.21.md`,
+`CHEF_SEARCH_TOKENS_0.5.21.md`.
 
-Tests at this point: PWA 343 / 0, jsdom 74 / 35 / 18 / 46, e2e 30 / 0, Android 241 / 0 (2 skipped),
-rules emulator 71 / 0, notification gates 91 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
-**Nothing here is deployed yet.** Parser, corpus, Live signaling and App Check untouched. Backend
-changes, each deployed on its own: `chefvoice-import` (F30, `DEPLOY_IMPORT.cmd`); a new
-`chefvoice-share` codebase (F29, `DEPLOY_SHARE.cmd`, which must go before `DEPLOY_PWA.cmd`, and that
-script now checks); and for F17 an index, one rules condition and `chefvoice-notifications`, in the
-order the writeup gives, then a one-time admin backfill.
+Tests at this point: PWA 364 / 0, jsdom 74 / 35 / 18 / 46, e2e 30 / 0, Android 245 / 0 (2 skipped),
+rules emulator 78 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
+**Nothing here is deployed yet.** Parser, corpus, Live signaling and App Check untouched.
+
+**Release order for this batch** (each writeup says why its step is where it is):
+
+1. `DEPLOY_FIRESTORE_INDEXES.cmd`: the `blocks.blockedUid` index (F17).
+2. `DEPLOY_COMMUNITY_RULES.cmd`, after diffing the console's live rules: the like-mirror rule (F17)
+   and the profile `searchTokens` rule (F10). The latter must be live before step 3.
+3. `DEPLOY_NOTIFICATIONS.cmd`: deletion without full scans (F17), the search-token trigger (F10).
+4. In `firebase functions:shell`, as an admin, each until it answers `done: true`:
+   `backfillChefVoiceDeletionIndexes` and `backfillChefVoiceSearchTokens`.
+5. `DEPLOY_IMPORT.cmd` (F30). Independent of the rest; any time.
+6. `DEPLOY_SHARE.cmd` (F29), then `DEPLOY_PWA.cmd` for PWA 0.5.21, which refuses without step 6
+   and should follow step 4 so the new chef search has tokens to find.
+7. Android 0.11.20 / 81 (includes the unreleased 0.11.19): release build, both device checks, Play.
 
 - **Cook-along for a real kitchen (F21), both platforms.** Step text at 28 px/sp, and one big
   Next docked at the bottom of the screen, about twice as wide as Previous, that never scrolls
@@ -45,6 +55,14 @@ order the writeup gives, then a one-time admin backfill.
   mirrors once. The walks run until it records that it has finished, and then stop by themselves,
   so deploying first loses nothing. The backfill was run for real against the Firestore emulator.
   Deploy order: indexes, rules (after the console diff), notifications, then the backfill.
+- **Chef search can find any chef (F10).** Search paged through the first 300 profiles in random id
+  order, so most chefs past them could never be found, at up to 300 reads a search. Each profile
+  now carries `searchTokens` (the beginnings of every word of the name, the whole name, and
+  favourite things), written only by the backend: a trigger on every profile write, plus an admin
+  backfill for earlier ones. Search is one `array-contains` query on both platforms. The rules
+  accept the field but no chef can write it; without that change every profile save would have
+  been refused once tokens existed. Backend, PWA and Android read text into words by one shared
+  fixture. Bios are no longer searched, and a word must match from its start.
 
 # Current handoff — 2026-09-27 (audit implementation, part 3: hardening, PWA 0.5.20)
 
