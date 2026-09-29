@@ -1,6 +1,7 @@
 # Current handoff — 2026-09-28 (audit implementation, part 4: cook-along, import, share links, deletion, chef search; PWA 0.5.21 / Android 0.11.20)
 
-Branch `claude/audit-implementation-2026-09-28-e6a4a5`, which continues
+Session handoff: `HANDOFF_2026-09-28_SESSION12.md`. Branch
+`claude/audit-implementation-2026-09-28-e6a4a5`, which continues
 `claude/audit-implementation-2026-09-26-02973b` from `c6ef9af`. Writeups:
 `COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`, `IMPORT_DNS_REBINDING_0.5.21.md`,
 `SHARE_LINK_PREVIEWS_0.5.21.md`, `DELETION_WITHOUT_FULL_SCANS_0.5.21.md`,

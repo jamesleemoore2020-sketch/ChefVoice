@@ -1,4 +1,11 @@
-# ChefVoice Android — v0.10.0 (versionCode 51)
+# ChefVoice
+
+Android **0.11.20** (versionCode 81) and the PWA **0.5.21** are the versions in this branch; what
+is live and what still waits on a deploy or a Play upload is at the top of `BUILD_STATUS.md`,
+newest first, with the current session handoff it names. `CLAUDE.md` describes the codebase, its
+gates and its deploy scripts. The release notes below stop at v0.10.0; every release since has its
+own writeup in the repository root, named with its version (for example
+`COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`), and a `BUILD_STATUS.md` entry.
 
 ## v0.10.0 — Production Trust
 
