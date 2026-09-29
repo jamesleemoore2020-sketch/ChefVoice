@@ -615,7 +615,12 @@ fun ChefVoiceApp(
                                 onImport = appState::openRecipeImport,
                                 onOpen = appState::openRecipe,
                                 onCreate = { navigateTab(Tab.CREATE) },
-                                onCommunity = { navigateTab(Tab.COMMUNITY) }
+                                onCommunity = { navigateTab(Tab.COMMUNITY) },
+                                restoreOfferCount = if (appState.restoreOffered) appState.restorableRecipes.size else 0,
+                                restoreRunning = appState.restoreRunning,
+                                restoreStatus = appState.restoreStatus,
+                                onRestore = appState::restoreRecipes,
+                                onDismissRestore = appState::dismissRestoreOffer
                             )
                             Tab.CREATE -> CreateRecipeScreen(
                                 authorName = appState.displayName,
@@ -756,7 +761,21 @@ fun ChefVoiceApp(
                                 onCancelDeleteReauth = appState::cancelAccountDeletionReauth,
                                 onModerateReport = appState::moderateReport,
                                 onSignOut = appState::signOut,
-                                onOpenRecipe = appState::openRecipe
+                                onOpenRecipe = appState::openRecipe,
+                                backup = BackupPanel(
+                                    enabled = appState.backupEnabled,
+                                    running = appState.backupRunning,
+                                    pendingCount = appState.backupPendingCount,
+                                    status = appState.backupStatus,
+                                    restoreChecked = appState.restoreChecked,
+                                    restorableCount = appState.restorableRecipes.size,
+                                    restoreRunning = appState.restoreRunning,
+                                    restoreStatus = appState.restoreStatus
+                                ),
+                                onBackupEnabledChange = appState::enableBackup,
+                                onBackUpNow = appState::backUpNow,
+                                onRestore = appState::restoreRecipes,
+                                onCheckRestore = appState::checkRestorable
                             )
                         }
                     }
@@ -820,7 +839,12 @@ private fun LibraryScreen(
     onImport: () -> Unit,
     onOpen: (Recipe) -> Unit,
     onCreate: () -> Unit,
-    onCommunity: () -> Unit
+    onCommunity: () -> Unit,
+    restoreOfferCount: Int = 0,
+    restoreRunning: Boolean = false,
+    restoreStatus: String = "",
+    onRestore: () -> Unit = {},
+    onDismissRestore: () -> Unit = {}
 ) {
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -857,6 +881,17 @@ private fun LibraryScreen(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (restoreOfferCount > 0 || restoreRunning) {
+                item {
+                    RestoreOfferCard(
+                        count = restoreOfferCount,
+                        running = restoreRunning,
+                        status = restoreStatus,
+                        onRestore = onRestore,
+                        onDismiss = onDismissRestore
+                    )
+                }
+            }
             if (collections.isNotEmpty()) {
                 item {
                     // Filing, not filtering away: "All" is always first and always
@@ -4227,7 +4262,12 @@ private fun ProfileScreen(
     onCancelDeleteReauth: () -> Unit,
     onModerateReport: (String, String, String, String) -> Unit,
     onSignOut: () -> Unit,
-    onOpenRecipe: (Recipe) -> Unit
+    onOpenRecipe: (Recipe) -> Unit,
+    backup: BackupPanel = BackupPanel(),
+    onBackupEnabledChange: (Boolean) -> Unit = {},
+    onBackUpNow: () -> Unit = {},
+    onRestore: () -> Unit = {},
+    onCheckRestore: () -> Unit = {}
 ) {
     var name by remember(displayName) { mutableStateOf(displayName) }
     var bioText by remember(bio) { mutableStateOf(bio) }
@@ -4385,6 +4425,17 @@ private fun ProfileScreen(
                     onSeePro = onSeePro
                 )
             }
+            item {
+                PrivateBackupCard(
+                    isPro = isPro,
+                    emailVerified = signedInEmailVerified,
+                    panel = backup,
+                    onEnabledChange = onBackupEnabledChange,
+                    onBackUpNow = onBackUpNow,
+                    onRestore = onRestore,
+                    onCheckRestore = onCheckRestore
+                )
+            }
             if (proPreviewAvailable) {
                 item {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
@@ -4443,7 +4494,7 @@ private fun ProfileScreen(
                             OutlinedButton(enabled = !accountBusy && !signedInEmailVerified, onClick = onVerifyEmail, modifier = Modifier.weight(1f)) { Text(if (signedInEmailVerified) "✓ Verified" else "Verify email") }
                             OutlinedButton(enabled = !accountBusy, onClick = { onResetPassword(signedInEmail) }, modifier = Modifier.weight(1f)) { Text("Reset password") }
                         }
-                        Text("Deleting your cloud account removes owned Community data but intentionally keeps local Cook & Capture recipes on this phone.", style = MaterialTheme.typography.bodySmall)
+                        Text("Deleting your cloud account removes your Community data and your private backup, but keeps the recipes saved on this phone.", style = MaterialTheme.typography.bodySmall)
                         Text("It does not cancel a Google Play subscription. If you pay for ChefVoice Pro, cancel it in Google Play too.", style = MaterialTheme.typography.bodySmall)
                         if (needsReauthForDelete) {
                             Text("For security, enter your password to confirm this is you before we permanently delete your account.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -4776,7 +4827,7 @@ private fun ProMembershipCard(
                     style = MaterialTheme.typography.bodySmall
                 )
                 isPro -> Text(
-                    "Unlimited cloud recipes, video, and ${ProTierLimits.SECOND_PASS_PER_MONTH} Second Pass reviews a month.",
+                    "Unlimited cloud recipes, private backup, video, and ${ProTierLimits.SECOND_PASS_PER_MONTH} Second Pass reviews a month.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 else -> Text(
@@ -4804,6 +4855,142 @@ private fun ProMembershipCard(
 
             if (!isPro) {
                 Button(onClick = onSeePro, modifier = Modifier.fillMaxWidth()) { Text("See ChefVoice Pro") }
+            }
+        }
+    }
+}
+
+/** What Profile shows of private backup and restore (audit F11). */
+internal data class BackupPanel(
+    val enabled: Boolean = false,
+    val running: Boolean = false,
+    val pendingCount: Int = 0,
+    val status: String = "",
+    val restoreChecked: Boolean = false,
+    val restorableCount: Int = 0,
+    val restoreRunning: Boolean = false,
+    val restoreStatus: String = ""
+)
+
+/**
+ * Private backup of recipes and original cooking audio (audit F11): part of Pro, and off until
+ * the chef turns it on. Restoring what the account holds is for every signed-in chef.
+ */
+@Composable
+internal fun PrivateBackupCard(
+    isPro: Boolean,
+    emailVerified: Boolean,
+    panel: BackupPanel,
+    onEnabledChange: (Boolean) -> Unit,
+    onBackUpNow: () -> Unit,
+    onRestore: () -> Unit,
+    onCheckRestore: () -> Unit
+) {
+    val on = panel.enabled && isPro
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                Modifier.fillMaxWidth().toggleable(value = on, role = Role.Switch, onValueChange = onEnabledChange),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Private backup", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Keeps a private copy of your recipes, their photos and videos, and your original cooking audio " +
+                            "in your ChefVoice account, so a lost or replaced phone loses nothing. Only you can see it.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = on, onCheckedChange = null)
+            }
+            when {
+                !isPro -> Text(
+                    "Part of ChefVoice Pro. Anything already in your account stays there, and you can restore it any time.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                !on -> Text("Off. Recipes you publish are in your account either way.", style = MaterialTheme.typography.bodySmall)
+                !emailVerified -> Text(
+                    "Verify your email to start backing up. Your recipes stay saved on this phone.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                else -> {
+                    Text(
+                        when {
+                            panel.running -> "Backing up…"
+                            panel.pendingCount == 1 -> "1 recipe waiting to back up."
+                            panel.pendingCount > 1 -> "${panel.pendingCount} recipes waiting to back up."
+                            else -> "Everything on this phone is backed up."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                    )
+                    if (panel.status.isNotBlank()) Text(panel.status, style = MaterialTheme.typography.bodySmall)
+                    if (panel.pendingCount > 0) {
+                        OutlinedButton(enabled = !panel.running, onClick = onBackUpNow, modifier = Modifier.fillMaxWidth()) { Text("Back up now") }
+                    }
+                }
+            }
+            HorizontalDivider()
+            Text("Restore", fontWeight = FontWeight.Bold)
+            Text(
+                when {
+                    panel.restoreRunning -> panel.restoreStatus.ifBlank { "Restoring…" }
+                    panel.restorableCount == 1 -> "1 recipe in your account isn't on this phone."
+                    panel.restorableCount > 1 -> "${panel.restorableCount} recipes in your account aren't on this phone."
+                    panel.restoreStatus.isNotBlank() -> panel.restoreStatus
+                    !panel.restoreChecked -> "Checking your account…"
+                    else -> "Every recipe in your account is on this phone."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+            )
+            if (!panel.restoreRunning && panel.restorableCount > 0) {
+                if (panel.restoreStatus.isNotBlank()) Text(panel.restoreStatus, style = MaterialTheme.typography.bodySmall)
+                Text("Their original cooking audio comes back too, which can be large. Wi-Fi is best.", style = MaterialTheme.typography.bodySmall)
+                Button(onClick = onRestore, modifier = Modifier.fillMaxWidth()) { Text("Restore to this phone") }
+            } else if (!panel.restoreRunning && panel.restoreChecked) {
+                TextButton(onClick = onCheckRestore) { Text("Check my account again") }
+            }
+        }
+    }
+}
+
+/**
+ * The Library's offer of the account's recipes this phone does not have: after a new phone, a
+ * reset, or a recipe backed up or published somewhere else (audit F11).
+ */
+@Composable
+internal fun RestoreOfferCard(
+    count: Int,
+    running: Boolean,
+    status: String,
+    onRestore: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("In your ChefVoice account", fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
+            if (running) {
+                Text(
+                    status.ifBlank { "Restoring…" },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                )
+            } else {
+                Text(
+                    (if (count == 1) "1 recipe in your account isn't on this phone." else "$count recipes in your account aren't on this phone.") +
+                        " Restoring brings back their original cooking audio too; Wi-Fi is best.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onRestore, modifier = Modifier.weight(1f)) { Text("Restore") }
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("Not now") }
+                }
             }
         }
     }
@@ -4837,6 +5024,9 @@ private fun ProPaywallDialog(
                                 "ChefVoice Pro syncs your whole cookbook so it survives a lost phone."
                         PaywallTrigger.VIDEO ->
                             "Video slots let you show the technique, not just the result. ChefVoice Pro unlocks them."
+                        PaywallTrigger.BACKUP ->
+                            "Private backup keeps every recipe you cook, and the recording of you cooking it, in your " +
+                                "ChefVoice account. A lost or replaced phone loses nothing. It's part of ChefVoice Pro."
                         else ->
                             "More room to cook, sync and review — without touching what's already free."
                     }
@@ -4844,6 +5034,7 @@ private fun ProPaywallDialog(
                 Text("Pro includes", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
                 Text(
                     "• Unlimited cloud-synced recipes\n" +
+                        "• Private backup of your recipes and original cooking audio\n" +
                         "• Video slots on your recipes\n" +
                         "• ${ProTierLimits.SECOND_PASS_PER_MONTH} Second Pass reviews a month\n" +
                         "• Private recipes, collections, export and print",
@@ -4885,4 +5076,5 @@ object PaywallTrigger {
     const val CLOUD_LIMIT = "cloud_limit"
     const val VIDEO = "video"
     const val PROFILE = "profile"
+    const val BACKUP = "backup"
 }

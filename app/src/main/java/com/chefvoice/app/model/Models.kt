@@ -110,7 +110,19 @@ data class Recipe(
      * under their own name. The credit itself lives in the description, which is the field that
      * travels with a published recipe.
      */
-    val importedFrom: String = ""
+    val importedFrom: String = "",
+    /**
+     * The [updatedAt] of the version last backed up privately to the chef's account (audit F11),
+     * or 0 if it never has been. A recipe edited since then is backed up again. Local, like
+     * [importedFrom]: the cloud map is an allow-list and never sends it.
+     */
+    val backedUpAt: Long = 0L,
+    /**
+     * The id of the "Full cooking session" clip whose recording is in the chef's account, or
+     * blank. The recording, up to 120 MB, goes up once and not with every edit, and a session
+     * recorded again later still goes up. Local too.
+     */
+    val backedUpAudioId: String = ""
 )
 
 fun Recipe.stableStepIds(): List<String> = steps.indices.map { index ->

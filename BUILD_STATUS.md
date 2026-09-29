@@ -1,14 +1,14 @@
-# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along, import, share links, deletion, chef search; PWA 0.5.21 / Android 0.11.20)
+# Current handoff — 2026-09-28 (audit implementation, part 4: cook-along, import, share links, deletion, chef search, private backup; PWA 0.5.21 / Android 0.11.20)
 
 Session handoff: `HANDOFF_2026-09-28_SESSION12.md`. Branch
 `claude/audit-implementation-2026-09-28-e6a4a5`, which continues
 `claude/audit-implementation-2026-09-26-02973b` from `c6ef9af`. Writeups:
 `COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`, `IMPORT_DNS_REBINDING_0.5.21.md`,
 `SHARE_LINK_PREVIEWS_0.5.21.md`, `DELETION_WITHOUT_FULL_SCANS_0.5.21.md`,
-`CHEF_SEARCH_TOKENS_0.5.21.md`.
+`CHEF_SEARCH_TOKENS_0.5.21.md`, `PRIVATE_BACKUP_0.5.21_0.11.20.md`.
 
-Tests at this point: PWA 364 / 0, jsdom 74 / 35 / 18 / 46, e2e 30 / 0, Android 245 / 0 (2 skipped),
-rules emulator 78 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
+Tests at this point: PWA 376 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android 267 / 0 (2 skipped),
+rules emulator 84 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
 **Nothing here is deployed yet.** Parser, corpus, Live signaling and App Check untouched.
 
 **Release order for this batch** (each writeup says why its step is where it is):
@@ -20,9 +20,13 @@ rules emulator 78 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 
 4. In `firebase functions:shell`, as an admin, each until it answers `done: true`:
    `backfillChefVoiceDeletionIndexes` and `backfillChefVoiceSearchTokens`.
 5. `DEPLOY_IMPORT.cmd` (F30). Independent of the rest; any time.
-6. `DEPLOY_SHARE.cmd` (F29), then `DEPLOY_PWA.cmd` for PWA 0.5.21, which refuses without step 6
-   and should follow step 4 so the new chef search has tokens to find.
-7. Android 0.11.20 / 81 (includes the unreleased 0.11.19): release build, both device checks, Play.
+6. The bucket's CORS setting, once, for the web's restore of recordings (F11), and
+   `DEPLOY_ACCOUNT_DELETION_PAGE.cmd` for the page's wording. Independent of the rest; any time
+   before step 7.
+7. `DEPLOY_SHARE.cmd` (F29), then `DEPLOY_PWA.cmd` for PWA 0.5.21, which refuses without the share
+   deploy and should follow step 4 so the new chef search has tokens to find.
+8. Android 0.11.20 / 81 (includes the unreleased 0.11.19): release build, the device checks in the
+   cook-along and private-backup writeups, Play.
 
 - **Cook-along for a real kitchen (F21), both platforms.** Step text at 28 px/sp, and one big
   Next docked at the bottom of the screen, about twice as wide as Previous, that never scrolls
@@ -64,6 +68,14 @@ rules emulator 78 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 
   accept the field but no chef can write it; without that change every profile save would have
   been refused once tokens existed. Backend, PWA and Android read text into words by one shared
   fixture. Bios are no longer searched, and a word must match from its start.
+- **Private backup of recipes and original audio (F11), both platforms.** Part of Pro, and off until
+  the chef turns it on (Profile). Turned on, each recipe the account does not hold as it stands goes
+  up a few seconds after it changes, privately: the recipe, its photos and videos, and the original
+  recording, once. Writes are transactions that stop at a recipe published or deleted meanwhile, so
+  a backup never publishes, unpublishes or undoes a delete. Every signed-in chef is offered the
+  account's recipes the device lacks, at sign-in, with their recordings (on the web, once the bucket
+  allows the app's address). ChefVoice Review no longer deletes a recording the account keeps, and
+  publishing no longer re-sends one. No rules or functions deploy.
 
 # Current handoff — 2026-09-27 (audit implementation, part 3: hardening, PWA 0.5.20)
 

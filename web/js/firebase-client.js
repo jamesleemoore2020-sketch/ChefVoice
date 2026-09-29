@@ -20,7 +20,7 @@ const {
   getFirestore,collection,doc,increment,limit,limitToLast,onSnapshot,query,setDoc,where,orderBy,
   getDoc,getDocs,deleteDoc,updateDoc,runTransaction,writeBatch,startAfter
 }=firestoreSdk;
-const {getStorage,ref:storageRef,uploadBytes,getDownloadURL,deleteObject}=storageSdk;
+const {getStorage,ref:storageRef,uploadBytes,getDownloadURL,getBlob,deleteObject}=storageSdk;
 
 const app=initializeApp(firebaseConfig);
 const auth=getAuth(app);
@@ -209,45 +209,14 @@ export async function publishRecipe(recipe,displayName,{mediaAssets=[],voiceBlob
   const stage={...recipe,isPublic:recipe.isPublic===true,authorId:user.uid,authorName:String(displayName||'Chef').trim()||'Chef',media:stageMedia,voiceClips:recipe.voiceClips||[],updatedAt:Date.now(),likes:Number(recipe.likes||0),commentCount:Number(recipe.commentCount||0)};
   await setDoc(doc(db,'recipes',recipe.id),toCloudMap(stage));
 
-  // Public media lives at deterministic recipes/{uid}/{id}/publicMedia/slot-NN
-  // objects, each gated by a server-issued permit (storage.rules: uploadPermit()).
-  // The old recipes/{uid}/{id}/media/{uuid}.ext path is now closed to new writes
-  // (allow create, update: if false) -- writing there 403s instead of publishing.
-  const cappedAssets=mediaAssets.slice(0,MAX_PUBLIC_MEDIA_SLOTS);
   if(mediaAssets.length>MAX_PUBLIC_MEDIA_SLOTS)warnings.push(`Community recipes can publish up to ${MAX_PUBLIC_MEDIA_SLOTS} photo/video items. Extra local media was not uploaded.`);
-  const uploadedMedia=[];
-  for(let index=0;index<cappedAssets.length;index++){
-    const item=cappedAssets[index];
-    if(item.remoteUrl){uploadedMedia.push({id:item.id,type:item.cloudType||cloudMediaType(item.type),url:item.remoteUrl});continue;}
-    if(!item.blob){warnings.push(`Media ${item.name||item.id} stayed local because its file was unavailable.`);continue;}
-    try{
-      const contentType=item.blob.type||item.type||(item.cloudType==='VIDEO'?'video/mp4':'image/jpeg');
-      const fileName=`slot-${String(index).padStart(2,'0')}`;
-      const permit=await callFunction('authorizeChefVoiceStorageUpload',{kind:'public_media',recipeId:recipe.id,fileName,bytes:item.blob.size,contentType});
-      if(!permit?.permitId||!permit?.token)throw new Error('Media upload was not authorized.');
-      const target=storageRef(storage,`recipes/${user.uid}/${recipe.id}/publicMedia/${fileName}`);
-      await uploadBytes(target,item.blob,{contentType,customMetadata:{chefvoicePermitId:permit.permitId,chefvoiceUploadToken:permit.token}});
-      uploadedMedia.push({id:item.id,type:item.cloudType||cloudMediaType(contentType),url:await getDownloadURL(target)});
-    }catch(e){warnings.push(`One photo/video stayed local (${friendlyError(e)}).`);}
-  }
+  const uploadedMedia=await uploadMediaAssets(recipe.id,user.uid,mediaAssets,warnings);
 
   const uploadedVoice=[];
   for(const oldClip of recipe.voiceClips||[]){if(oldClip?.url)uploadedVoice.push(oldClip);}
-  if(voiceBlob?.size){
-    try{
-      const contentType=audioContentType(voiceBlob);
-      const durationMs=await audioDurationMs(voiceBlob);
-      if(durationMs<=0||durationMs>PRIVATE_SESSION_MAX_DURATION_MS)throw new Error('the cooking audio duration could not be verified within the 90-minute cloud limit');
-      const permit=await callFunction('authorizeChefVoiceStorageUpload',{kind:'private_session',recipeId:recipe.id,fileName:'session',bytes:voiceBlob.size,contentType});
-      if(!permit?.permitId||!permit?.token)throw new Error('the private cooking audio upload was not authorized');
-      // Raw cooking-session audio stays private for ChefVoice Review: uploaded to
-      // privateVoice/ with no public download URL, and never added to uploadedVoice
-      // below (mirrors Android's toCloudMap, which drops any clip labeled "Full
-      // cooking session" from the published recipe doc).
-      const target=storageRef(storage,`privateVoice/${user.uid}/${recipe.id}/session`);
-      await uploadBytes(target,voiceBlob,{contentType,customMetadata:{chefvoiceDurationMs:String(durationMs),chefvoicePermitId:permit.permitId,chefvoiceUploadToken:permit.token}});
-    }catch(e){warnings.push(`Chef voice stayed local (${friendlyError(e)}).`);}
-  }
+  // Publishing puts the original recording in the account too; the caller leaves voiceBlob
+  // out when the account already holds it.
+  const audioUploaded=await uploadSessionAudio(recipe.id,user.uid,voiceBlob,warnings);
 
   const now=Date.now();
   const published={
@@ -262,7 +231,125 @@ export async function publishRecipe(recipe,displayName,{mediaAssets=[],voiceBlob
     commentCount:Number(recipe.commentCount||0)
   };
   await setDoc(doc(db,'recipes',recipe.id),toCloudMap(published));
-  return {recipe:published,warnings};
+  return {recipe:published,warnings,audioUploaded};
+}
+
+// Public media lives at deterministic recipes/{uid}/{id}/publicMedia/slot-NN
+// objects, each gated by a server-issued permit (storage.rules: uploadPermit()).
+// The old recipes/{uid}/{id}/media/{uuid}.ext path is now closed to new writes
+// (allow create, update: if false) -- writing there 403s instead of publishing.
+async function uploadMediaAssets(recipeId,uid,mediaAssets,warnings){
+  const uploadedMedia=[];
+  const cappedAssets=mediaAssets.slice(0,MAX_PUBLIC_MEDIA_SLOTS);
+  for(let index=0;index<cappedAssets.length;index++){
+    const item=cappedAssets[index];
+    if(item.remoteUrl){uploadedMedia.push({id:item.id,type:item.cloudType||cloudMediaType(item.type),url:item.remoteUrl});continue;}
+    if(!item.blob){warnings.push(`Media ${item.name||item.id} stayed local because its file was unavailable.`);continue;}
+    try{
+      const contentType=item.blob.type||item.type||(item.cloudType==='VIDEO'?'video/mp4':'image/jpeg');
+      const fileName=`slot-${String(index).padStart(2,'0')}`;
+      const permit=await callFunction('authorizeChefVoiceStorageUpload',{kind:'public_media',recipeId,fileName,bytes:item.blob.size,contentType});
+      if(!permit?.permitId||!permit?.token)throw new Error('Media upload was not authorized.');
+      const target=storageRef(storage,`recipes/${uid}/${recipeId}/publicMedia/${fileName}`);
+      await uploadBytes(target,item.blob,{contentType,customMetadata:{chefvoicePermitId:permit.permitId,chefvoiceUploadToken:permit.token}});
+      uploadedMedia.push({id:item.id,type:item.cloudType||cloudMediaType(contentType),url:await getDownloadURL(target)});
+    }catch(e){warnings.push(`One photo/video stayed local (${friendlyError(e)}).`);}
+  }
+  return uploadedMedia;
+}
+
+/** Uploads the original cooking audio to the one private path the account keeps it at. Answers whether it went up. */
+async function uploadSessionAudio(recipeId,uid,voiceBlob,warnings){
+  if(!voiceBlob?.size)return false;
+  try{
+    const contentType=audioContentType(voiceBlob);
+    const durationMs=await audioDurationMs(voiceBlob);
+    if(durationMs<=0||durationMs>PRIVATE_SESSION_MAX_DURATION_MS)throw new Error('the cooking audio duration could not be verified within the 90-minute cloud limit');
+    const permit=await callFunction('authorizeChefVoiceStorageUpload',{kind:'private_session',recipeId,fileName:'session',bytes:voiceBlob.size,contentType});
+    if(!permit?.permitId||!permit?.token)throw new Error('the private cooking audio upload was not authorized');
+    // Raw cooking-session audio stays private for ChefVoice Review: uploaded to
+    // privateVoice/ with no public download URL, and never added to a recipe's voice
+    // clips (mirrors Android's toCloudMap, which drops any clip labeled "Full
+    // cooking session" from the recipe doc).
+    const target=storageRef(storage,`privateVoice/${uid}/${recipeId}/session`);
+    await uploadBytes(target,voiceBlob,{contentType,customMetadata:{chefvoiceDurationMs:String(durationMs),chefvoicePermitId:permit.permitId,chefvoiceUploadToken:permit.token}});
+    return true;
+  }catch(e){warnings.push(`Chef voice stayed local (${friendlyError(e)}).`);return false;}
+}
+
+/**
+ * Backs one recipe up to the chef's own account, privately (audit F11; see backup.js): the
+ * recipe, its photos and videos, and its original cooking audio. Like publishing, it stages the
+ * recipe before any Storage write, because the Storage rules check the recipe's owner. Unlike
+ * publishing, it never makes anything public, and it stops if the recipe turns out to be
+ * published: its Community copy is its backup, and this browser's copy written over it would
+ * publish edits nobody chose to publish. Android's twin is FirebaseSocialRepository.backupRecipe.
+ */
+export async function backupRecipe(recipe,displayName,{mediaAssets=[],voiceBlob=null}={}){
+  assertWrites();
+  const user=requireUser('Sign in to back up your recipes.');
+  if(!user.emailVerified)throw new Error('Verify your email to back up your recipes. They stay saved in this browser.');
+  const warnings=[];
+  const authorName=String(displayName||'Chef').trim()||'Chef';
+  const base={...recipe,isPublic:false,authorId:user.uid,authorName,voiceClips:(recipe.voiceClips||[]).filter(clip=>clip?.url)};
+  const stageMedia=mediaAssets.filter(item=>item.remoteUrl).map(item=>({id:item.id,type:item.cloudType||cloudMediaType(item.type),url:item.remoteUrl}));
+  if(await writeBackupCopy({...base,media:stageMedia,updatedAt:Date.now()},false)==='published')return {publishedElsewhere:true,warnings};
+
+  if(mediaAssets.length>MAX_PUBLIC_MEDIA_SLOTS)warnings.push(`Only the first ${MAX_PUBLIC_MEDIA_SLOTS} photos and videos of “${recipe.title}” fit in your account. The rest stay in this browser.`);
+  const uploadedMedia=await uploadMediaAssets(recipe.id,user.uid,mediaAssets,warnings);
+  const audioUploaded=await uploadSessionAudio(recipe.id,user.uid,voiceBlob,warnings);
+
+  const outcome=await writeBackupCopy({...base,media:uploadedMedia,updatedAt:Date.now()},true);
+  if(outcome==='published')return {publishedElsewhere:true,warnings};
+  if(outcome==='gone')throw new Error(`“${recipe.title}” was deleted from your account while it was backing up. It is still in this browser.`);
+  return {publishedElsewhere:false,authorId:user.uid,authorName,remoteMedia:uploadedMedia,audioUploaded,warnings};
+}
+
+/**
+ * Writes a backup's private copy of a recipe, in a transaction, unless the recipe was published
+ * since the backup began, here or on another device: a private copy written over it would
+ * quietly take it off Community. `mustExist` is for the write that finishes a backup, so a
+ * recipe deleted while its photos uploaded stays deleted. The counters and creation time are the
+ * account's own, read inside the transaction, because the rules hold an owner's update to them.
+ */
+async function writeBackupCopy(recipe,mustExist){
+  const ref=doc(db,'recipes',recipe.id);
+  return runTransaction(db,async transaction=>{
+    const current=await transaction.get(ref);
+    const data=current.exists()?current.data():null;
+    if(data?.isPublic===true)return 'published';
+    if(mustExist&&!data)return 'gone';
+    transaction.set(ref,toCloudMap({
+      ...recipe,
+      isPublic:false,
+      createdAt:Number(data?.createdAt??recipe.createdAt??Date.now()),
+      likes:Math.max(0,Number(data?.likes||0)),
+      commentCount:Math.max(0,Number(data?.commentCount||0))
+    }));
+    return 'written';
+  });
+}
+
+/**
+ * Every recipe in the signed-in chef's account, published or backed up (audit F11). The rules
+ * let a chef list the recipes they own; the query asks for exactly those.
+ */
+export async function listOwnRecipes(){
+  const user=requireUser('Sign in first.');
+  const snap=await getDocs(query(collection(db,'recipes'),where('authorId','==',user.uid)));
+  return snap.docs.map(d=>normalizeCloudRecipe(d.id,d.data()));
+}
+
+/**
+ * A recipe's original cooking audio from the chef's private Storage path, or null when the
+ * account holds none. A browser can only read it once the bucket allows this site's origin
+ * (storage-cors.json); until then this throws, and a restored recipe comes back without the
+ * recording, which stays safe in the account.
+ */
+export async function downloadSessionAudio(recipeId){
+  const user=requireUser('Sign in first.');
+  try{return await getBlob(storageRef(storage,`privateVoice/${user.uid}/${recipeId}/session`));}
+  catch(e){if(e?.code==='storage/object-not-found')return null;throw e;}
 }
 
 export async function unpublishRecipe(recipeId){
@@ -392,7 +479,8 @@ const SECOND_PASS_MAX_BYTES=120*1024*1024;
 
 /**
  * Removes the private cooking audio from Cloud Storage once ChefVoice Review has
- * finished with it, whether the review succeeded or failed.
+ * finished with it, whether the review succeeded or failed -- unless the chef's
+ * account keeps the recording (see transcribePrivateChefVoice).
  *
  * The upload exists only to hand one recording to Chirp 3. Nothing reads the object
  * afterwards -- a later review re-uploads from the local recording, which is the
@@ -477,9 +565,11 @@ async function callFunction(name,payload){
 /**
  * Uploads the original cooking audio privately and runs the cloud transcription.
  * Returns the raw cloud result; diffing it against the current recipe is
- * second-pass-reviewer.js's job.
+ * second-pass-reviewer.js's job. `keepInAccount` is asked once the review is over:
+ * when the chef's account is meant to hold the recording (a private backup, audit F11,
+ * or a published recipe's), the copy the review uploaded to that same path stays.
  */
-export async function transcribePrivateChefVoice(recipeId,audioBlob){
+export async function transcribePrivateChefVoice(recipeId,audioBlob,{keepInAccount=()=>false}={}){
   assertWrites();
   const user=requireUser('Sign in before running ChefVoice Review.');
   if(!audioBlob?.size||audioBlob.size<=44)throw new Error('The original local cooking audio could not be found.');
@@ -511,7 +601,7 @@ export async function transcribePrivateChefVoice(recipeId,audioBlob){
   try{
     data=await callFunction('transcribeChefVoice',{recipeId});
   }finally{
-    await releasePrivateSessionAudio(target);
+    if(!keepInAccount())await releasePrivateSessionAudio(target);
   }
   if(!data||typeof data!=='object')throw new Error('ChefVoice Review returned an unreadable response.');
   const rawSegments=Array.isArray(data.segments)?data.segments:[];

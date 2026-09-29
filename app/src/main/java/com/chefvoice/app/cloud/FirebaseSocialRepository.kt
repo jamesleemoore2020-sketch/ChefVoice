@@ -38,6 +38,7 @@ import com.google.firebase.functions.FirebaseFunctionsException
 import com.google.firebase.installations.FirebaseInstallations
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageException
 import com.google.firebase.storage.StorageMetadata
 import com.google.firebase.storage.StorageReference
 import java.io.File
@@ -407,9 +408,15 @@ class FirebaseSocialRepository(private val context: Context) {
             } ?: callback("Firebase Messaging is not available.")
     }
 
+    /**
+     * Runs ChefVoice Review on a recipe's original recording. [keepInAccount] is asked once the
+     * review is over: when the chef's account is meant to hold the recording (a private backup,
+     * audit F11, or a published recipe's), the copy the review uploaded to that same path stays.
+     */
     fun transcribePrivateChefVoice(
         recipeId: String,
         audioPath: String,
+        keepInAccount: () -> Boolean = { false },
         callback: (CloudSecondPassResult?, String?) -> Unit
     ) {
         val user = currentUser ?: return callback(null, "Sign in before running ChefVoice Review.")
@@ -446,6 +453,9 @@ class FirebaseSocialRepository(private val context: Context) {
         val target = storage.reference.child(
             "privateVoice/${user.uid}/$recipeId/session"
         )
+        fun release() {
+            if (!keepInAccount()) releasePrivateSessionAudio(target)
+        }
         authorizeStorageUpload("private_session", recipeId, "session", audioFile.length(), contentType) { permit, permitError ->
             if (permit == null) {
                 callback(null, permitError ?: "ChefVoice could not authorize the private audio upload.")
@@ -461,7 +471,7 @@ class FirebaseSocialRepository(private val context: Context) {
                     .addOnSuccessListener { result ->
                         val data = result.data as? Map<*, *>
                         if (data == null) {
-                            releasePrivateSessionAudio(target)
+                            release()
                             callback(null, "ChefVoice Review returned an unreadable response.")
                             return@addOnSuccessListener
                         }
@@ -475,7 +485,7 @@ class FirebaseSocialRepository(private val context: Context) {
                                 confidence = (map["confidence"] as? Number)?.toDouble()
                             )
                         }
-                        releasePrivateSessionAudio(target)
+                        release()
                         callback(
                             CloudSecondPassResult(
                                 provider = data["provider"]?.toString().orEmpty().ifBlank { "google-cloud-speech-v2" },
@@ -489,7 +499,7 @@ class FirebaseSocialRepository(private val context: Context) {
                         )
                     }
                     .addOnFailureListener { error ->
-                        releasePrivateSessionAudio(target)
+                        release()
                         val message = if (error is FirebaseFunctionsException) {
                             error.message ?: "ChefVoice Review failed (${error.code})."
                         } else {
@@ -499,7 +509,7 @@ class FirebaseSocialRepository(private val context: Context) {
                     }
             }
             .addOnFailureListener { error ->
-                releasePrivateSessionAudio(target)
+                release()
                 callback(null, error.message ?: "Could not upload the private original cooking audio.")
             }
         }
@@ -507,7 +517,8 @@ class FirebaseSocialRepository(private val context: Context) {
 
     /**
      * Removes the private cooking audio from Cloud Storage once ChefVoice Review has
-     * finished with it, whether the review succeeded or failed.
+     * finished with it, whether the review succeeded or failed -- unless the chef's account
+     * keeps the recording (see transcribePrivateChefVoice).
      *
      * The upload exists only to hand one recording to Chirp 3. Once the transcript has
      * come back, nothing reads the object again: a later review re-uploads from the
@@ -741,7 +752,7 @@ class FirebaseSocialRepository(private val context: Context) {
                 recipeRef.set(stage.toCloudMap())
                     .addOnSuccessListener {
                         uploadMedia(recipe, user.uid, warnings) { uploadedMedia ->
-                            uploadVoice(recipe, user.uid, warnings) { uploadedVoice ->
+                            uploadVoice(recipe, user.uid, warnings) { uploadedVoice, sessionClipId ->
                                 val pending = uploadedMedia.any { it.remoteUrl.isBlank() && it.path.isNotBlank() }
                                 val published = recipe.copy(
                                     isPublic = !pending,
@@ -752,7 +763,9 @@ class FirebaseSocialRepository(private val context: Context) {
                                     communityUpdatePending = pending,
                                     updatedAt = System.currentTimeMillis(),
                                     likes = trustedLikes,
-                                    commentCount = trustedComments
+                                    commentCount = trustedComments,
+                                    // Publishing puts the original recording in the account too.
+                                    backedUpAudioId = sessionClipId.ifBlank { recipe.backedUpAudioId }
                                 )
                                 recipeRef.set(published.toCloudMap())
                                     .addOnSuccessListener {
@@ -766,6 +779,134 @@ class FirebaseSocialRepository(private val context: Context) {
                     .addOnFailureListener { callback(null, it.message ?: "Could not prepare recipe media upload.", null) }
             }
             .addOnFailureListener { callback(null, it.message ?: "Could not verify recipe social counters.", null) }
+    }
+
+    /**
+     * What a private backup did. [uploaded] is the recipe as the account now holds it, or null
+     * when nothing was written; [publishedElsewhere] means the account holds it as published.
+     */
+    data class BackupOutcome(val uploaded: Recipe?, val publishedElsewhere: Boolean, val warning: String?)
+
+    /**
+     * Backs one recipe up to the chef's own account, privately (audit F11; see RecipeBackup): the
+     * recipe, its photos and videos, its voice clips and its original cooking audio. Like
+     * publishing, it stages the recipe before any Storage write, because the Storage rules check
+     * the recipe's owner. Unlike publishing, it never makes anything public, and it stops if the
+     * recipe turns out to be published: its Community copy is its backup, and this phone's copy
+     * written over it would publish edits nobody chose to publish.
+     */
+    fun backupRecipe(recipe: Recipe, displayName: String, callback: (BackupOutcome?, String?) -> Unit) {
+        val user = currentUser ?: return callback(null, "Sign in to back up your recipes.")
+        if (!user.isEmailVerified) return callback(null, "Verify your email to back up your recipes. They stay saved on this phone.")
+        val db = dbOrNull() ?: return callback(null, "Firestore is not available.")
+        val warnings = mutableListOf<String>()
+        val kept = recipe.media.take(MAX_PUBLISHED_MEDIA_SLOTS)
+        if (kept.size < recipe.media.size) {
+            warnings += "Only the first $MAX_PUBLISHED_MEDIA_SLOTS photos and videos of “${recipe.title}” fit in your account. The rest stay on this phone."
+        }
+        val base = recipe.copy(media = kept, isPublic = false, authorId = user.uid, authorName = displayName.ifBlank { "Chef" })
+        writeBackupCopy(db, base.copy(updatedAt = System.currentTimeMillis()), mustExist = false) { staged, stageError ->
+            when (staged) {
+                null -> callback(null, stageError)
+                BackupWrite.PUBLISHED -> callback(BackupOutcome(null, publishedElsewhere = true, warning = null), null)
+                else -> uploadMedia(base, user.uid, warnings) { media ->
+                    uploadVoice(base, user.uid, warnings) { voice, sessionClipId ->
+                        val uploaded = base.copy(
+                            media = media,
+                            voiceClips = voice,
+                            updatedAt = System.currentTimeMillis(),
+                            backedUpAudioId = sessionClipId.ifBlank { base.backedUpAudioId }
+                        )
+                        writeBackupCopy(db, uploaded, mustExist = true) { finished, finishError ->
+                            when (finished) {
+                                null -> callback(null, finishError)
+                                BackupWrite.PUBLISHED -> callback(BackupOutcome(null, publishedElsewhere = true, warning = null), null)
+                                BackupWrite.GONE -> callback(null, "“${recipe.title}” was deleted from your account while it was backing up. It is still on this phone.")
+                                BackupWrite.WRITTEN -> callback(BackupOutcome(uploaded, publishedElsewhere = false, warning = warnings.takeIf { it.isNotEmpty() }?.joinToString(" ")), null)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private enum class BackupWrite { WRITTEN, PUBLISHED, GONE }
+
+    /**
+     * Writes a backup's private copy of a recipe, in a transaction, unless the recipe was
+     * published since the backup began, on this phone or another: a private copy written over it
+     * would quietly take it off Community. [mustExist] is for the write that finishes a backup, so
+     * a recipe deleted while its photos uploaded stays deleted. The counters and creation time are
+     * the account's own, read inside the transaction, because the rules hold an owner's update to
+     * them.
+     */
+    private fun writeBackupCopy(db: FirebaseFirestore, recipe: Recipe, mustExist: Boolean, done: (BackupWrite?, String?) -> Unit) {
+        val ref = db.collection("recipes").document(recipe.id)
+        db.runTransaction { transaction ->
+            val current = transaction.get(ref)
+            when {
+                current.getBoolean("isPublic") == true -> BackupWrite.PUBLISHED
+                mustExist && !current.exists() -> BackupWrite.GONE
+                else -> {
+                    val copy = recipe.copy(
+                        isPublic = false,
+                        createdAt = current.getLong("createdAt") ?: recipe.createdAt,
+                        likes = (current.getLong("likes") ?: 0L).toInt().coerceAtLeast(0),
+                        commentCount = (current.getLong("commentCount") ?: 0L).toInt().coerceAtLeast(0)
+                    )
+                    transaction.set(ref, copy.toCloudMap())
+                    BackupWrite.WRITTEN
+                }
+            }
+        }
+            .addOnSuccessListener { done(it, null) }
+            .addOnFailureListener { done(null, it.message ?: "Could not back up “${recipe.title}”.") }
+    }
+
+    /**
+     * Every recipe in the signed-in chef's account, published or backed up (audit F11). The rules
+     * let a chef list the recipes they own; the query asks for exactly those.
+     */
+    fun listOwnCloudRecipes(callback: (List<Recipe>?, String?) -> Unit) {
+        val user = currentUser ?: return callback(null, "Sign in first.")
+        val db = dbOrNull() ?: return callback(null, "Firestore is not available.")
+        db.collection("recipes").whereEqualTo("authorId", user.uid).get()
+            .addOnSuccessListener { snapshot ->
+                callback(snapshot.documents.mapNotNull { runCatching { it.toCloudRecipe() }.getOrNull() }, null)
+            }
+            .addOnFailureListener { callback(null, it.message ?: "Could not read the recipes in your account.") }
+    }
+
+    /**
+     * Downloads a recipe's original cooking audio from the chef's private Storage path into
+     * [directory]. Answers the file; or no file and no error when the account holds no recording
+     * for the recipe; or an error when there is one that could not be read.
+     */
+    fun downloadSessionAudio(recipeId: String, directory: File, callback: (File?, String?) -> Unit) {
+        val user = currentUser ?: return callback(null, "Sign in first.")
+        val storage = storageOrNull() ?: return callback(null, "Cloud Storage is not available.")
+        val ref = storage.reference.child("privateVoice/${user.uid}/$recipeId/session")
+        ref.metadata
+            .addOnSuccessListener { metadata ->
+                val extension = when (metadata.contentType?.lowercase()) {
+                    "audio/wav", "audio/x-wav", "audio/wave" -> "wav"
+                    "audio/webm" -> "webm"
+                    "audio/ogg" -> "ogg"
+                    "audio/flac" -> "flac"
+                    "audio/mpeg" -> "mp3"
+                    else -> "m4a"
+                }
+                directory.mkdirs()
+                val file = File(directory, "restored-$recipeId.$extension")
+                ref.getFile(file)
+                    .addOnSuccessListener { callback(file, null) }
+                    .addOnFailureListener { file.delete(); callback(null, it.message ?: "Could not download the original cooking audio.") }
+            }
+            .addOnFailureListener {
+                if ((it as? StorageException)?.errorCode == StorageException.ERROR_OBJECT_NOT_FOUND) callback(null, null)
+                else callback(null, it.message ?: "Could not reach the original cooking audio.")
+            }
     }
 
     fun inspectRecipeForMutation(recipeId: String, callback: (CloudRecipeMutationCheck?, String?) -> Unit) {
@@ -1444,21 +1585,28 @@ class FirebaseSocialRepository(private val context: Context) {
         next(0)
     }
 
+    /**
+     * Uploads a recipe's voice clips, and its full cooking session to the private path. [done]
+     * also gets the id of the session clip that went up, or blank. The recording the account
+     * already holds ([Recipe.backedUpAudioId]) is not sent again: a recording never changes once
+     * made, and it can be over 100 MB.
+     */
     private fun uploadVoice(
         recipe: Recipe,
         uid: String,
         warnings: MutableList<String>,
-        done: (List<VoiceClip>) -> Unit
+        done: (List<VoiceClip>, String) -> Unit
     ) {
         val storage = storageOrNull()
         if (recipe.voiceClips.isEmpty() || storage == null) {
             if (recipe.voiceClips.any { it.remoteUrl.isBlank() }) warnings += "Chef voice stayed on this phone because Cloud Storage is not enabled."
-            done(recipe.voiceClips)
+            done(recipe.voiceClips, "")
             return
         }
         val output = recipe.voiceClips.toMutableList()
+        var sessionClipId = ""
         fun next(index: Int) {
-            if (index >= output.size) return done(output)
+            if (index >= output.size) return done(output, sessionClipId)
             val clip = output[index]
             if (clip.remoteUrl.isNotBlank() || clip.path.isBlank() || !File(clip.path).exists()) {
                 next(index + 1)
@@ -1467,6 +1615,10 @@ class FirebaseSocialRepository(private val context: Context) {
             val file = File(clip.path)
             val ext = file.extension.ifBlank { "m4a" }
             val isFullCookingSession = clip.label.equals("Full cooking session", ignoreCase = true)
+            if (isFullCookingSession && clip.id == recipe.backedUpAudioId) {
+                next(index + 1)
+                return
+            }
             if (!isFullCookingSession && index >= MAX_PUBLIC_VOICE_SLOTS) {
                 warnings += "One chef voice clip stayed local because Community voice is capped at $MAX_PUBLIC_VOICE_SLOTS clips."
                 next(index + 1)
@@ -1505,6 +1657,7 @@ class FirebaseSocialRepository(private val context: Context) {
                             // Raw cooking-session audio stays private and is never given a
                             // tokenized public download URL or written into a public recipe doc.
                             output[index] = clip.copy(remoteUrl = "")
+                            sessionClipId = clip.id
                             next(index + 1)
                         } else {
                             ref.downloadUrl.addOnSuccessListener { uri ->

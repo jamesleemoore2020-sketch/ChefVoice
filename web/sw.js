@@ -14,7 +14,7 @@ const CACHE='chefvoice-pwa-v0.5.21';
 // reopen served index.html in its place and the app did not start.
 const CORE=['./','./index.html','./manifest.webmanifest',
   './css/styles.css','./css/cook-wizard.css',
-  './js/app.js','./js/chef-analytics.js','./js/collections.js','./js/community-feed.js','./js/chef-search.js','./js/cook-along.js','./js/cook-commands.js',
+  './js/app.js','./js/backup.js','./js/chef-analytics.js','./js/collections.js','./js/community-feed.js','./js/chef-search.js','./js/cook-along.js','./js/cook-commands.js',
   './js/cooking-session-parser.js','./js/entitlement.js','./js/firebase-client.js','./js/firebase-config.js',
   './js/inbox.js','./js/ingredient-parser.js','./js/ingredient-scaling.js','./js/second-pass-reviewer.js',
   './js/share-redirect.js','./js/shopping-list.js','./js/step-ingredients.js','./js/step-timers.js','./js/storage.js','./js/swipe-gestures.js','./js/tag-utils.js',

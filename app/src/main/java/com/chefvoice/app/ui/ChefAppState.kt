@@ -40,6 +40,7 @@ import com.chefvoice.app.model.RecipeCollection
 import com.chefvoice.app.model.ShoppingItem
 import com.chefvoice.app.model.RecipeComment
 import com.chefvoice.app.model.stableStepIds
+import com.chefvoice.app.util.RecipeBackup
 import com.chefvoice.app.util.RecipeView
 import com.chefvoice.app.util.ShoppingList
 import com.chefvoice.app.voice.SecondPassReviewer
@@ -248,6 +249,47 @@ class ChefAppState(context: Context) {
     var moderationError by mutableStateOf("")
         private set
 
+    // Private backup (audit F11): Pro, and off until the chef turns it on. The switch is kept per
+    // account on this phone, so a second chef signing in here starts with it off.
+    private val backupPrefs = context.getSharedPreferences("chefvoice_backup", Context.MODE_PRIVATE)
+    private val backupHandler = Handler(Looper.getMainLooper())
+    private val restoredAudioDirectory = File(context.filesDir, "voice")
+    /** Bumped whenever the account changes, so a backup or restore still running stops. */
+    private var backupGeneration = 0
+    /** A recipe backed up only in part, by id: the version tried, and when to try it again. */
+    private val backupRetry = mutableMapOf<String, Pair<Long, Long>>()
+    /** What waits for a recipe's backup to finish before it starts, by recipe id. */
+    private val waitingForBackup = mutableMapOf<String, () -> Unit>()
+    private var backupAgain = false
+    var backupEnabled by mutableStateOf(false)
+        private set
+    var backupRunning by mutableStateOf(false)
+        private set
+    /** The recipe uploading to the account right now, or blank. */
+    var backupInFlightId by mutableStateOf("")
+        private set
+    /** What the last backup could not do, or blank. */
+    var backupStatus by mutableStateOf("")
+        private set
+    /** The account's recipes this phone does not have. Offered to every signed-in chef. */
+    val restorableRecipes = mutableStateListOf<Recipe>()
+    var restoreRunning by mutableStateOf(false)
+        private set
+    var restoreStatus by mutableStateOf("")
+        private set
+    /** Whether the account has been asked what it holds since this chef signed in. */
+    var restoreChecked by mutableStateOf(false)
+        private set
+    private var restoreDismissedAt by mutableStateOf(0L)
+
+    /** Recipes on this phone the chef's account does not hold as they stand. */
+    val backupPendingCount: Int
+        get() = if (!isSignedIn) 0 else recipes.count { RecipeBackup.needsBackup(it, signedInUserId) }
+
+    /** Whether the Library offers the account's recipes: something new since the chef said not now. */
+    val restoreOffered: Boolean
+        get() = restorableRecipes.any { it.updatedAt > restoreDismissedAt }
+
     val cloudConfigured: Boolean get() = cloud.isConfigured
     val isSignedIn: Boolean get() = signedInUserId.isNotBlank()
     val followingCount: Int get() = followingIds.size
@@ -361,6 +403,7 @@ class ChefAppState(context: Context) {
                 blockStatusError = ""
                 directMessagesLoading = false
                 directMessagesError = ""
+                resetBackup(user?.uid.orEmpty())
                 if (user != null) startUserListeners(user.uid)
             }
         }
@@ -378,11 +421,16 @@ class ChefAppState(context: Context) {
         blockStatusError = ""
         entitlementListener = cloud.listenProEntitlement(uid) { entitlement ->
             proEntitlement = entitlement
+            // Pro arrives after sign-in; a chef who turned backup on picks up where it left off.
+            scheduleBackup()
         }
         // Not only for a fresh install: this is what surfaces a purchase made on
         // another device, and what finishes verifying/acknowledging a purchase
         // whose first attempt was interrupted (app killed mid-flow, network drop).
         playBilling.restorePurchases()
+        // "Recover cloud-saved recipes after signing in": what the account holds that this
+        // phone does not, whether backed up or published, for every chef, Pro or not.
+        checkRestorable()
                 profileListener = cloud.listenProfile(uid) { profile ->
             if (profile == null) {
                 // No profile document exists for this account yet, so this is the one
@@ -1005,10 +1053,238 @@ class ChefAppState(context: Context) {
     }
 
     fun saveRecipe(recipe: Recipe) {
+        storeRecipe(recipe)
+        scheduleBackup()
+    }
+
+    private fun storeRecipe(recipe: Recipe, appendIfNew: Boolean = false) {
         val normalized = recipe.copy(stepIds = recipe.stableStepIds())
         val index = recipes.indexOfFirst { it.id == normalized.id }
-        if (index >= 0) recipes[index] = normalized else recipes.add(0, normalized)
+        when {
+            index >= 0 -> recipes[index] = RecipeBackup.keepBookkeeping(recipes[index], normalized)
+            appendIfNew -> recipes.add(normalized)
+            else -> recipes.add(0, normalized)
+        }
         persist()
+    }
+
+    /**
+     * Turns private backup on or off for the signed-in chef on this phone. It is part of Pro: a
+     * chef without it sees what Pro includes instead.
+     */
+    fun enableBackup(on: Boolean) {
+        if (!isSignedIn) return
+        if (on && !isPro) {
+            showPaywall(PaywallTrigger.BACKUP)
+            return
+        }
+        backupEnabled = on
+        backupPrefs.edit().putBoolean("enabled_$signedInUserId", on).apply()
+        if (on) backUpNow() else {
+            backupHandler.removeCallbacksAndMessages(null)
+            backupStatus = ""
+        }
+    }
+
+    /** Backs up everything waiting, now, including what an earlier try could only do in part. */
+    fun backUpNow() = runBackup(manual = true)
+
+    /** Backs up a few seconds after a change, so a burst of edits is one backup. */
+    private fun scheduleBackup() {
+        if (!backupEnabled || !isPro || !isSignedIn) return
+        backupHandler.removeCallbacksAndMessages(null)
+        backupHandler.postDelayed({ runBackup(manual = false) }, 3_000L)
+    }
+
+    private fun resetBackup(uid: String) {
+        backupGeneration++
+        backupHandler.removeCallbacksAndMessages(null)
+        backupRetry.clear()
+        waitingForBackup.clear()
+        backupAgain = false
+        backupRunning = false
+        backupInFlightId = ""
+        backupStatus = ""
+        restorableRecipes.clear()
+        restoreRunning = false
+        restoreStatus = ""
+        restoreChecked = false
+        backupEnabled = uid.isNotBlank() && backupPrefs.getBoolean("enabled_$uid", false)
+        restoreDismissedAt = if (uid.isBlank()) 0L else backupPrefs.getLong("restoreDismissedAt_$uid", 0L)
+    }
+
+    /**
+     * One pass over the recipes waiting for backup, one at a time, so a phone on a slow
+     * connection never sends two recordings at once. A recipe backed up only in part (an upload
+     * refused, the day's upload allowance used up) waits 15 minutes before a pass the chef did
+     * not ask for tries it again; "Back up now" tries everything.
+     */
+    private fun runBackup(manual: Boolean) {
+        if (!backupEnabled || !isPro || !isSignedIn || !cloudConfigured) return
+        if (backupRunning) { backupAgain = true; return }
+        if (!signedInEmailVerified) {
+            backupStatus = "Verify your email to back up your recipes. They stay saved on this phone."
+            return
+        }
+        val uid = signedInUserId
+        val generation = backupGeneration
+        val now = System.currentTimeMillis()
+        val due = recipes.filter { recipe ->
+            RecipeBackup.needsBackup(recipe, uid) &&
+                (manual || backupRetry[recipe.id]?.let { (version, at) -> version != recipe.updatedAt || now >= at } ?: true)
+        }.map { it.id }
+        if (due.isEmpty()) return
+        backupRunning = true
+        backupAgain = false
+        val problems = mutableListOf<String>()
+        fun next(index: Int) {
+            if (generation != backupGeneration) return
+            if (index >= due.size || !backupEnabled) {
+                backupRunning = false
+                backupStatus = problems.distinct().joinToString(" ")
+                if (backupAgain) { backupAgain = false; scheduleBackup() }
+                return
+            }
+            val snapshot = recipes.firstOrNull { it.id == due[index] }
+            // Published, deleted or backed up since the pass began, or its recording is going up
+            // for Second Pass right now. Whatever changes it next schedules another pass.
+            if (snapshot == null || !RecipeBackup.needsBackup(snapshot, uid) || secondPassBusyRecipeId == snapshot.id) {
+                next(index + 1)
+                return
+            }
+            backupInFlightId = snapshot.id
+            cloud.backupRecipe(snapshot, displayName) { outcome, error ->
+                if (generation != backupGeneration) return@backupRecipe
+                backupInFlightId = ""
+                val current = recipes.firstOrNull { it.id == snapshot.id }
+                val uploaded = outcome?.uploaded
+                when {
+                    outcome == null -> {
+                        problems += error ?: "“${snapshot.title}” was not backed up."
+                        backupRetry[snapshot.id] = snapshot.updatedAt to System.currentTimeMillis() + 15 * 60_000L
+                    }
+                    outcome.publishedElsewhere -> {
+                        // Published from another device: the account holds it, as published.
+                        current?.let { storeRecipe(it.copy(backedUpAt = maxOf(it.backedUpAt, snapshot.updatedAt))) }
+                        problems += "“${snapshot.title}” is published from another device, so its Community copy was left as it is."
+                    }
+                    uploaded != null && current != null -> {
+                        val complete = RecipeBackup.complete(snapshot, uploaded) { File(it).exists() }
+                        val merged = RecipeBackup.afterBackup(current, snapshot, uploaded, complete)
+                        storeRecipe(merged)
+                        if (selectedRecipe?.id == merged.id) selectedRecipe = recipes.firstOrNull { it.id == merged.id }
+                        if (complete) backupRetry.remove(snapshot.id)
+                        else backupRetry[snapshot.id] = snapshot.updatedAt to System.currentTimeMillis() + 15 * 60_000L
+                        outcome.warning?.let { problems += it }
+                    }
+                }
+                waitingForBackup.remove(snapshot.id)?.invoke()
+                next(index + 1)
+            }
+        }
+        next(0)
+    }
+
+    /**
+     * Holds [action] until this recipe's backup finishes, if it is uploading now. Publishing or
+     * reviewing it mid-backup would send the same photos and recording a second time.
+     */
+    private fun waitForBackup(recipeId: String, action: () -> Unit): Boolean {
+        if (recipeId.isBlank() || backupInFlightId != recipeId) return false
+        waitingForBackup[recipeId] = action
+        return true
+    }
+
+    /** Looks for recipes in the chef's account that this phone does not have. */
+    fun checkRestorable() {
+        if (!isSignedIn || !cloudConfigured) return
+        val generation = backupGeneration
+        cloud.listOwnCloudRecipes { accountRecipes, error ->
+            if (generation != backupGeneration) return@listOwnCloudRecipes
+            restoreChecked = true
+            if (accountRecipes == null) {
+                restoreStatus = error.orEmpty()
+                return@listOwnCloudRecipes
+            }
+            restorableRecipes.clear()
+            restorableRecipes.addAll(RecipeBackup.restorable(accountRecipes, recipes))
+            restoreStatus = ""
+        }
+    }
+
+    /**
+     * Brings the account's recipes this phone does not have back onto it, with their original
+     * cooking audio, one at a time. It asks the account again first, so a recipe changed or
+     * deleted on another device since sign-in comes back as it is now, or not at all. A recipe
+     * whose recording could not be downloaded stays offered, so nothing comes back without the
+     * audio the account holds for it.
+     */
+    fun restoreRecipes() {
+        if (restoreRunning || !isSignedIn || !cloudConfigured) return
+        val generation = backupGeneration
+        restoreRunning = true
+        restoreStatus = "Checking your account…"
+        cloud.listOwnCloudRecipes { accountRecipes, error ->
+            if (generation != backupGeneration) return@listOwnCloudRecipes
+            if (accountRecipes == null) {
+                restoreRunning = false
+                restoreStatus = error ?: "Could not read the recipes in your account."
+                return@listOwnCloudRecipes
+            }
+            val queue = RecipeBackup.restorable(accountRecipes, recipes)
+            restorableRecipes.clear()
+            restorableRecipes.addAll(queue)
+            restoreQueue(queue, generation)
+        }
+    }
+
+    private fun restoreQueue(queue: List<Recipe>, generation: Int) {
+        var restored = 0
+        val failed = mutableListOf<String>()
+        fun next(index: Int) {
+            if (generation != backupGeneration) return
+            if (index >= queue.size) {
+                restoreRunning = false
+                restoreStatus = when {
+                    failed.isEmpty() && restored == 0 -> "Every recipe in your account is on this phone."
+                    failed.isEmpty() -> if (restored == 1) "1 recipe restored to this phone." else "$restored recipes restored to this phone."
+                    else -> "$restored restored. The original audio for ${failed.joinToString(", ") { "“$it”" }} could not be downloaded, " +
+                        "so ${if (failed.size == 1) "it waits" else "they wait"} in your account. Try again on a steadier connection."
+                }
+                return
+            }
+            val accountRecipe = queue[index]
+            if (recipes.any { it.id == accountRecipe.id }) {
+                restorableRecipes.removeAll { it.id == accountRecipe.id }
+                next(index + 1)
+                return
+            }
+            restoreStatus = "Restoring ${index + 1} of ${queue.size}…"
+            cloud.downloadSessionAudio(accountRecipe.id, restoredAudioDirectory) { file, error ->
+                if (generation != backupGeneration) {
+                    file?.delete()
+                    return@downloadSessionAudio
+                }
+                when {
+                    error != null -> failed += accountRecipe.title
+                    recipes.any { it.id == accountRecipe.id } -> file?.delete()
+                    else -> {
+                        storeRecipe(RecipeBackup.restored(accountRecipe, file?.absolutePath.orEmpty()), appendIfNew = true)
+                        restored++
+                    }
+                }
+                if (error == null) restorableRecipes.removeAll { it.id == accountRecipe.id }
+                next(index + 1)
+            }
+        }
+        next(0)
+    }
+
+    /** "Not now": the Library stops offering these, until the account has something newer. */
+    fun dismissRestoreOffer() {
+        val newest = restorableRecipes.maxOfOrNull { it.updatedAt } ?: return
+        restoreDismissedAt = newest
+        if (isSignedIn) backupPrefs.edit().putLong("restoreDismissedAt_$signedInUserId", newest).apply()
     }
 
     fun updateRecipeTimes(recipeId: String, prepTimeMinutes: Int, cookTimeMinutes: Int) {
@@ -1225,6 +1501,10 @@ class ChefAppState(context: Context) {
 
     fun runSecondPass(recipe: Recipe) {
         if (secondPassBusyRecipeId.isNotBlank()) return
+        if (waitForBackup(recipe.id) { recipes.firstOrNull { it.id == recipe.id }?.let(::runSecondPass) }) {
+            secondPassMessage = "Second Pass starts as soon as this recipe finishes backing up."
+            return
+        }
         if (!cloudConfigured) {
             secondPassMessage = "Connect Firebase before running ChefVoice Review."
             return
@@ -1254,7 +1534,13 @@ class ChefAppState(context: Context) {
         // paywall's conversion rate is measured against.
         ChefAnalytics.secondPassOpened()
         secondPassMessage = "Uploading the private original audio and running Chirp 3. This can take a few minutes."
-        cloud.transcribePrivateChefVoice(recipe.id, audioPath) { cloudResult, error ->
+        // The review uploads to the path a backup keeps the recording at. Afterwards it stays
+        // there if the account is meant to hold it, and is cleaned up as before if not.
+        val keepAudio = {
+            (backupEnabled && isPro) || recipes.firstOrNull { it.id == recipe.id }?.backedUpAudioId?.isNotBlank() == true
+        }
+        val reviewedClipId = recipe.voiceClips.firstOrNull { it.path == audioPath }?.id.orEmpty()
+        cloud.transcribePrivateChefVoice(recipe.id, audioPath, keepAudio) { cloudResult, error ->
             secondPassBusyRecipeId = ""
             if (error != null) {
                 secondPassMessage = error
@@ -1277,7 +1563,9 @@ class ChefAppState(context: Context) {
             )
             val updated = current.copy(
                 secondPass = secondPass,
-                updatedAt = System.currentTimeMillis()
+                updatedAt = System.currentTimeMillis(),
+                // Kept in the account, the reviewed recording is the one it now holds.
+                backedUpAudioId = if (keepAudio() && reviewedClipId.isNotBlank()) reviewedClipId else current.backedUpAudioId
             )
             saveRecipe(updated)
             if (selectedRecipe?.id == updated.id) selectedRecipe = updated
@@ -1379,8 +1667,16 @@ class ChefAppState(context: Context) {
         return fullSession?.path
     }
 
-    fun deleteRecipe(recipe: Recipe) {
+    fun deleteRecipe(requested: Recipe) {
         if (recipeMutationBusyId.isNotBlank()) return
+        // The saved copy, not the screen's: a backup that finished while the recipe was open
+        // put it in the account, and the delete has to know.
+        val recipe = recipes.firstOrNull { it.id == requested.id } ?: requested
+        if (backupInFlightId == recipe.id) {
+            // Its last write could otherwise put back what the delete just removed.
+            cloudMessage = "This recipe is backing up right now. Delete it once that finishes."
+            return
+        }
         // Public recipes may have been created by an older client before the local
         // copy persisted authorId. Treat any public recipe as potentially cloud-backed.
         // A read-only preflight distinguishes a real cloud document from a legacy
@@ -1436,6 +1732,10 @@ class ChefAppState(context: Context) {
     }
 
     fun publish(recipe: Recipe) {
+        if (waitForBackup(recipe.id) { recipes.firstOrNull { it.id == recipe.id }?.let(::publish) }) {
+            cloudMessage = "Publishing as soon as this recipe finishes backing up…"
+            return
+        }
         // Gate cloud sync, not recipe count. Local recipes cost nothing and feed the
         // sharing loop; cloud recipes cost storage. Only block a recipe that is not
         // already public, so re-publishing an existing cloud recipe never trips the cap.
@@ -1963,6 +2263,8 @@ class ChefAppState(context: Context) {
     fun close() {
         // A page still loading must not save into a state that is no longer on screen.
         recipeImportToken++
+        backupGeneration++
+        backupHandler.removeCallbacksAndMessages(null)
         stopLiveHeartbeat()
         audioPlayer.stop()
         playBilling.close()

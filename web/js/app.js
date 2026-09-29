@@ -4,8 +4,9 @@ import { mergeDraft, parseCookingSession } from './cooking-session-parser.js';
 import {
   deleteAudioBlob, deleteRecipeMedia, loadAudioBlob, loadCollections, loadMediaBlob,
   loadRecipes, loadShoppingItems, saveAudioBlob, saveCollections, saveMediaBlob,
-  saveRecipes, saveShoppingItems
+  saveRecipes as writeRecipes, saveShoppingItems
 } from './storage.js';
+import * as RecipeBackup from './backup.js';
 import {
   collectionsContaining, createCollection, deleteCollection, recipesInCollection,
   setRecipeInCollection
@@ -117,6 +118,22 @@ const isPro=()=>isEntitlementActive(cloud.entitlement);
 const cloudRecipeCount=()=>recipes.filter(r=>r.isPublic).length;
 let paywallTrigger='';
 
+// Private backup (audit F11): Pro, and off until the chef turns it on, per account in this
+// browser. Restoring what the account holds is for every signed-in chef. `generation` moves on
+// whenever the account changes, so a backup or restore still running stops.
+const BACKUP_KEY='chefvoice.web.backup.v1';
+const backup={
+  running:false,again:false,status:'',inFlightId:'',timer:0,generation:0,
+  retry:new Map(),waiting:new Map(),
+  accountRecipes:[],checked:false,restoring:false,restoreStatus:'',dismissedAt:0
+};
+function backupPrefs(){try{const v=JSON.parse(localStorage.getItem(BACKUP_KEY)||'{}');return v&&typeof v==='object'?v:{};}catch{return {};}}
+function writeBackupPrefs(prefs){try{localStorage.setItem(BACKUP_KEY,JSON.stringify(prefs));}catch{}}
+const backupChosen=()=>Boolean(cloud.user&&backupPrefs().enabled?.[cloud.user.uid]);
+const backupOn=()=>backupChosen()&&isPro();
+/** Every save of the library goes through here, so a change is backed up a few seconds later. */
+function saveRecipes(list){writeRecipes(list);scheduleBackup();}
+
 function clearUserObservers(){
   for(const key of ['unsubProfile','unsubLiked','unsubBookmarks','unsubFollowing','unsubEntitlement','unsubBlocked','unsubConversations','unsubMessageReads','unsubNotifications','unsubThread']){try{cloud[key]?.();}catch{} cloud[key]=null;}
   cloud.profile=null;cloud.liked=new Set();cloud.bookmarks=new Set();cloud.following=new Set();
@@ -127,6 +144,7 @@ function clearUserObservers(){
   // Chef search is sign-in gated, so signing out has to clear its results too.
   chefSearchTerm='';chefSearchResults=[];chefSearchStatus='';communitySearchOpen=false;
   closeChefProfile();
+  resetBackup();
 }
 // See openCommunityRecipeId's declaration below for why the community tab's
 // listener-driven re-renders all gate on this instead of just the tab name.
@@ -152,7 +170,12 @@ function startUserObservers(user){
     cloud.profileLoaded=true;cloud.profileError=err?.message||'Your chef profile could not be loaded.';
     if(currentTab==='profile')render();
   });
-  cloud.unsubEntitlement=cloud.api.observeProEntitlement(user.uid,e=>{cloud.entitlement=e;if(currentTab==='profile'||onRecipesList())render();});
+  // Pro arrives after sign-in; a chef who turned backup on picks up where it left off.
+  cloud.unsubEntitlement=cloud.api.observeProEntitlement(user.uid,e=>{cloud.entitlement=e;scheduleBackup();if(currentTab==='profile'||onRecipesList())render();});
+  backup.dismissedAt=Number(backupPrefs().restoreDismissedAt?.[user.uid]||0);
+  // "Recover cloud-saved recipes after signing in": what the account holds that this browser
+  // does not, whether backed up or published, for every chef, Pro or not.
+  checkRestorable();
   cloud.unsubBlocked=cloud.api.observeBlockedUserIds(user.uid,s=>{cloud.blocked=s;if(shouldRenderCommunity()||currentTab==='profile')render();});
   // While a conversation is open these three only refresh the badge: re-rendering the inbox
   // rebuilt the composer, and every incoming message or read marker wiped a half-written
@@ -270,7 +293,8 @@ const PAYWALL_COPY={
   [PaywallTrigger.CLOUD_LIMIT]:`Free accounts sync ${FreeTierLimits.CLOUD_RECIPES} recipes to the Community. This recipe stays saved in this browser.`,
   [PaywallTrigger.VIDEO]:'Video is a Pro feature. Photos and your full cooking audio are always included on Free.',
   [PaywallTrigger.SECOND_PASS]:'Second Pass re-transcription is a Pro feature.',
-  [PaywallTrigger.PROFILE]:'ChefVoice Pro removes the Free limits on Community syncing and video.'
+  [PaywallTrigger.PROFILE]:'ChefVoice Pro removes the Free limits on Community syncing and video.',
+  [PaywallTrigger.BACKUP]:'Private backup keeps every recipe you cook, and the recording of you cooking it, in your ChefVoice account. A lost phone or a cleared browser loses nothing. It is part of ChefVoice Pro.'
 };
 function renderPaywall(){
   const host=document.querySelector('#paywall');
@@ -795,13 +819,29 @@ function collectionsTemplate(){
   </section>`;
 }
 
+/**
+ * The offer of the account's recipes this browser does not have: after a new device, a cleared
+ * browser, or a recipe backed up or published somewhere else (audit F11).
+ */
+function restoreOfferTemplate(){
+  if(!cloud.user)return '';
+  if(backup.restoring)return `<section class="card" id="restoreOffer"><h2>In your ChefVoice account</h2><p class="status" role="status">${escapeHtml(backup.restoreStatus||'Restoring…')}</p></section>`;
+  if(!backup.accountRecipes.some(r=>Number(r.updatedAt||0)>backup.dismissedAt))return '';
+  const count=backup.accountRecipes.length;
+  return `<section class="card" id="restoreOffer"><h2>In your ChefVoice account</h2><p class="status">${count===1?'1 recipe in your account isn\'t in this browser.':`${count} recipes in your account aren't in this browser.`} Restoring brings back their original cooking audio too; Wi-Fi is best.</p><div class="row wrap"><button class="primary grow" id="restoreOfferGo">Restore</button><button class="ghost grow" id="restoreOfferLater">Not now</button></div></section>`;
+}
+function bindRestoreOffer(){
+  const go=main.querySelector('#restoreOfferGo');if(go)go.onclick=()=>restoreRecipes();
+  const later=main.querySelector('#restoreOfferLater');if(later)later.onclick=()=>dismissRestoreOffer();
+}
+
 function recipesTemplate(){
   const cloudNote=cloud.user?`<div class="quality">Signed in as ${escapeHtml(cloud.user.email||'ChefVoice member')}. Recipes stay private on this device until you publish one.</div>`:`<div class="notice">Local recipes stay private on this device. Sign in from Profile to publish to Community.</div>`;
   const shown=recipesInCollection(recipes,collections,activeCollectionId);
   const emptyNote=recipes.length
     ?'<div class="empty card"><strong>Nothing in this collection yet.</strong><br>Open a recipe and tap 🗂 to file it here.</div>'
     :'<div class="empty card"><strong>No saved recipes yet.</strong><br>Start a cooking capture and ChefVoice will build your first one.</div>';
-  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${shoppingButtonTemplate()}${collectionsTemplate()}${shown.length?shown.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${countLabel(r.ingredients?.length,'ingredient')} · ${countLabel(r.steps?.length,'step')} · serves ${r.servings||2}</p>${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${(r.steps||[]).length?`<button class="ghost" data-cook-recipe="${r.id}">🍳 Cook</button>`:''}${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">${r.isPublic||r.authorId?'Delete':'Delete local'}</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):emptyNote}${savedCookbookTemplate()}`;
+  return `<section class="hero" style="--hero:url('../assets/chefvoice-cover.webp')"><div class="eyebrow">Your kitchen archive</div><h1>Recipes with a voice.</h1><p>Your local recipe library stays available even if Firebase is offline.</p></section><div id="paywall"></div>${cloudNote}${restoreOfferTemplate()}${shoppingButtonTemplate()}${collectionsTemplate()}${shown.length?shown.map(r=>`<article class="card recipe-card"><img src="assets/chefvoice-cover.webp" alt=""><div><div class="row between"><h3>${escapeHtml(r.title)}</h3>${r.isPublic?'<span class="pill">Public</span>':'<span class="pill">Private</span>'}</div><p>${countLabel(r.ingredients?.length,'ingredient')} · ${countLabel(r.steps?.length,'step')} · serves ${r.servings||2}</p>${r.tags?.length?`<p class="hint">${r.tags.map(t=>`#${escapeHtml(t)}`).join(' ')}</p>`:''}<div class="row wrap" style="margin-top:9px"><button class="secondary" data-open-recipe="${r.id}">Open</button>${(r.steps||[]).length?`<button class="ghost" data-cook-recipe="${r.id}">🍳 Cook</button>`:''}${cloud.user?(r.isPublic?`<button class="ghost" data-unpublish="${r.id}">Unpublish</button>`:`<button class="primary" data-publish="${r.id}">Publish</button>`):''}<button class="danger" data-delete-recipe="${r.id}">${r.isPublic||r.authorId?'Delete':'Delete local'}</button></div><div class="hint" data-recipe-status="${r.id}"></div></div></article>`).join(''):emptyNote}${savedCookbookTemplate()}`;
 }
 /** The site name to show a chef: the host without a leading "www.". */
 function importedHost(url){
@@ -828,14 +868,23 @@ async function publishLocalRecipe(id,button){
     showPaywall(PaywallTrigger.CLOUD_LIMIT);
     return;
   }
+  // Mid-backup, the same photos and recording would go up twice: publish once it is done.
+  const backedUp=afterBackupOf(id);
+  if(backedUp){
+    button.disabled=true;if(status)status.textContent='Publishing as soon as this recipe finishes backing up…';
+    if(await backedUp)publishLocalRecipe(id,document.querySelector(`[data-publish="${id}"]`)||button);
+    else button.disabled=false;
+    return;
+  }
   button.disabled=true;if(status)status.textContent='Uploading recipe media and chef voice…';announce('Publishing. Uploading recipe media and chef voice.');
   try{
-    const assets=[];
-    for(const item of r.media||[]){const remote=(r.remoteMedia||[]).find(x=>x.id===item.id);assets.push({...item,blob:await loadMediaBlob(r.id,item.id),remoteUrl:remote?.url||'',cloudType:item.type?.startsWith('video/')?'VIDEO':'IMAGE'});}
-    const voiceBlob=await loadAudioBlob(r.id);
+    const assets=await mediaAssetsFor(r);
+    // A recording the account already holds, from a backup or an earlier publish, is not sent again.
+    const voiceBlob=r.audioBackedUp?null:await loadAudioBlob(r.id);
     const authorName=requireProfileName();
     const result=await cloud.api.publishRecipe(r,authorName,{mediaAssets:assets,voiceBlob});
     Object.assign(r,{isPublic:true,authorId:cloud.user.uid,authorName,updatedAt:result.recipe.updatedAt,remoteMedia:result.recipe.media,voiceClips:result.recipe.voiceClips,likes:result.recipe.likes,commentCount:result.recipe.commentCount});
+    if(result.audioUploaded)r.audioBackedUp=true;
     const published=result.warnings.length?`Published. ${result.warnings.join(' ')}`:'Published to ChefVoice Community.';
     saveRecipes(recipes);if(status)status.textContent=published;announce(published);render();
   }catch(e){if(status)status.textContent=e?.message||'Could not publish recipe.';announce(e?.message||'Could not publish recipe.');button.disabled=false;}
@@ -845,6 +894,7 @@ async function unpublishLocalRecipe(id,button){
   try{await cloud.api.unpublishRecipe(id);r.isPublic=false;r.updatedAt=Date.now();saveRecipes(recipes);render();announce('Unpublished. The recipe is private again.');}catch(e){button.disabled=false;const status=document.querySelector(`[data-recipe-status="${id}"]`);if(status)status.textContent=e?.message||'Could not unpublish.';announce(e?.message||'Could not unpublish.');}
 }
 function bindRecipes(){
+  bindRestoreOffer();
   const shopping=main.querySelector('#openShopping');
   if(shopping)shopping.onclick=()=>openShoppingList(()=>{overlayScreen='';render();});
   const importButton=main.querySelector('#openImport');
@@ -886,6 +936,8 @@ function bindRecipes(){
   main.querySelectorAll('[data-delete-recipe]').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.deleteRecipe;const r=recipes.find(x=>x.id===id);
     const status=document.querySelector(`[data-recipe-status="${id}"]`);
+    // Its last write could otherwise put back what the delete just removed.
+    if(backup.inFlightId===id){if(status)status.textContent='This recipe is backing up right now. Delete it once that finishes.';return;}
     // A recipe that is public now, or was ever published (Unpublish clears isPublic
     // but never authorId), has a Firestore doc and possibly Storage media under this
     // id -- mirrors Android's ChefAppState.deleteRecipe hasCloudCopy check. Deleting
@@ -1003,12 +1055,27 @@ async function runSecondPass(recipe){
     openRecipe(recipe.id);
     return;
   }
+  // The review uploads to the path a backup keeps the recording at: it waits for a backup of
+  // this recipe that is running, rather than send the same recording twice.
+  const backedUp=afterBackupOf(recipe.id);
+  if(backedUp){
+    secondPass={recipeId:recipe.id,busy:true,message:'Waiting for this recipe to finish backing up, then running ChefVoice Review.',result:null};
+    openRecipe(recipe.id);
+    if(!await backedUp){secondPass={recipeId:recipe.id,busy:false,message:'ChefVoice Review did not start. Your local recipe and audio are unchanged.',result:null};openRecipe(recipe.id);return;}
+  }
   secondPass={recipeId:recipe.id,busy:true,message:'Uploading the private original audio and running Chirp 3. This can take a few minutes.',result:null};
   openRecipe(recipe.id);
   try{
     const blob=await loadAudioBlob(recipe.id);
     if(!blob)throw new Error('The original local cooking audio could not be found.');
-    const cloudResult=await cloud.api.transcribePrivateChefVoice(recipe.id,blob);
+    // Afterwards the upload stays if the account is meant to hold the recording, and is
+    // cleaned up as before if not.
+    const keepAudio=()=>backupOn()||recipes.find(x=>x.id===recipe.id)?.audioBackedUp===true;
+    const cloudResult=await cloud.api.transcribePrivateChefVoice(recipe.id,blob,{keepInAccount:keepAudio});
+    if(keepAudio()){
+      const current=recipes.find(x=>x.id===recipe.id);
+      if(current&&current.audioBackedUp!==true){current.audioBackedUp=true;writeRecipes(recipes);}
+    }
     // Counted only on success: a failed review must not burn an allowance.
     recordSecondPassUse();
     ChefAnalytics.secondPassOpened();
@@ -1092,7 +1159,7 @@ function openRecipe(id){
   const notice=importedNotice?.recipeId===r.id
     ?`<div class="notice" role="status"><p><strong>Imported from ${escapeHtml(importedNotice.host||'the web')}.</strong> Check it against the original page before you cook.</p>${importedNotice.notes.length?`<ul class="install-list">${importedNotice.notes.map(n=>`<li>${escapeHtml(n)}</li>`).join('')}</ul>`:''}<button class="ghost" id="dismissImportNotice">OK</button></div>`
     :'';
-  main.innerHTML=`<button id="backRecipes" class="ghost">← Recipes</button>${notice}<section class="card"><div class="row between"><h1>${escapeHtml(r.title)}</h1>${r.isPublic?'<span class="pill">Community</span>':'<span class="pill">Private</span>'}</div><p class="status">${escapeHtml(r.description||'')}</p><span class="pill">Serves ${r.servings||2}</span>${(r.tags||[]).map(t=>`<span class="pill">#${escapeHtml(t)}</span>`).join('')}</section>${(r.steps||[]).length?'<button id="cookThisRecipe" class="primary wide">🍳 Cook this recipe</button>':''}${collectionPickerTemplate(r.id)}${remoteMedia?`<section class="card"><h2>Recipe media</h2><div class="detail-media-grid">${remoteMedia}</div></section>`:''}${r.sessionAudio?.stored?'<section class="card"><h2>Original chef voice</h2><p class="hint">The full microphone recording is stored separately from the transcript.</p><button id="loadChefVoice" class="secondary wide">▶ Load chef voice</button><div id="chefVoicePlayer"></div></section>':''}<div id="paywall"></div>${secondPassTemplate(r)}<div class="section-title"><h2>Ingredients</h2></div>${scalingTemplate(r)}${ingredientCards(shownIngredients)}<div class="section-title"><h2>Method</h2></div>${(r.steps||[]).length?'<button id="readAloudBtn" class="secondary wide">🔊 Read steps aloud</button>':''}${(r.steps||[]).map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}<div class="section-title"><h2>Cooking transcript</h2></div><div class="card transcript">${(r.transcript||[]).map(s=>`<div class="transcript-line">${escapeHtml(s.text)}</div>`).join('')||'No transcript saved.'}</div>`;
+  main.innerHTML=`<button id="backRecipes" class="ghost">← Recipes</button>${notice}<section class="card"><div class="row between"><h1>${escapeHtml(r.title)}</h1>${r.isPublic?'<span class="pill">Community</span>':'<span class="pill">Private</span>'}</div><p class="status">${escapeHtml(r.description||'')}</p><span class="pill">Serves ${r.servings||2}</span>${(r.tags||[]).map(t=>`<span class="pill">#${escapeHtml(t)}</span>`).join('')}</section>${(r.steps||[]).length?'<button id="cookThisRecipe" class="primary wide">🍳 Cook this recipe</button>':''}${collectionPickerTemplate(r.id)}${remoteMedia?`<section class="card"><h2>Recipe media</h2><div class="detail-media-grid">${remoteMedia}</div></section>`:''}${r.sessionAudio?.stored?'<section class="card"><h2>Original chef voice</h2><p class="hint">The full microphone recording is stored separately from the transcript.</p><button id="loadChefVoice" class="secondary wide">▶ Load chef voice</button><div id="chefVoicePlayer"></div></section>':r.audioInAccount?'<section class="card"><h2>Original chef voice</h2><p class="hint">Safe in your ChefVoice account. This browser has not downloaded it yet.</p><button id="downloadChefVoice" class="secondary wide">Download to this browser</button><p class="hint" id="downloadChefVoiceStatus" role="status"></p></section>':''}<div id="paywall"></div>${secondPassTemplate(r)}<div class="section-title"><h2>Ingredients</h2></div>${scalingTemplate(r)}${ingredientCards(shownIngredients)}<div class="section-title"><h2>Method</h2></div>${(r.steps||[]).length?'<button id="readAloudBtn" class="secondary wide">🔊 Read steps aloud</button>':''}${(r.steps||[]).map((s,i)=>`<div class="step card"><span class="step-num">${i+1}</span><div>${escapeHtml(s)}</div></div>`).join('')}<div class="section-title"><h2>Cooking transcript</h2></div><div class="card transcript">${(r.transcript||[]).map(s=>`<div class="transcript-line">${escapeHtml(s.text)}</div>`).join('')||'No transcript saved.'}</div>`;
   document.querySelector('#backRecipes').onclick=()=>{secondPass={recipeId:'',busy:false,message:'',result:null};shoppingMessage='';importedNotice=null;render();};
   const dismissNotice=document.querySelector('#dismissImportNotice');
   if(dismissNotice)dismissNotice.onclick=()=>{importedNotice=null;openRecipe(r.id);};
@@ -1102,6 +1169,27 @@ function openRecipe(id){
   if(cookBtn)cookBtn.onclick=()=>openCookAlong(r,()=>{overlayScreen='';openRecipe(r.id);});
   bindSecondPass(r);
   renderPaywall();
+  // A restored recipe whose recording this browser could not download (audit F11).
+  const download=document.querySelector('#downloadChefVoice');
+  if(download)download.onclick=async()=>{
+    const status=document.querySelector('#downloadChefVoiceStatus');
+    if(!cloud.api||!cloud.user){status.textContent='Sign in to download your original cooking audio.';return;}
+    download.disabled=true;status.textContent='Downloading…';
+    try{
+      const blob=await cloud.api.downloadSessionAudio(r.id);
+      if(!blob){
+        delete r.audioInAccount;r.audioBackedUp=false;writeRecipes(recipes);
+        download.remove();status.textContent='Your account has no recording for this recipe.';
+        return;
+      }
+      r.sessionAudio=await saveAudioBlob(r.id,blob);
+      delete r.audioInAccount;r.audioBackedUp=true;
+      writeRecipes(recipes);openRecipe(r.id);
+    }catch(e){
+      download.disabled=false;
+      status.textContent=`This browser could not download it (${e?.message||'unknown error'}). It stays safe in your account.`;
+    }
+  };
   const load=document.querySelector('#loadChefVoice');if(load)load.onclick=async()=>{load.disabled=true;load.textContent='Loading…';const blob=await loadAudioBlob(r.id);const target=document.querySelector('#chefVoicePlayer');if(blob){const url=URL.createObjectURL(blob);target.innerHTML=`<audio class="audio-player" controls src="${url}"></audio>${isIOS?'<p class="hint">ChefVoice will refresh the voice engine before your next capture after audio playback if iOS requires it.</p>':''}`;}else target.innerHTML='<p class="status">The stored recording could not be found.</p>';load.remove();};
   const readBtn=document.querySelector('#readAloudBtn');
   if(readBtn)readBtn.onclick=()=>{
@@ -2098,6 +2186,221 @@ function openCommunityRecipe(id){
   };
 }
 
+// ---- Private backup and restore (audit F11) --------------------------------
+// Android's side is ChefAppState's backup block; the decisions are backup.js.
+
+/** A recipe's photos and videos as the uploader takes them: this browser's file, or the account's copy. */
+async function mediaAssetsFor(r){
+  const assets=[];
+  for(const item of r.media||[]){
+    const remote=(r.remoteMedia||[]).find(x=>x.id===item.id);
+    assets.push({...item,blob:await loadMediaBlob(r.id,item.id),remoteUrl:remote?.url||'',cloudType:item.type?.startsWith('video/')?'VIDEO':'IMAGE'});
+  }
+  return assets;
+}
+
+function resetBackup(){
+  backup.generation++;
+  clearTimeout(backup.timer);
+  // Anything waiting on a backup that will not finish now is told so, and does not run.
+  for(const waiting of backup.waiting.values())waiting(false);
+  Object.assign(backup,{running:false,again:false,status:'',inFlightId:'',accountRecipes:[],checked:false,restoring:false,restoreStatus:'',dismissedAt:0});
+  backup.retry.clear();backup.waiting.clear();
+}
+
+/** Backs up a few seconds after a change, so a burst of edits is one backup. */
+function scheduleBackup(){
+  if(!backupOn())return;
+  clearTimeout(backup.timer);
+  backup.timer=setTimeout(()=>runBackup(false),3000);
+}
+
+/**
+ * One pass over the recipes waiting for backup, one at a time, so a slow connection never
+ * carries two recordings at once. A recipe backed up only in part (an upload refused, the day's
+ * upload allowance used up) waits 15 minutes before a pass the chef did not ask for tries it
+ * again; "Back up now" tries everything.
+ */
+async function runBackup(manual){
+  if(!backupOn()||!cloud.api)return;
+  if(backup.running){backup.again=true;return;}
+  if(!cloud.user.emailVerified){backup.status='Verify your email to back up your recipes. They stay saved in this browser.';refreshBackupViews();return;}
+  const uid=cloud.user.uid;const generation=backup.generation;const now=Date.now();
+  const due=recipes.filter(r=>{
+    if(!RecipeBackup.needsBackup(r,uid))return false;
+    const retry=backup.retry.get(r.id);
+    return manual||!retry||retry.version!==r.updatedAt||now>=retry.at;
+  }).map(r=>r.id);
+  if(!due.length)return;
+  backup.running=true;backup.again=false;refreshBackupViews();
+  const problems=[];
+  const retryLater=snapshot=>backup.retry.set(snapshot.id,{version:snapshot.updatedAt,at:Date.now()+15*60000});
+  for(const id of due){
+    if(generation!==backup.generation)return;
+    if(!backupOn())break;
+    const current=recipes.find(r=>r.id===id);
+    // Published, deleted or backed up since the pass began, or its recording is going up for
+    // ChefVoice Review right now. Whatever changes it next schedules another pass.
+    if(!current||!RecipeBackup.needsBackup(current,uid)||(secondPass.busy&&secondPass.recipeId===id))continue;
+    const snapshot=structuredClone(current);
+    backup.inFlightId=id;
+    try{
+      const mediaAssets=await mediaAssetsFor(snapshot);
+      const voiceBlob=snapshot.audioBackedUp?null:await loadAudioBlob(snapshot.id);
+      const missing={
+        missingMedia:new Set(mediaAssets.filter(a=>!a.blob&&!a.remoteUrl).map(a=>a.id)),
+        audioMissing:!snapshot.audioBackedUp&&!voiceBlob
+      };
+      const result=await cloud.api.backupRecipe(snapshot,requireProfileName(),{mediaAssets,voiceBlob});
+      if(generation!==backup.generation)return;
+      const latest=recipes.find(r=>r.id===id);
+      if(result.publishedElsewhere){
+        // Published from another device: the account holds it, as published.
+        if(latest)latest.backedUpAt=Math.max(Number(latest.backedUpAt||0),Number(snapshot.updatedAt||0));
+        problems.push(`“${snapshot.title}” is published from another device, so its Community copy was left as it is.`);
+      }else if(latest){
+        const isComplete=RecipeBackup.complete(snapshot,result,missing);
+        // Assigned in place, so a screen holding this recipe sees what the backup learned.
+        Object.assign(latest,RecipeBackup.afterBackup(latest,snapshot,result,isComplete));
+        if(isComplete)backup.retry.delete(id);else retryLater(snapshot);
+        problems.push(...result.warnings);
+      }
+      writeRecipes(recipes);
+    }catch(e){
+      if(generation!==backup.generation)return;
+      problems.push(e?.message||`“${snapshot.title}” was not backed up.`);
+      retryLater(snapshot);
+    }
+    backup.inFlightId='';
+    const waiting=backup.waiting.get(id);backup.waiting.delete(id);waiting?.(true);
+  }
+  backup.running=false;backup.status=[...new Set(problems)].join(' ');refreshBackupViews();
+  if(backup.again){backup.again=false;scheduleBackup();}
+}
+
+/**
+ * Resolves once this recipe's backup finishes, if it is uploading now: true to go ahead, false
+ * if the backup stopped (the chef signed out). Publishing or reviewing it mid-backup would send
+ * the same photos and recording a second time.
+ */
+function afterBackupOf(recipeId){
+  if(!recipeId||backup.inFlightId!==recipeId)return null;
+  return new Promise(resolve=>backup.waiting.set(recipeId,resolve));
+}
+
+/** Looks for recipes in the chef's account that this browser does not have. */
+async function checkRestorable(){
+  if(!cloud.api||!cloud.user)return;
+  const generation=backup.generation;
+  try{
+    const accountRecipes=await cloud.api.listOwnRecipes();
+    if(generation!==backup.generation)return;
+    backup.accountRecipes=RecipeBackup.restorable(accountRecipes,recipes);backup.restoreStatus='';
+  }catch(e){
+    if(generation!==backup.generation)return;
+    backup.restoreStatus=e?.message||'Could not read the recipes in your account.';
+  }
+  backup.checked=true;refreshBackupViews();
+}
+
+/**
+ * Brings the account's recipes this browser does not have back into it, one at a time. It asks
+ * the account again first, so a recipe changed or deleted elsewhere since sign-in comes back as
+ * it is now, or not at all. A recording this browser cannot download stays in the account and
+ * the recipe comes back without it; the recipe offers to download it later.
+ */
+async function restoreRecipes(){
+  if(backup.restoring||!cloud.api||!cloud.user)return;
+  const generation=backup.generation;
+  backup.restoring=true;backup.restoreStatus='Checking your account…';refreshBackupViews();
+  let queue;
+  try{queue=RecipeBackup.restorable(await cloud.api.listOwnRecipes(),recipes);}
+  catch(e){
+    if(generation!==backup.generation)return;
+    backup.restoring=false;backup.restoreStatus=e?.message||'Could not read the recipes in your account.';refreshBackupViews();
+    return;
+  }
+  if(generation!==backup.generation)return;
+  backup.accountRecipes=queue;
+  let restored=0;const audioLeft=[];
+  for(const [index,accountRecipe] of queue.entries()){
+    if(generation!==backup.generation)return;
+    if(recipes.some(r=>r.id===accountRecipe.id))continue;
+    backup.restoreStatus=`Restoring ${index+1} of ${queue.length}…`;refreshBackupViews();
+    let audio='none';let sessionAudio;
+    try{
+      const blob=await cloud.api.downloadSessionAudio(accountRecipe.id);
+      if(blob){sessionAudio=await saveAudioBlob(accountRecipe.id,blob);audio='stored';}
+    }catch{audio='in-account';audioLeft.push(accountRecipe.title);}
+    if(generation!==backup.generation)return;
+    if(recipes.some(r=>r.id===accountRecipe.id))continue;
+    recipes=[...recipes,RecipeBackup.restored(accountRecipe,audio,sessionAudio)];
+    writeRecipes(recipes);restored++;
+    backup.accountRecipes=backup.accountRecipes.filter(r=>r.id!==accountRecipe.id);
+  }
+  backup.restoring=false;
+  backup.restoreStatus=(restored===0?'Every recipe in your account is in this browser.':restored===1?'1 recipe restored to this browser.':`${restored} recipes restored to this browser.`)+
+    (audioLeft.length?` The original audio for ${audioLeft.map(t=>`“${t}”`).join(', ')} stays safe in your account; this browser could not download it. Open the recipe to try again.`:'');
+  announce(backup.restoreStatus);
+  refreshBackupViews();
+  if(onRecipesList())render();
+}
+
+/** "Not now": the Recipes list stops offering these, until the account has something newer. */
+function dismissRestoreOffer(){
+  if(!cloud.user||!backup.accountRecipes.length)return;
+  backup.dismissedAt=Math.max(...backup.accountRecipes.map(r=>Number(r.updatedAt||0)));
+  const prefs=backupPrefs();prefs.restoreDismissedAt={...(prefs.restoreDismissedAt||{}),[cloud.user.uid]:backup.dismissedAt};writeBackupPrefs(prefs);
+  refreshBackupViews();
+}
+
+/** Private backup on Profile: part of Pro and off until the chef turns it on; restore is for everyone. */
+function backupCardTemplate(){
+  if(!cloud.user)return '';
+  const pro=isPro();const on=backupChosen()&&pro;
+  const pending=recipes.filter(r=>RecipeBackup.needsBackup(r,cloud.user.uid)).length;
+  let state;
+  if(!pro)state='<p class="hint">Part of ChefVoice Pro. Anything already in your account stays there, and you can restore it any time.</p>';
+  else if(!on)state='<p class="hint">Off. Recipes you publish are in your account either way.</p>';
+  else if(!cloud.user.emailVerified)state='<div class="notice">Verify your email to start backing up. Your recipes stay saved in this browser.</div>';
+  else state=`<p class="status" role="status">${backup.running?'Backing up…':pending===1?'1 recipe waiting to back up.':pending>1?`${pending} recipes waiting to back up.`:'Everything in this browser is backed up.'}</p>${backup.status?`<p class="hint">${escapeHtml(backup.status)}</p>`:''}${pending?`<button id="backUpNow" class="secondary wide"${backup.running?' disabled':''}>Back up now</button>`:''}`;
+  const count=backup.accountRecipes.length;
+  const restoreLine=backup.restoring?(backup.restoreStatus||'Restoring…')
+    :count===1?'1 recipe in your account isn\'t in this browser.'
+    :count>1?`${count} recipes in your account aren't in this browser.`
+    :backup.restoreStatus||(backup.checked?'Every recipe in your account is in this browser.':'Checking your account…');
+  const restoreActions=backup.restoring?''
+    :count?`${backup.restoreStatus?`<p class="hint">${escapeHtml(backup.restoreStatus)}</p>`:''}<p class="hint">Their original cooking audio comes back too, which can be large. Wi-Fi is best.</p><button id="restoreRecipes" class="primary wide">Restore to this browser</button>`
+    :backup.checked?'<button id="checkRestore" class="ghost wide">Check my account again</button>':'';
+  return `<section class="card" id="backupCard"><h2>Private backup</h2><p class="status">Keeps a private copy of your recipes, their photos and videos, and your original cooking audio in your ChefVoice account, so a lost phone or a cleared browser loses nothing. Only you can see it.</p><div class="row" style="gap:9px;margin:7px 0"><input type="checkbox" role="switch" id="backupSwitch" style="width:auto"${on?' checked':''}><label for="backupSwitch">Back up my recipes</label></div>${state}<h3>Restore</h3><p class="status" role="status">${escapeHtml(restoreLine)}</p>${restoreActions}</section>`;
+}
+function bindBackupCard(){
+  const toggle=document.querySelector('#backupSwitch');
+  if(toggle)toggle.onchange=()=>{
+    if(toggle.checked&&!isPro()){toggle.checked=false;showPaywall(PaywallTrigger.BACKUP);return;}
+    const prefs=backupPrefs();prefs.enabled={...(prefs.enabled||{}),[cloud.user.uid]:toggle.checked};writeBackupPrefs(prefs);
+    if(toggle.checked)runBackup(true);else{clearTimeout(backup.timer);backup.status='';}
+    refreshBackupViews();
+  };
+  document.querySelector('#backUpNow')?.addEventListener('click',()=>runBackup(true));
+  document.querySelector('#restoreRecipes')?.addEventListener('click',restoreRecipes);
+  document.querySelector('#checkRestore')?.addEventListener('click',checkRestorable);
+}
+/**
+ * Redraws only the backup card and the Recipes list's offer, where they are showing: a full
+ * render of Profile would wipe a display name half typed.
+ */
+function refreshBackupViews(){
+  const card=document.querySelector('#backupCard');
+  if(card){card.outerHTML=backupCardTemplate();bindBackupCard();}
+  if(onRecipesList()){
+    const offer=document.querySelector('#restoreOffer');
+    const html=restoreOfferTemplate();
+    if(offer&&html){offer.outerHTML=html;bindRestoreOffer();}
+    else if(offer||html)render();
+  }
+}
+
 /**
  * Mirrors ProMembershipCard on Android. Complimentary access is stated plainly:
  * these chefs never entered a payment method, so warning them about one, or
@@ -2164,7 +2467,7 @@ window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change',
 });
 
 function accountPrivacyTemplate(){
-  return `<section class="card"><h2>Account &amp; privacy</h2><p class="status">How ChefVoice handles your recipes, your voice and your account.</p><div class="row wrap"><a class="secondary link-btn grow" href="${PRIVACY_POLICY_URL}" target="_blank" rel="noopener">Privacy policy</a><a class="danger link-btn grow" href="${ACCOUNT_DELETION_URL}" target="_blank" rel="noopener">Delete my account</a></div><p class="hint">Deleting your account removes your cloud account and Community data; recipes kept only in this browser stay here. It does not cancel a Google Play subscription.</p></section>`;
+  return `<section class="card"><h2>Account &amp; privacy</h2><p class="status">How ChefVoice handles your recipes, your voice and your account.</p><div class="row wrap"><a class="secondary link-btn grow" href="${PRIVACY_POLICY_URL}" target="_blank" rel="noopener">Privacy policy</a><a class="danger link-btn grow" href="${ACCOUNT_DELETION_URL}" target="_blank" rel="noopener">Delete my account</a></div><p class="hint">Deleting your account removes your cloud account, your Community data and your private backup; recipes kept only in this browser stay here. It does not cancel a Google Play subscription.</p></section>`;
 }
 
 function profileTemplate(){
@@ -2184,10 +2487,11 @@ function profileTemplate(){
         ?`<p class="hint">Their recipes and comments are hidden from you, and neither of you can interact with the other.</p>${[...cloud.blocked].map(uid=>`<div class="row between" style="margin-top:8px"><code>${escapeHtml(uid.slice(0,12))}…</code><button class="secondary" data-unblock="${escapeHtml(uid)}">Unblock</button></div>`).join('')}`
         :'<p class="status">You have not blocked anyone. You can block a chef from any recipe in Community.</p>'}</section>`
     :'';
-  return `<div id="paywall"></div>${membershipTemplate()}${firebaseCard}${pushCard}${blockedCard}${appearanceTemplate()}${accountPrivacyTemplate()}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Cooking capture and recipe building work on this device, even offline.</div></section>`;
+  return `<div id="paywall"></div>${membershipTemplate()}${backupCardTemplate()}${firebaseCard}${pushCard}${blockedCard}${appearanceTemplate()}${accountPrivacyTemplate()}<section class="card"><h1>ChefVoice on iPhone</h1><p class="status">${standalone?'ChefVoice is running as a Home Screen web app.':'Install ChefVoice on your Home Screen without an Apple Developer subscription.'}</p>${!standalone&&ios?`<ol class="install-list"><li>Open this page in <strong>Safari</strong>.</li><li>Tap the <strong>Share</strong> button.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Turn on <strong>Open as Web App</strong> if shown, then tap Add.</li></ol>`:''}<div class="quality">Cooking capture and recipe building work on this device, even offline.</div></section>`;
 }
 function bindProfile(){
   bindAppearance();
+  bindBackupCard();
   document.querySelector('#showPaywall')?.addEventListener('click',()=>showPaywall(PaywallTrigger.PROFILE));
   main.querySelectorAll('[data-unblock]').forEach(b=>b.onclick=()=>unblockChef(b.dataset.unblock));
 

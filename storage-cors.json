@@ -1,0 +1,7 @@
+[
+  {
+    "origin": ["https://chefvoice-d7fec.web.app", "https://chefvoice-d7fec.firebaseapp.com"],
+    "method": ["GET"],
+    "maxAgeSeconds": 3600
+  }
+]

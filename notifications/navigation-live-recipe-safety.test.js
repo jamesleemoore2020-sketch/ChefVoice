@@ -28,7 +28,8 @@ test('Android active host cannot silently leave Live and backgrounding ends host
 
 test('Android cloud recipe delete is cloud-first and preserves local copy on failure',()=>{
   const state=read('app/src/main/java/com/chefvoice/app/ui/ChefAppState.kt');
-  const start=state.indexOf('fun deleteRecipe(recipe: Recipe)');
+  const start=state.indexOf('fun deleteRecipe(');
+  assert.ok(start>=0,'ChefAppState.deleteRecipe found');
   const end=state.indexOf('\n    fun publish(',start);
   const block=state.slice(start,end);
   assert.match(block,/cloud\.deleteCloudRecipe\(recipe\.id\) \{ error ->[\s\S]*if \(error != null\)[\s\S]*else removeLocalAfterCloudSuccess\(\)/);

@@ -77,7 +77,8 @@ export const PaywallTrigger = Object.freeze({
   SECOND_PASS: 'second_pass',
   CLOUD_LIMIT: 'cloud_limit',
   VIDEO: 'video',
-  PROFILE: 'profile'
+  PROFILE: 'profile',
+  BACKUP: 'backup'
 });
 
 const DAY_MS = 86400000;

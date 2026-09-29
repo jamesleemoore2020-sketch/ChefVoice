@@ -42,8 +42,12 @@ Object.assign(w,{
   openShoppingList:()=>{openedShoppingList++;},
   openCookAlong:recipe=>{cookedRecipeIds.push(recipe?.id);},
   openRecipe:()=>{},
-  openCommunityRecipe:()=>{}
+  openCommunityRecipe:()=>{},
+  // Private backup (audit F11): the offer is drawn by the list; restoring is not this test's.
+  restoreRecipes:()=>{restoreCalls.push('restore');},
+  dismissRestoreOffer:()=>{restoreCalls.push('not now');}
 });
+let restoreCalls=[];
 
 // savedCookbookTemplate..bindRecipes is one contiguous block, and every one of those
 // templates is reached from recipesTemplate. publishLocalRecipe/unpublishLocalRecipe are
@@ -55,6 +59,7 @@ assert.ok(start>0&&end>start,'savedCookbookTemplate..bindRecipes block found in 
 const recipesSection=source.slice(start,end);
 vm.runInContext(`const main=document.querySelector('#main');let recipes=[];
 let collections=[];let activeCollectionId='';let shoppingItems=[];let overlayScreen='';
+let backup={inFlightId:'',accountRecipes:[],restoring:false,restoreStatus:'',dismissedAt:0};
 ${recipesSection}
 function render(){main.innerHTML=recipesTemplate();bindRecipes();}`,dom.getInternalVMContext());
 
@@ -173,6 +178,34 @@ check(!deleteCloudCalls.includes('r10'),'preflight error: delete callable is nev
 check(run("recipes.some(r=>r.id==='r10')"),'preflight error: local copy is kept, not deleted');
 check(get('[data-recipe-status="r10"]').textContent.includes('insufficient permissions'),'preflight error: the underlying error message is surfaced');
 check(get('[data-delete-recipe="r10"]').disabled===false,'preflight error: button is re-enabled');
+
+// A recipe uploading to the chef's account (audit F11) is not deleted mid-backup: the backup's
+// last write could put back what the delete removed. It says so, and nothing happens.
+inspectResponses.r11={exists:true,authorId:'chef-1'};
+run("recipes=[{id:'r11',title:'Backing up',isPublic:false,authorId:'chef-1'}];cloud.user={uid:'chef-1'};backup.inFlightId='r11';render();");
+click('[data-delete-recipe="r11"]');
+await tick();
+check(!inspectCalls.includes('r11')&&!deleteCloudCalls.includes('r11'),'mid-backup: no cloud calls');
+check(run("recipes.some(r=>r.id==='r11')"),'mid-backup: the recipe is kept');
+check(get('[data-recipe-status="r11"]').textContent.includes('backing up right now'),'mid-backup: the status says why');
+run("backup.inFlightId='';");
+
+// ---- What the account holds that this browser does not (audit F11) ----------
+
+run("recipes=[{id:'here',title:'Here'}];cloud.user={uid:'chef-1'};backup.accountRecipes=[{id:'a1',title:'Stew',updatedAt:30},{id:'a2',title:'Bread',updatedAt:20}];render();");
+check(get('#restoreOffer').textContent.includes("2 recipes in your account aren't in this browser"),'the list offers the account\'s recipes');
+check(get('#restoreOffer').textContent.includes('Wi-Fi is best'),'and says the audio comes back too');
+click('#restoreOfferGo');click('#restoreOfferLater');
+check(restoreCalls.join()==='restore,not now','Restore and Not now do what they say');
+run("backup.dismissedAt=30;render();");
+check(!document.querySelector('#restoreOffer'),'put off, it stays away');
+run("backup.accountRecipes=[...backup.accountRecipes,{id:'a3',title:'Soup',updatedAt:31}];render();");
+check(get('#restoreOffer').textContent.includes('3 recipes'),'until the account has something newer');
+run("backup.restoring=true;backup.restoreStatus='Restoring 2 of 3…';render();");
+check(get('#restoreOffer').textContent.includes('Restoring 2 of 3…')&&!document.querySelector('#restoreOfferGo'),'while restoring it shows progress, not buttons');
+run("backup.restoring=false;cloud.user=null;render();");
+check(!document.querySelector('#restoreOffer'),'signed out, there is no account to offer from');
+run("backup={inFlightId:'',accountRecipes:[],restoring:false,restoreStatus:'',dismissedAt:0};");
 
 // ---- The list chrome: shopping shortcut, collection chips, Cook ------------
 

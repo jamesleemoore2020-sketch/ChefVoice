@@ -79,4 +79,21 @@ class RecipeRepositoryJsonTest {
         assertEquals(original.ingredients, restored.ingredients)
         assertEquals(original.steps, restored.steps)
     }
+
+    // Private backup (audit F11). Lost at a restart, the phone would send every recipe, and
+    // every recording of up to 120 MB, to the account again.
+    @Test
+    fun whatTheAccountHoldsSurvivesARestart() {
+        val restored = roundTrip(Recipe(id = "r7", title = "Stew", updatedAt = 2_000L, backedUpAt = 2_000L, backedUpAudioId = "clip-1"))
+        assertEquals(2_000L, restored.backedUpAt)
+        assertEquals("clip-1", restored.backedUpAudioId)
+    }
+
+    @Test
+    fun recipesSavedBeforeBackupExistedReadAsNeverBackedUp() {
+        val legacy = Recipe(id = "r8", title = "Old stew").toJson().apply { remove("backedUpAt"); remove("backedUpAudioId") }
+        val restored = JSONObject(legacy.toString()).toRecipe()
+        assertEquals(0L, restored.backedUpAt)
+        assertEquals("", restored.backedUpAudioId)
+    }
 }

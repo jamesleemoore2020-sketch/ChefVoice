@@ -147,6 +147,9 @@ internal fun Recipe.toJson() = JSONObject().apply {
     // Where an imported recipe came from. Kept so the publish warning survives a restart --
     // a chef who imports today and publishes next week must still be told.
     put("importedFrom", importedFrom)
+    // Private backup (audit F11): which version the chef's account holds, and which recording.
+    put("backedUpAt", backedUpAt)
+    put("backedUpAudioId", backedUpAudioId)
 
     put("ingredients", JSONArray().apply {
         ingredients.forEach { ingredient ->
@@ -435,7 +438,10 @@ internal fun JSONObject.toRecipe(): Recipe {
         communityUpdatePending = optBoolean("communityUpdatePending", false),
         tags = tags,
         // Recipes saved before imports existed have no key, which reads as "narrated here".
-        importedFrom = optString("importedFrom")
+        importedFrom = optString("importedFrom"),
+        // Saved before backup existed: never backed up.
+        backedUpAt = optLong("backedUpAt", 0L),
+        backedUpAudioId = optString("backedUpAudioId")
     )
 }
 

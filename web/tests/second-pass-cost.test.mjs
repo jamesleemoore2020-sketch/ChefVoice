@@ -77,13 +77,30 @@ test('the uploaded audio is released once the review has finished with it', () =
 test('the release runs whether the review succeeded or failed', () => {
   // A failed transcription leaves exactly the same orphaned object as a successful
   // one, so the cleanup cannot live only on the happy path. On the PWA that is a
-  // finally block; on Android it is a call in each of the three terminal branches.
-  assert.match(client, /\}finally\{\r?\n\s*await releasePrivateSessionAudio\(target\);\r?\n\s*\}/);
-  const androidReleases = androidRepo.match(/releasePrivateSessionAudio\(target\)/g) || [];
+  // finally block; on Android it is a call in each of the terminal branches.
+  assert.match(client, /\}finally\{\r?\n\s*if\(!keepInAccount\(\)\)await releasePrivateSessionAudio\(target\);\r?\n\s*\}/);
+  assert.match(androidRepo, /fun release\(\) \{\r?\n\s*if \(!keepInAccount\(\)\) releasePrivateSessionAudio\(target\)\r?\n\s*\}/);
+  const androidReleases = androidRepo.match(/^\s*release\(\)\r?$/gm) || [];
   assert.ok(
     androidReleases.length >= 3,
     `expected the Android review to release the object on success, unreadable response and failure; found ${androidReleases.length}`
   );
+});
+
+test('a recording the account keeps is not released', () => {
+  // Private backup (audit F11) keeps the recording at the very path the review uploads
+  // to. Released there, a backed-up recipe would lose the audio the chef was told was
+  // safe in their account. Both platforms release unless the caller says the account
+  // keeps it, so the cost behaviour above is unchanged for everyone else.
+  assert.match(client, /export async function transcribePrivateChefVoice\(recipeId,audioBlob,\{keepInAccount=\(\)=>false\}=\{\}\)\{/);
+  assert.match(androidRepo, /keepInAccount: \(\) -> Boolean = \{ false \},/);
+  const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+  const state = readFileSync(
+    new URL('../../app/src/main/java/com/chefvoice/app/ui/ChefAppState.kt', import.meta.url),
+    'utf8'
+  );
+  assert.match(app, /transcribePrivateChefVoice\(recipe\.id,blob,\{keepInAccount:keepAudio\}\)/);
+  assert.match(state, /transcribePrivateChefVoice\(recipe\.id, audioPath, keepAudio\)/);
 });
 
 test('deleting the object never turns into an error the chef sees', () => {
