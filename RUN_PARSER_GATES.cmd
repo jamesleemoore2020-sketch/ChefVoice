@@ -17,7 +17,7 @@ popd
 
 echo.
 echo [2/2] Android JVM tests...
-call gradlew.bat :app:testDebugUnitTest
+call "%~dp0gradlew.bat" :app:testDebugUnitTest
 if errorlevel 1 (
   echo Android tests FAILED.
   exit /b 1

@@ -31,7 +31,7 @@ if errorlevel 1 (
 )
 
 echo Running import gates before deploying...
-call RUN_IMPORT_GATES.cmd
+call "%~dp0RUN_IMPORT_GATES.cmd"
 if errorlevel 1 (
   echo.
   echo REFUSING TO DEPLOY - import gates failed.

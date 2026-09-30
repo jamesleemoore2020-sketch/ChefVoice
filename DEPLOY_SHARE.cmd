@@ -33,7 +33,7 @@ if errorlevel 1 (
 )
 
 echo Running share-link gates before deploying...
-call RUN_SHARE_GATES.cmd
+call "%~dp0RUN_SHARE_GATES.cmd"
 if errorlevel 1 (
   echo.
   echo REFUSING TO DEPLOY - share-link gates failed.
