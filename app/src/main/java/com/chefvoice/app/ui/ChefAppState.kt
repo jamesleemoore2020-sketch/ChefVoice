@@ -62,7 +62,10 @@ class ChefAppState(context: Context) {
     private val quotaPrefs = context.getSharedPreferences("chefvoice_quota", Context.MODE_PRIVATE)
 
     private val repository = RecipeRepository(context)
-    private val audioPlayer = AudioPlayer()
+    /** The recording playing now ("" when none), so its button can offer Stop. */
+    var playingVoice by mutableStateOf("")
+        private set
+    private val audioPlayer = AudioPlayer { playingVoice = it }
     private val cloud = FirebaseSocialRepository(context)
     private val playBilling = PlayBillingManager(context)
 

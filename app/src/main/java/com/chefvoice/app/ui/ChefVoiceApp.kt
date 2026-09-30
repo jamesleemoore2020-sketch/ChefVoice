@@ -462,7 +462,9 @@ fun ChefVoiceApp(
                     recipe = appState.cookingRecipe!!,
                     view = appState.recipeViewFor(appState.cookingRecipe!!),
                     onBack = { appState.cookingRecipe = null },
-                    onPlayVoice = appState::playVoice
+                    playingVoice = appState.playingVoice,
+                    onPlayVoice = appState::playVoice,
+                    onStopVoice = appState::stopVoice
                 )
                 appState.selectedConversation != null -> ConversationScreen(
                     conversation = appState.selectedConversation!!,
@@ -511,7 +513,9 @@ fun ChefVoiceApp(
                         onUpdateTimes = { prep, cook -> appState.updateRecipeTimes(recipe.id, prep, cook) },
                         onUpdateTags = { tags -> appState.updateRecipeTags(recipe.id, tags) },
                         onCook = { appState.cookingRecipe = recipe },
+                        playingVoice = appState.playingVoice,
                         onPlayVoice = appState::playVoice,
+                        onStopVoice = appState::stopVoice,
                         onLike = { appState.toggleLike(recipe) },
                         onBookmark = { appState.toggleBookmark(recipe) },
                         onFollow = { appState.toggleFollow(recipe) },
@@ -1153,7 +1157,8 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
     var speechTarget by remember { mutableStateOf(SpeechTarget.INGREDIENT) }
     var isRecording by remember { mutableStateOf(false) }
     val recorder = remember { AudioRecorder(context.applicationContext) }
-    val previewPlayer = remember { AudioPlayer() }
+    var previewPlaying by remember { mutableStateOf("") }
+    val previewPlayer = remember { AudioPlayer { previewPlaying = it } }
     var wizardStep by remember { mutableStateOf(CreateRecipeStep.CAPTURE) }
 
     val sessionCapture = remember {
@@ -1569,8 +1574,15 @@ private fun CreateRecipeScreen(authorName: String, onSaved: (Recipe) -> Unit) {
                             Card(Modifier.fillMaxWidth()) {
                                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text("🎧 ${clip.label}", Modifier.weight(1f))
-                                    TextButton(onClick = { previewPlayer.play(clip.path) }) { Text("Play") }
-                                    TextButton(onClick = { voiceClips.removeAll { it.id == clip.id } }) { Text("Remove") }
+                                    val playing = clip.path.isNotBlank() && clip.path == previewPlaying
+                                    TextButton(
+                                        onClick = { if (playing) previewPlayer.stop() else previewPlayer.play(clip.path) },
+                                        modifier = Modifier.semantics { contentDescription = "${if (playing) "Stop" else "Play"} ${clip.label}" }
+                                    ) { Text(if (playing) "Stop" else "Play", modifier = Modifier.clearAndSetSemantics { }) }
+                                    TextButton(onClick = {
+                                        if (playing) previewPlayer.stop()
+                                        voiceClips.removeAll { it.id == clip.id }
+                                    }) { Text("Remove") }
                                 }
                             }
                         }
@@ -2922,7 +2934,9 @@ private fun RecipeDetailScreen(
     onUpdateTimes: (Int, Int) -> Unit,
     onUpdateTags: (List<String>) -> Unit,
     onCook: () -> Unit,
+    playingVoice: String,
     onPlayVoice: (String) -> Unit,
+    onStopVoice: () -> Unit,
     onLike: () -> Unit,
     onBookmark: () -> Unit,
     onFollow: () -> Unit,
@@ -2950,6 +2964,8 @@ private fun RecipeDetailScreen(
     importNotice: String,
     onDismissImportNotice: () -> Unit
 ) {
+    // A recording started here stops when the chef leaves this recipe, for Cook or anywhere else.
+    DisposableEffect(recipe.id) { onDispose { onStopVoice() } }
     var commentText by remember(recipe.id) { mutableStateOf("") }
     var replyTarget by remember(recipe.id) { mutableStateOf<RecipeComment?>(null) }
     var replyText by remember(recipe.id) { mutableStateOf("") }
@@ -3361,11 +3377,20 @@ private fun RecipeDetailScreen(
                 item { SectionTitle("Original chef voice") }
                 items(displayVoiceClips, key = { it.id }) { clip ->
                     val location = clip.playableLocation()
+                    val playing = location.isNotBlank() && location == playingVoice
+                    val fromCloud = clip.remoteUrl.isNotBlank()
                     OutlinedButton(
                         enabled = location.isNotBlank(),
-                        onClick = { onPlayVoice(location) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("▶ Play ${clip.label}${if (clip.remoteUrl.isNotBlank()) " · Cloud" else ""}") }
+                        onClick = { if (playing) onStopVoice() else onPlayVoice(location) },
+                        modifier = Modifier.fillMaxWidth().semantics {
+                            contentDescription = "${if (playing) "Stop" else "Play"} ${clip.label}${if (fromCloud) ", from the cloud" else ""}"
+                        }
+                    ) {
+                        Text(
+                            "${if (playing) "■ Stop" else "▶ Play"} ${clip.label}${if (fromCloud) " · Cloud" else ""}",
+                            modifier = Modifier.clearAndSetSemantics { }
+                        )
+                    }
                 }
             }
 
@@ -3593,7 +3618,16 @@ private fun RecipeDetailScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CookingScreen(recipe: Recipe, view: RecipeView, onBack: () -> Unit, onPlayVoice: (String) -> Unit) {
+private fun CookingScreen(
+    recipe: Recipe,
+    view: RecipeView,
+    onBack: () -> Unit,
+    playingVoice: String,
+    onPlayVoice: (String) -> Unit,
+    onStopVoice: () -> Unit
+) {
+    // Leaving the cook-along stops the chef's voice, as leaving the recipe screen does.
+    DisposableEffect(recipe.id) { onDispose { onStopVoice() } }
     var stepIndex by remember(recipe.id) { mutableIntStateOf(0) }
     val step = recipe.steps.getOrNull(stepIndex)
     // The amounts the chef was reading on the recipe screen: its servings and units carry over.
@@ -3856,11 +3890,15 @@ private fun CookingScreen(recipe: Recipe, view: RecipeView, onBack: () -> Unit, 
                     )
                 }
                 if (recipe.voiceClips.isNotEmpty()) {
+                    val location = recipe.voiceClips.first().playableLocation()
+                    val playing = location.isNotBlank() && location == playingVoice
                     Spacer(Modifier.height(18.dp))
                     OutlinedButton(
-                        onClick = { onPlayVoice(recipe.voiceClips.first().playableLocation()) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("▶ Play chef's voice") }
+                        onClick = { if (playing) onStopVoice() else onPlayVoice(location) },
+                        modifier = Modifier.fillMaxWidth().semantics {
+                            contentDescription = if (playing) "Stop chef's voice" else "Play chef's voice"
+                        }
+                    ) { Text(if (playing) "■ Stop chef's voice" else "▶ Play chef's voice", modifier = Modifier.clearAndSetSemantics { }) }
                 }
             }
         }

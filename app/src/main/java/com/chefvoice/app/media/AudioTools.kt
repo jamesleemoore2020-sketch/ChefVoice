@@ -72,22 +72,37 @@ class AudioRecorder(private val context: Context) {
     }
 }
 
-class AudioPlayer {
+/**
+ * Plays one recording at a time and says which: [onPlaying] gets its location when play is
+ * pressed (a cloud recording can take a moment to load, and can be stopped meanwhile) and ""
+ * once it stops, finishes or fails. Nothing used to stop a full cooking session short of
+ * closing the app: there was no Stop, and leaving the recipe left it playing.
+ */
+class AudioPlayer(private val onPlaying: (String) -> Unit = {}) {
     private var player: MediaPlayer? = null
+    private var playing = ""
 
     fun play(path: String) {
         if (path.isBlank()) return
         stop()
-        player = MediaPlayer().apply {
-            setDataSource(path)
-            setOnPreparedListener { it.start() }
-            setOnCompletionListener { this@AudioPlayer.stop() }
-            setOnErrorListener { _, _, _ ->
+        val next = MediaPlayer()
+        val opened = runCatching {
+            next.setDataSource(path)
+            next.setOnPreparedListener { it.start() }
+            next.setOnCompletionListener { this@AudioPlayer.stop() }
+            next.setOnErrorListener { _, _, _ ->
                 this@AudioPlayer.stop()
                 true
             }
-            prepareAsync()
+            next.prepareAsync()
         }
+        if (opened.isFailure) {
+            next.release()
+            return
+        }
+        player = next
+        playing = path
+        onPlaying(path)
     }
 
     fun stop() {
@@ -96,5 +111,9 @@ class AudioPlayer {
             it.release()
         }
         player = null
+        if (playing.isNotEmpty()) {
+            playing = ""
+            onPlaying("")
+        }
     }
 }

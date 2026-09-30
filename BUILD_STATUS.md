@@ -6,7 +6,8 @@ Session handoff: `HANDOFF_2026-09-28_SESSION12.md`. Branch
 `COOK_ALONG_FOR_REAL_KITCHENS_0.5.21_0.11.20.md`, `IMPORT_DNS_REBINDING_0.5.21.md`,
 `SHARE_LINK_PREVIEWS_0.5.21.md`, `DELETION_WITHOUT_FULL_SCANS_0.5.21.md`,
 `CHEF_SEARCH_TOKENS_0.5.21.md`, `PRIVATE_BACKUP_0.5.21_0.11.20.md`,
-`LIVE_VIEWER_CAP_0.5.21_0.11.20.md`.
+`LIVE_VIEWER_CAP_0.5.21_0.11.20.md`, and, found during the release checks,
+`VOICE_PLAYBACK_STOP_0.11.20.md`.
 
 Tests at this point: PWA 379 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android 267 / 0 (2 skipped),
 rules emulator 87 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
@@ -85,9 +86,12 @@ come: Android 0.11.20 (step 8). Parser, corpus, Live signaling and App Check unt
      - James's account held private copies of three published recipes (Weeknight Garlic Butter
        Pasta, Campfire Foil Packet Vegetables, Backyard BBQ Baby Back Ribs), left by older app
        versions. The restore brought them back, so the phone now shows each of those twice.
-     - Nothing stops "Play Full cooking session" once it starts. There is no Stop control, and
-       leaving the recipe keeps it playing. `AudioPlayer.stop()` exists, but no screen has called
-       `stopVoice()` since the v0.10.1 baseline. Stopped this time with a force-stop.
+     - Nothing stopped "Play Full cooking session" once it started. There was no Stop control, and
+       leaving the recipe kept it playing. `AudioPlayer.stop()` existed, but no screen had called
+       `stopVoice()` since the v0.10.1 baseline. Stopped this time with a force-stop. **Fixed in
+       0.11.20 before upload, at James's call** (`VOICE_PLAYBACK_STOP_0.11.20.md`): recordings
+       offer Stop, and leaving the recipe or the cook-along stops them. The first 0.11.20 AAB
+       (`e178f486…58d2`) is superseded and must not be uploaded.
      - Scaling ¼ cup to ⅔ reads "0.17 cup", the known rounding issue.
    - Still to run: 0.11.19 checks 1–4, cook-along 7 (a longer step) and 9, private-backup checks 1,
      2 and 4–7 (they need a new recipe with a photo and a recording), the Live checks, then the
