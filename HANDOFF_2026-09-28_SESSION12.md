@@ -107,7 +107,8 @@ handoff.
   and the master merge is pending.
 
 ## 5. VERIFIED — do not re-verify
-- **CI green** on `043bc2a` (F21 and F30), `242c2d1`, `348dfe0` and `ba76796`.
+- **CI green** on `043bc2a` (F21 and F30), `242c2d1`, `348dfe0`, `ba76796`, `b25496d`, `a7aac61`
+  (F11) and `5ae105b` (F18).
 - **Local suites, with F11 and F18:** PWA 379 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android
   267 / 0 (2 skipped), rules emulator 87 / 0, notification gates 119 / 0, billing 17 / 0, import
   102 / 0, share 8 / 0.
