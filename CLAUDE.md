@@ -48,7 +48,26 @@ Tests live under `app/src/test/java/com/chefvoice/app/...`. The most important o
 
 Hosting is a **multi-site** config: `firebase.json` holds an array of pinned targets (`pwa`, `delete-account`, `legal`) and `.firebaserc` maps each target to its site. Never run `firebase deploy --only hosting` unpinned — it deploys every target at once. Every Hosting deploy script refuses to run if its target is missing from `firebase.json`.
 
-Some backend changes need a one-time **admin backfill** after deploying (for example `backfillChefVoiceDeletionIndexes`, `backfillChefVoiceSearchTokens`, `backfillChefVoiceLaunchAccess`). They are `onCall`s that require the `admin` token claim, run from `firebase functions:shell --project chefvoice-d7fec` as `name({}, {auth: {uid: '<uid>', token: {admin: true}}})`, and are resumable: call again until they answer `done: true`.
+Some backend changes need a one-time **admin backfill** after deploying (for example `backfillChefVoiceDeletionIndexes`, `backfillChefVoiceSearchTokens`, `backfillChefVoiceLaunchAccess`). They are `onCall`s that require the `admin` custom claim, and they are resumable: call again until they answer `done: true`. `firebase functions:shell` cannot run them: its wrapper for a callable (firebase-tools 15.26) sends the first argument as the whole request and never passes `auth`. Call the **deployed** callable while signed in to the PWA as an account that has the claim (the owner's main account, ChefJ4Mr.Voice, since 2026-09-29), from the browser's DevTools console:
+```js
+(async () => {
+  const v = '12.17.1'; // the SDK version in web/js/firebase-client.js
+  const { getApp } = await import(`https://www.gstatic.com/firebasejs/${v}/firebase-app.js`);
+  const { getAuth } = await import(`https://www.gstatic.com/firebasejs/${v}/firebase-auth.js`);
+  const { getFunctions, httpsCallable } = await import(`https://www.gstatic.com/firebasejs/${v}/firebase-functions.js`);
+  const { claims } = await getAuth().currentUser.getIdTokenResult(true);
+  if (claims.admin !== true) return console.log('This account has no admin claim.');
+  const functions = getFunctions(getApp(), 'us-central1');
+  for (const name of ['backfillChefVoiceSearchTokens']) { // the callables to run
+    for (let call = 1; call <= 10; call++) {
+      const { data } = await httpsCallable(functions, name, { timeout: 540000 })({});
+      console.log(name, call, JSON.stringify(data));
+      if (data.done) break;
+    }
+  }
+})();
+```
+The claim is granted by the project owner in Cloud Shell (after `gcloud auth login`): `POST https://identitytoolkit.googleapis.com/v1/projects/chefvoice-d7fec/accounts:update` with body `{"localId":"<uid>","customAttributes":"{\"admin\":true}"}` and the headers `Authorization: Bearer $(gcloud auth print-access-token)` and `x-goog-user-project: chefvoice-d7fec`. `customAttributes` replaces every claim the account has. The same claim unlocks report moderation (`moderateChefVoiceReport`, the moderation screen on Android) and the billing admin callables, including the launch-promo kill switch, so give it only to an account with a strong password.
 
 Single-test invocation examples:
 ```

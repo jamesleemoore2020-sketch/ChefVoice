@@ -116,6 +116,14 @@ Parser, corpus, Live signaling and App Check are untouched.
    It lets the two PWA addresses read Storage responses in the browser; the Storage rules still
    decide who may read what. Until it is set, a web restore brings recipes and photos back and
    leaves recordings safe in the account.
+
+   `gcloud` is not on the build PC, so run it in Cloud Shell (after `gcloud auth login` as the
+   project owner). Cloud Shell has no copy of the repo, so this writes the same file first, then
+   shows the setting:
+
+   ```
+   printf '[{"origin":["https://chefvoice-d7fec.web.app","https://chefvoice-d7fec.firebaseapp.com"],"method":["GET"],"maxAgeSeconds":3600}]' > cors.json && gcloud storage buckets update gs://chefvoice-d7fec.firebasestorage.app --cors-file=cors.json && gcloud storage buckets describe gs://chefvoice-d7fec.firebasestorage.app --format="default(cors_config)"
+   ```
 2. **`DEPLOY_ACCOUNT_DELETION_PAGE.cmd`** for the deletion page's wording.
 3. PWA 0.5.21 and Android 0.11.20, in the order `BUILD_STATUS.md` already gives.
 4. The Play listing's "Recover cloud-saved recipes after signing in" becomes true with 0.11.20.

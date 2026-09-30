@@ -126,10 +126,9 @@ DEPLOY_BILLING.cmd
 Then, once, to cover the accounts that predate it — both callables require an `admin`
 custom claim, the same claim `moderateChefVoiceReport` already uses:
 
-```
-firebase functions:shell --project chefvoice-d7fec
-> backfillChefVoiceLaunchAccess({}, {auth: {uid: '<your-uid>', token: {admin: true}}})
-```
+`backfillChefVoiceLaunchAccess`, called with `{}` by an account that has the claim. (This
+originally said to use `firebase functions:shell`, which cannot pass the claim to a callable; see
+"admin backfill" in `CLAUDE.md` for the way that works, corrected 2026-09-29.)
 
 Seats remaining are in `config/monetization` (`foundingSeatsClaimed` vs `foundingSeats`)
 in the Firestore console — closed to clients, readable by you there.

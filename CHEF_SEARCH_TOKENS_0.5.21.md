@@ -59,15 +59,16 @@ The rules and the backend go first, then the backfill, then the apps:
 1. **`DEPLOY_COMMUNITY_RULES.cmd`**, after diffing the console's live rules. It must come before the
    trigger: once a profile has tokens, the old rules refuse every save of it.
 2. **`DEPLOY_NOTIFICATIONS.cmd`** (the trigger and the backfill callable).
-3. Once, as an admin, until it answers `done: true`:
-
-   ```
-   firebase functions:shell --project chefvoice-d7fec
-   > backfillChefVoiceSearchTokens({}, {auth: {uid: '<your-uid>', token: {admin: true}}})
-   ```
+3. Once, `backfillChefVoiceSearchTokens`, called by an account with the `admin` claim until it answers
+   `done: true` (how: "admin backfill" in `CLAUDE.md`; `functions:shell` cannot pass the claim).
 
 4. Then PWA 0.5.21 (`DEPLOY_PWA.cmd`) and Android 0.11.20. Until step 3 has finished, the new search
    finds only chefs who have saved their profile since step 2.
 
 Steps 1 to 3 are shared with F17 (`DELETION_WITHOUT_FULL_SCANS_0.5.21.md`): one rules deploy, one
 notifications deploy, two backfills.
+
+**Released 2026-09-29**, steps 1 to 4 in order (Android 0.11.20 still to come). The backfill finished
+in one call: `{"done":true,"updated":8}`, so every profile has tokens. Checked under the live rules:
+one `array-contains` query for "chef" finds all four chefs whose names start with it. In PWA 0.5.21,
+searching "jey" finds ChefJeyJey.

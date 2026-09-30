@@ -10,8 +10,8 @@ Session handoff: `HANDOFF_2026-09-28_SESSION12.md`. Branch
 
 Tests at this point: PWA 379 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android 267 / 0 (2 skipped),
 rules emulator 87 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
-**Release in progress since 2026-09-29.** Steps 1, 2, 3 and 5, the deletion page of step 6 and the
-share function of step 7 are live. The rest waits, as each step says. Parser, corpus, Live
+**Live since 2026-09-29: steps 1 to 5 and 7, including PWA 0.5.21.** Still to come: the bucket's
+CORS setting (step 6, James, in Cloud Shell) and Android 0.11.20 (step 8). Parser, corpus, Live
 signaling and App Check untouched.
 
 **Release order for this batch** (each writeup says why its step is where it is):
@@ -31,23 +31,33 @@ signaling and App Check untouched.
    **Live since 2026-09-29:** 3 functions created (`syncChefSearchTokens` and the two backfills),
    17 updated, none deleted. Both backfills refuse a caller without the `admin` claim. The whole
    codebase now runs this branch's code, so the F15 deletion changes of session 9 are live too.
-4. In `firebase functions:shell`, as an admin, each until it answers `done: true`:
-   `backfillChefVoiceDeletionIndexes` and `backfillChefVoiceSearchTokens`.
-   **Open:** in firebase-tools 15.26 the shell's wrapper for a callable posts its first argument
-   as the whole request body and drops `auth`, so the call as written is refused. No account has
-   the `admin` claim either: DaPlug's token carries no custom claims.
+4. As an admin, each until it answers `done: true`: `backfillChefVoiceDeletionIndexes` and
+   `backfillChefVoiceSearchTokens`. **Done 2026-09-29.** `functions:shell` cannot do this: in
+   firebase-tools 15.26 its wrapper for a callable sends the first argument as the whole request and
+   drops `auth`. And no account had the `admin` claim. James gave it to his main account,
+   ChefJ4Mr.Voice, from Cloud Shell. The deployed callables were then called, signed in as that
+   account, as "admin backfill" in `CLAUDE.md` now describes. Each finished in one call: deletion
+   indexes `fixed {blocks: 0, bookmarks: 2, likes: 0}`, search tokens `updated: 8`. Under the live
+   rules, one `array-contains` query for "chef" finds all four chefs whose names start with it.
+   DaPlug stays without claims.
 5. `DEPLOY_IMPORT.cmd` (F30). Independent of the rest; any time.
    **Live since 2026-09-29** (gates 102 / 0). An unsigned call is refused as it should be; a
    signed-in import has not been run yet.
 6. The bucket's CORS setting, once, for the web's restore of recordings (F11), and
    `DEPLOY_ACCOUNT_DELETION_PAGE.cmd` for the page's wording. Independent of the rest; any time
    before step 7.
-   **The page is live since 2026-09-29.** The CORS setting needs `gcloud`, which is not on this PC.
+   **The page is live since 2026-09-29.** **CORS is not set yet**: a Storage download sent with the
+   PWA's Origin gets no `access-control-allow-origin`. James runs the command in `PRIVATE_BACKUP_…md`
+   in Cloud Shell (`gcloud` is not on this PC). Until then a web restore brings recipes and photos
+   back and leaves recordings safe in the account.
 7. `DEPLOY_SHARE.cmd` (F29), then `DEPLOY_PWA.cmd` for PWA 0.5.21, which refuses without the share
    deploy and should follow step 4 so the new chef search has tokens to find.
    **`recipeSharePage` is live since 2026-09-29:** a public recipe gets its name, words and photo;
-   an unknown id gets the generic card. `/r/` links reach it only once PWA 0.5.21's rewrite
-   deploys. The PWA waits for step 2 (its host writes `FULL`) and step 4.
+   an unknown id gets the generic card. **PWA 0.5.21 is live since 2026-09-29** (gates 381 / 0;
+   `sw.js` reports `chefvoice-pwa-v0.5.21`). `/r/{id}` on Hosting answers with the dish's preview
+   tags and sends a person on to the recipe, which opened in 0.5.21 with its servings, with no
+   console errors. Chef search in the app finds a chef by a word of their name. The security headers
+   are unchanged.
 8. Android 0.11.20 / 81 (includes the unreleased 0.11.19): release build, the device checks in the
    cook-along, private-backup and Live viewer cap writeups, Play.
 

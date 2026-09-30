@@ -1026,9 +1026,9 @@ exports.deleteChefVoiceRecipe = onCall(
 // (deletion-indexes.js). Admin only. Resumable and idempotent: each call works for up to eight
 // minutes, saves where it got to in config/deletionIndexes, and says whether it has finished;
 // call it again until it has. Run it after the firestore.rules that keep a like's mirror are
-// deployed, or a custom client could still orphan a like once it has passed.
-//   firebase functions:shell --project chefvoice-d7fec
-//   > backfillChefVoiceDeletionIndexes({}, {auth: {uid: '<your-uid>', token: {admin: true}}})
+// deployed, or a custom client could still orphan a like once it has passed. Call the deployed
+// function as an account with the admin claim ("admin backfill" in CLAUDE.md); functions:shell
+// cannot pass the claim to a callable.
 const BACKFILL_PAGE_SIZE = 300;
 const BACKFILL_WORK_MS = 8 * 60 * 1000;
 
@@ -1092,8 +1092,8 @@ exports.syncChefSearchTokens = onDocumentWritten(
 );
 
 // Gives profiles saved before syncChefSearchTokens their tokens. Admin only; resumable and
-// idempotent like the deletion backfill: call it until it answers done.
-//   > backfillChefVoiceSearchTokens({}, {auth: {uid: '<your-uid>', token: {admin: true}}})
+// idempotent like the deletion backfill: call it, as the deletion backfill says, until it answers
+// done.
 const SEARCH_BACKFILL_DOC = "config/searchTokens";
 
 exports.backfillChefVoiceSearchTokens = onCall(

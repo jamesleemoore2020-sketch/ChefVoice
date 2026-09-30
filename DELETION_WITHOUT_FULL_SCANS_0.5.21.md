@@ -59,14 +59,14 @@ then they still run, so deploying first loses nothing.
 2. **`DEPLOY_COMMUNITY_RULES.cmd`** after diffing the console's live rules against the last deployed
    version: this adds one condition to the like mirror's delete rule. It runs the rules gates first.
 3. **`DEPLOY_NOTIFICATIONS.cmd`**.
-4. Then, once, as an admin, until it answers `done: true`:
+4. Then, once, `backfillChefVoiceDeletionIndexes`, called by an account with the `admin` claim until
+   it answers `done: true` (how: "admin backfill" in `CLAUDE.md`; `functions:shell` cannot pass the
+   claim). Its answer counts what it fixed. `config/deletionIndexes` in the console shows the same.
 
-   ```
-   firebase functions:shell --project chefvoice-d7fec
-   > backfillChefVoiceDeletionIndexes({}, {auth: {uid: '<your-uid>', token: {admin: true}}})
-   ```
-
-   Its answer counts what it fixed. `config/deletionIndexes` in the console shows the same.
+**Released 2026-09-29**, in this order. The backfill finished in one call:
+`{"done":true,"fixed":{"blocks":0,"bookmarks":2,"likes":0}}`. Two bookmarks gained their `recipeId`;
+no block lacked `blockedUid`, and no like lacked its mirror. With `backfilledAt` recorded, deletion no
+longer walks every user and every recipe.
 
 The backfill must come after step 2. Before the rule, a custom client could delete a like's mirror and
 keep the like, and once the walks have stopped nothing would find that like at account deletion.
