@@ -72,10 +72,26 @@ come: Android 0.11.20 (step 8). Parser, corpus, Live signaling and App Check unt
      - **Check 7 in part.** Next stays docked and both buttons read in full, but no step of that
        recipe is long enough to scroll.
      - Timers, and the disabled "Last step", work.
-     - The Library offers the account's 8 recipes that aren't on the phone, and Private backup
-       starts off.
-   - Still to run: 0.11.19 checks 1–4 and 6, cook-along 7 and 9, the seven private-backup checks,
-     the Live checks, then the Play upload.
+     - The Library offered the account's 8 recipes that weren't on the phone, and Private backup
+       started off.
+     - **Private-backup check 3 passes (restore).** With James's approval, Restore brought all 8
+       back ("8 recipes restored to this phone"), with nachos' private original recording: its
+       ChefVoice Review turned available, and "Play Full cooking session" played it.
+     - Backup was then turned on (approved). It reported everything backed up at once: every
+       recipe on the phone was already in the account.
+     - **0.11.19 check 6 passes.** A test message from DaPlug (approved) put a red 2 on the
+       Community tab, read as "Community, 2 unread": the conversation and its alert.
+   - Found on the way, none of them new in 0.11.20:
+     - James's account held private copies of three published recipes (Weeknight Garlic Butter
+       Pasta, Campfire Foil Packet Vegetables, Backyard BBQ Baby Back Ribs), left by older app
+       versions. The restore brought them back, so the phone now shows each of those twice.
+     - Nothing stops "Play Full cooking session" once it starts. There is no Stop control, and
+       leaving the recipe keeps it playing. `AudioPlayer.stop()` exists, but no screen has called
+       `stopVoice()` since the v0.10.1 baseline. Stopped this time with a force-stop.
+     - Scaling ¼ cup to ⅔ reads "0.17 cup", the known rounding issue.
+   - Still to run: 0.11.19 checks 1–4, cook-along 7 (a longer step) and 9, private-backup checks 1,
+     2 and 4–7 (they need a new recipe with a photo and a recording), the Live checks, then the
+     Play upload.
 
 - **Cook-along for a real kitchen (F21), both platforms.** Step text at 28 px/sp, and one big
   Next docked at the bottom of the screen, about twice as wide as Previous, that never scrolls
