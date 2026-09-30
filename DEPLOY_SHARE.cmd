@@ -52,7 +52,7 @@ if not exist share\functions\node_modules\firebase-functions\package.json (
 )
 
 echo.
-firebase deploy --only functions:chefvoice-share --project chefvoice-d7fec
+call firebase deploy --only functions:chefvoice-share --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo CHEFVOICE SHARE DEPLOY FAILED

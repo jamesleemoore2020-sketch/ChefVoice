@@ -32,7 +32,7 @@ if not exist "notifications\functions\node_modules\firebase-functions\package.js
   )
 )
 set FUNCTIONS_DISCOVERY_TIMEOUT=30
-firebase deploy --only functions:chefvoice-notifications --project chefvoice-d7fec
+call firebase deploy --only functions:chefvoice-notifications --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo NOTIFICATION FUNCTION DEPLOY FAILED

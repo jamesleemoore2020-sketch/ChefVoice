@@ -17,7 +17,7 @@ if errorlevel 1 (
 echo This deploys the current storage.rules only.
 echo It does NOT redeploy Firestore rules, Functions, Hosting, Speech, or App Check.
 echo.
-firebase deploy --only storage --project chefvoice-d7fec
+call firebase deploy --only storage --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo STORAGE RULES DEPLOY FAILED

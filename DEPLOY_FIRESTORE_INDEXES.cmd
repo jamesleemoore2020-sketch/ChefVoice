@@ -22,7 +22,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-firebase deploy --only firestore:indexes --project chefvoice-d7fec
+call firebase deploy --only firestore:indexes --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo FIRESTORE INDEX DEPLOY FAILED

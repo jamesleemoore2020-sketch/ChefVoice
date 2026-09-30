@@ -52,7 +52,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-firebase deploy --only hosting:delete-account --project chefvoice-d7fec
+call firebase deploy --only hosting:delete-account --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo HOSTING DEPLOY FAILED

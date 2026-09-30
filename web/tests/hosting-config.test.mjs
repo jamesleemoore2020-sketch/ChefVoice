@@ -99,6 +99,38 @@ test('deploy scripts stay pinned to their own target', () => {
   assert.ok(!/--only hosting\s+--project/.test(legalScript), 'the privacy policy must not deploy hosting unpinned');
 });
 
+const rootScripts = () => readdirSync(root).filter((name) => /\.cmd$/i.test(name));
+const scriptLines = (name) => readRoot(name).split(/\r?\n/).map((line, i) => ({ at: `${name}:${i + 1}`, text: line.trim() }));
+
+test('scripts come back from the Firebase CLI, npm and Gradle', () => {
+  // firebase, npm, npx and gradlew are batch files themselves. A script that runs one without
+  // `call` hands itself over and never comes back: its failure message and pause never run, and
+  // its setlocal ends, which puts the working folder back where the script was started. Started
+  // from anywhere but the repo, `firebase deploy` then could not find firebase.json and the
+  // rules deploy failed after its gates had passed (2026-09-29). The same goes for any .cmd or
+  // .bat run by name or path. Each side of a pipe runs in a cmd of its own, so a piped command
+  // needs no `call`.
+  const batchFile = /^\(?\s*(?:(?:firebase|npm|npx|gradlew)(?:\.cmd|\.bat)?|"?[^\s"]*\.(?:cmd|bat)"?)(?:\s|$)/i;
+  const scripts = rootScripts();
+  assert.ok(scripts.length >= 10, 'the deploy and gate scripts are in the repo root');
+  for (const name of scripts) {
+    for (const { at, text } of scriptLines(name)) {
+      if (batchFile.test(text) && !text.includes('|')) assert.fail(`${at} runs a batch file without call: ${text}`);
+    }
+  }
+});
+
+test('scripts call each other by full path', () => {
+  // cmd does not search the current folder for a bare name when NoDefaultCurrentDirectoryInExePath
+  // is set, so `call RUN_IMPORT_GATES.cmd` was "not recognized" and the import deploy refused.
+  for (const name of rootScripts()) {
+    for (const { at, text } of scriptLines(name)) {
+      const bare = text.match(/\bcall\s+"?([\w.-]+\.(?:cmd|bat))\b/i);
+      if (bare) assert.fail(`${at} calls ${bare[1]} by bare name; use "%~dp0${bare[1]}"`);
+    }
+  }
+});
+
 test('the superseded standalone PWA hosting config is gone', () => {
   // web/firebase.hosting.json was the config from when web/ was its own project.
   // Deploying with it would publish the PWA untargeted, bypassing both tripwires.

@@ -61,7 +61,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-firebase deploy --only hosting:legal --project chefvoice-d7fec
+call firebase deploy --only hosting:legal --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo HOSTING DEPLOY FAILED

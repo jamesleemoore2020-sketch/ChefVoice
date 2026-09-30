@@ -27,7 +27,7 @@ test('the billing deploy script is scoped to its own codebase only', () => {
   // it does not touch, so a whole-file search would match its own prose.
   const deployLines = deployScript
     .split(/\r?\n/)
-    .filter((line) => /^\s*firebase\s+deploy/.test(line));
+    .filter((line) => /^\s*(?:call\s+)?firebase\s+deploy/.test(line));
   assert.equal(deployLines.length, 1, 'exactly one firebase deploy invocation');
   assert.match(deployLines[0], /--only functions:chefvoice-billing/);
   for (const forbidden of [/firestore/, /hosting/, /storage/, /chefvoice-notifications/, /,/]) {

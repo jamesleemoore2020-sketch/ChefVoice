@@ -35,7 +35,7 @@ if not "%RULES_GATES_EXIT%"=="0" (
   exit /b 1
 )
 
-firebase deploy --only firestore:rules --project chefvoice-d7fec
+call firebase deploy --only firestore:rules --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo COMMUNITY / NOTIFICATIONS RULE DEPLOY FAILED

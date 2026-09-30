@@ -43,7 +43,7 @@ if errorlevel 1 (
 )
 
 echo.
-firebase deploy --only functions:chefvoice-import --project chefvoice-d7fec
+call firebase deploy --only functions:chefvoice-import --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo CHEFVOICE IMPORT DEPLOY FAILED

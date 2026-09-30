@@ -33,7 +33,7 @@ if not exist "billing\functions\node_modules\firebase-functions\package.json" (
   )
 )
 set FUNCTIONS_DISCOVERY_TIMEOUT=30
-firebase deploy --only functions:chefvoice-billing --project chefvoice-d7fec
+call firebase deploy --only functions:chefvoice-billing --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo BILLING FUNCTION DEPLOY FAILED

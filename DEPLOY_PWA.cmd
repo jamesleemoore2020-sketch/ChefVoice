@@ -77,7 +77,7 @@ if errorlevel 1 (
 )
 
 echo.
-firebase deploy --only hosting:pwa --project chefvoice-d7fec
+call firebase deploy --only hosting:pwa --project chefvoice-d7fec
 if errorlevel 1 (
   echo.
   echo PWA HOSTING DEPLOY FAILED
