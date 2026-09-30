@@ -10,23 +10,40 @@ Session handoff: `HANDOFF_2026-09-28_SESSION12.md`. Branch
 
 Tests at this point: PWA 379 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android 267 / 0 (2 skipped),
 rules emulator 87 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
-**Nothing here is deployed yet.** Parser, corpus, Live signaling and App Check untouched.
+**Release in progress since 2026-09-29.** Steps 1, 5, the deletion page of step 6 and the share
+function of step 7 are live. The rest waits, as each step says. Parser, corpus, Live signaling and
+App Check untouched.
 
 **Release order for this batch** (each writeup says why its step is where it is):
 
 1. `DEPLOY_FIRESTORE_INDEXES.cmd`: the `blocks.blockedUid` index (F17).
+   **Live since 2026-09-29.** The live indexes were read first: the file added this one override
+   and removed nothing.
 2. `DEPLOY_COMMUNITY_RULES.cmd`, after diffing the console's live rules: the like-mirror rule (F17),
    the profile `searchTokens` rule (F10), which must be live before step 3, and the Live `FULL`
    answer (F18), which must be live before the apps.
+   **Diffed 2026-09-29:** the console's published rules are identical to `c4907f4:firestore.rules`
+   (SHA-256 `a9aa011d…e162` with LF line endings), so this deploy changes exactly the three part 4
+   rules. **Not deployed yet.**
 3. `DEPLOY_NOTIFICATIONS.cmd`: deletion without full scans (F17), the search-token trigger (F10).
+   Waits for step 2.
 4. In `firebase functions:shell`, as an admin, each until it answers `done: true`:
    `backfillChefVoiceDeletionIndexes` and `backfillChefVoiceSearchTokens`.
+   **Open:** in firebase-tools 15.26 the shell's wrapper for a callable posts its first argument
+   as the whole request body and drops `auth`, so the call as written is refused. No account has
+   the `admin` claim either: DaPlug's token carries no custom claims.
 5. `DEPLOY_IMPORT.cmd` (F30). Independent of the rest; any time.
+   **Live since 2026-09-29** (gates 102 / 0). An unsigned call is refused as it should be; a
+   signed-in import has not been run yet.
 6. The bucket's CORS setting, once, for the web's restore of recordings (F11), and
    `DEPLOY_ACCOUNT_DELETION_PAGE.cmd` for the page's wording. Independent of the rest; any time
    before step 7.
+   **The page is live since 2026-09-29.** The CORS setting needs `gcloud`, which is not on this PC.
 7. `DEPLOY_SHARE.cmd` (F29), then `DEPLOY_PWA.cmd` for PWA 0.5.21, which refuses without the share
    deploy and should follow step 4 so the new chef search has tokens to find.
+   **`recipeSharePage` is live since 2026-09-29:** a public recipe gets its name, words and photo;
+   an unknown id gets the generic card. `/r/` links reach it only once PWA 0.5.21's rewrite
+   deploys. The PWA waits for step 2 (its host writes `FULL`) and step 4.
 8. Android 0.11.20 / 81 (includes the unreleased 0.11.19): release build, the device checks in the
    cook-along, private-backup and Live viewer cap writeups, Play.
 
