@@ -59,6 +59,23 @@ come: Android 0.11.20 (step 8). Parser, corpus, Live signaling and App Check unt
    are unchanged.
 8. Android 0.11.20 / 81 (includes the unreleased 0.11.19): release build, the device checks in the
    cook-along, private-backup and Live viewer cap writeups, Play.
+   **Built 2026-09-29** with `BUILD_PRODUCTION_TRUST_APK.cmd`:
+   - `ChefVoice-v0.11.20-Production.aab` for Play, SHA-256 `e178f486…58d2`, plus the matching APK.
+   - Signed with the certificate Play itself distributes (`3c81185f…3274`), so the APK installed
+     over James's Play copy of 0.11.18 as an ordinary update, keeping the phone's recipes.
+   - On his phone, signed in as ChefJ4Mr.Voice:
+     - **0.11.19 check 5 passes.** Blackout was on before the update, and Appearance now says
+       "Always Blackout".
+     - **Cook-along check 8 passes** (Backyard BBQ Baby Back Ribs, set to 4 of 6 servings). Each
+       step lists its ingredients scaled, the card says "Amounts for 4 servings (the chef cooked
+       6)", and Back still shows 4.
+     - **Check 7 in part.** Next stays docked and both buttons read in full, but no step of that
+       recipe is long enough to scroll.
+     - Timers, and the disabled "Last step", work.
+     - The Library offers the account's 8 recipes that aren't on the phone, and Private backup
+       starts off.
+   - Still to run: 0.11.19 checks 1–4 and 6, cook-along 7 and 9, the seven private-backup checks,
+     the Live checks, then the Play upload.
 
 - **Cook-along for a real kitchen (F21), both platforms.** Step text at 28 px/sp, and one big
   Next docked at the bottom of the screen, about twice as wide as Previous, that never scrolls
