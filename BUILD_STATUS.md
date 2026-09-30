@@ -10,9 +10,8 @@ Session handoff: `HANDOFF_2026-09-28_SESSION12.md`. Branch
 
 Tests at this point: PWA 379 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android 267 / 0 (2 skipped),
 rules emulator 87 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
-**Live since 2026-09-29: steps 1 to 5 and 7, including PWA 0.5.21.** Still to come: the bucket's
-CORS setting (step 6, James, in Cloud Shell) and Android 0.11.20 (step 8). Parser, corpus, Live
-signaling and App Check untouched.
+**Live since 2026-09-29: steps 1 to 7, including PWA 0.5.21 and the bucket's CORS setting.** Still to
+come: Android 0.11.20 (step 8). Parser, corpus, Live signaling and App Check untouched.
 
 **Release order for this batch** (each writeup says why its step is where it is):
 
@@ -46,10 +45,10 @@ signaling and App Check untouched.
 6. The bucket's CORS setting, once, for the web's restore of recordings (F11), and
    `DEPLOY_ACCOUNT_DELETION_PAGE.cmd` for the page's wording. Independent of the rest; any time
    before step 7.
-   **The page is live since 2026-09-29.** **CORS is not set yet**: a Storage download sent with the
-   PWA's Origin gets no `access-control-allow-origin`. James runs the command in `PRIVATE_BACKUP_…md`
-   in Cloud Shell (`gcloud` is not on this PC). Until then a web restore brings recipes and photos
-   back and leaves recordings safe in the account.
+   **The page is live since 2026-09-29, and so is CORS** (James, in Cloud Shell). Checked from here:
+   a Storage download sent from either PWA address is answered `Access-Control-Allow-Origin` with
+   that address, and one sent from any other site gets none. The web restore of a recording is
+   device check 7 in `PRIVATE_BACKUP_0.5.21_0.11.20.md`.
 7. `DEPLOY_SHARE.cmd` (F29), then `DEPLOY_PWA.cmd` for PWA 0.5.21, which refuses without the share
    deploy and should follow step 4 so the new chef search has tokens to find.
    **`recipeSharePage` is live since 2026-09-29:** a public recipe gets its name, words and photo;
