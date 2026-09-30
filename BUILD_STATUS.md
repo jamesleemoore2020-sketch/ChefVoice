@@ -10,9 +10,9 @@ Session handoff: `HANDOFF_2026-09-28_SESSION12.md`. Branch
 
 Tests at this point: PWA 379 / 0, jsdom 74 / 35 / 18 / 56, e2e 30 / 0, Android 267 / 0 (2 skipped),
 rules emulator 87 / 0, notification gates 119 / 0, billing 17 / 0, import 102 / 0, share 8 / 0.
-**Release in progress since 2026-09-29.** Steps 1, 5, the deletion page of step 6 and the share
-function of step 7 are live. The rest waits, as each step says. Parser, corpus, Live signaling and
-App Check untouched.
+**Release in progress since 2026-09-29.** Steps 1, 2, 3 and 5, the deletion page of step 6 and the
+share function of step 7 are live. The rest waits, as each step says. Parser, corpus, Live
+signaling and App Check untouched.
 
 **Release order for this batch** (each writeup says why its step is where it is):
 
@@ -24,9 +24,13 @@ App Check untouched.
    answer (F18), which must be live before the apps.
    **Diffed 2026-09-29:** the console's published rules are identical to `c4907f4:firestore.rules`
    (SHA-256 `a9aa011d…e162` with LF line endings), so this deploy changes exactly the three part 4
-   rules. **Not deployed yet.**
+   rules. **Live since 2026-09-29** (gate 87 / 0). The console's published rules now hash to
+   `7d305f0a…e6cf`, this branch's `firestore.rules`. James's first run from `C:\Users\james` passed
+   the gate and then could not find `firebase.json`; every deploy script now `call`s the CLI.
 3. `DEPLOY_NOTIFICATIONS.cmd`: deletion without full scans (F17), the search-token trigger (F10).
-   Waits for step 2.
+   **Live since 2026-09-29:** 3 functions created (`syncChefSearchTokens` and the two backfills),
+   17 updated, none deleted. Both backfills refuse a caller without the `admin` claim. The whole
+   codebase now runs this branch's code, so the F15 deletion changes of session 9 are live too.
 4. In `firebase functions:shell`, as an admin, each until it answers `done: true`:
    `backfillChefVoiceDeletionIndexes` and `backfillChefVoiceSearchTokens`.
    **Open:** in firebase-tools 15.26 the shell's wrapper for a callable posts its first argument
