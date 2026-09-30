@@ -62,6 +62,7 @@ come: Android 0.11.20 (step 8). Parser, corpus, Live signaling and App Check unt
    cook-along, private-backup and Live viewer cap writeups, Play.
    **Built 2026-09-29** with `BUILD_PRODUCTION_TRUST_APK.cmd`:
    - `ChefVoice-v0.11.20-Production.aab` for Play, SHA-256 `e178f486…58d2`, plus the matching APK.
+     Superseded on 2026-09-30 by the rebuild with the stop-playback fix, `a68deae6…1683` (below).
    - Signed with the certificate Play itself distributes (`3c81185f…3274`), so the APK installed
      over James's Play copy of 0.11.18 as an ordinary update, keeping the phone's recipes.
    - On his phone, signed in as ChefJ4Mr.Voice:
@@ -91,7 +92,9 @@ come: Android 0.11.20 (step 8). Parser, corpus, Live signaling and App Check unt
        `stopVoice()` since the v0.10.1 baseline. Stopped this time with a force-stop. **Fixed in
        0.11.20 before upload, at James's call** (`VOICE_PLAYBACK_STOP_0.11.20.md`): recordings
        offer Stop, and leaving the recipe or the cook-along stops them. The first 0.11.20 AAB
-       (`e178f486…58d2`) is superseded and must not be uploaded.
+       (`e178f486…58d2`) is superseded and must not be uploaded. **The AAB to upload is the one
+       rebuilt from `81c3efe`, SHA-256 `a68deae6…1683`.** It is on James's phone, and Stop and
+       Back both stop a playing recording there.
      - Scaling ¼ cup to ⅔ reads "0.17 cup", the known rounding issue.
    - Still to run: 0.11.19 checks 1–4, cook-along 7 (a longer step) and 9, private-backup checks 1,
      2 and 4–7 (they need a new recipe with a photo and a recording), the Live checks, then the

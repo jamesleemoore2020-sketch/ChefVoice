@@ -69,3 +69,8 @@ same. Rebuild with `BUILD_PRODUCTION_TRUST_APK.cmd`, and upload only the rebuilt
 
 On the phone: play "Full cooking session" on a recipe that has one, and check that the button
 reads Stop and stops it. Play it again, tap Back, and check that it has stopped.
+
+**Done 2026-09-30.** Rebuilt from `81c3efe`: AAB SHA-256 `a68deae6…1683`, same certificate, still
+0.11.20 / 81. Installed over the first build on James's phone, with its data kept, and checked on
+the restored nachos. After Play the button read "Stop Full cooking session" and Android showed the
+app's player running. Stop ended it and the button read Play again. Played again, Back ended it.
